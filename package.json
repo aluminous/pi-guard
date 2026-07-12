@@ -1,0 +1,53 @@
+{
+  "name": "pi-extension-guard",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Defense-in-depth command and file-tool guardrails for Pi",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aluminous/pi-guard.git"
+  },
+  "homepage": "https://github.com/aluminous/pi-guard#readme",
+  "bugs": {
+    "url": "https://github.com/aluminous/pi-guard/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "sandbox",
+    "security",
+    "guardrails"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "clean": "echo 'nothing to clean'",
+    "build": "echo 'nothing to build'",
+    "check": "tsc --noEmit",
+    "test": "node --test test/*.test.ts",
+    "eval": "node eval/run.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "^0.0.61"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "^0.80.3",
+    "@earendil-works/pi-coding-agent": "^0.80.3",
+    "@earendil-works/pi-tui": "^0.80.3",
+    "@types/node": "^26.1.0",
+    "typescript": "^6.0.3"
+  }
+}

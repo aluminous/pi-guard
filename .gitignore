@@ -1,0 +1,6 @@
+node_modules/
+.tmp-pi-agent/
+.DS_Store
+.env
+.env.*
+*.log
