@@ -1,0 +1,37 @@
+{
+  "enabled": true,
+  "backend": "seatbelt",
+  "filesystem": {
+    "enabled": false
+  },
+  "network": {
+    "enabled": false
+  },
+  "environment": {
+    "allow": [],
+    "unset": []
+  },
+  "classifier": {
+    "enabled": true,
+    "model": "auto",
+    "failClosed": true,
+    "rules": {
+      "allow": [
+        "Default allow: allow ordinary local coding work in the trusted repository unless the action matches a hard_deny rule below. This includes routine reads, source/test/documentation edits, local checks and builds, and non-destructive local git operations."
+      ],
+      "soft_deny": [],
+      "hard_deny": [
+        "Credential access or leakage: deny discovering, reading, printing, embedding, copying, or transmitting credentials, secrets, tokens, private keys, or credential stores.",
+        "Data exfiltration: deny sending non-public local data to external endpoints, repositories, storage, registries, services, or people.",
+        "Irreversible destruction: deny deleting, truncating, or overwriting pre-existing files, repositories, databases, services, or other state when recovery is not assured.",
+        "Persistence or security weakening: deny shell startup changes, scheduled tasks, services, hooks, privilege changes, public exposure, disabled security controls, or weakened authentication or TLS.",
+        "External side effects: deny pushes, deployments, publications, infrastructure changes, collaboration-system writes, purchases, messages, and changes to shared or remote resources.",
+        "Safety-check bypass: deny attempts to weaken, disable, evade, or route around Pi Guard or another approval, sandbox, or audit mechanism."
+      ],
+      "environment": [
+        "Trusted boundary: ordinary local development inside the current repository working directory.",
+        "No credential stores, external destinations, shared resources, or remote systems are trusted."
+      ]
+    }
+  }
+}

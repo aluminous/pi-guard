@@ -41,6 +41,11 @@ function formatArray(value: string[]): string {
   return value.length > 0 ? value.join(", ") : "(none)";
 }
 
+function networkPolicyLabel(config: ResolvedGuardConfig): string {
+  if (!config.network.enabled) return "network unrestricted";
+  return config.network.allowedDomains.length > 0 ? `${config.network.allowedDomains.length} domains` : "network blocked";
+}
+
 function classifierModelLabel(ctx: ExtensionContext, config: ResolvedGuardConfig | undefined, state: RuntimeState): string {
   if (!config || !classifierEnabled(config, state.classifier)) return "classifier off";
   const spec = state.classifier.modelOverride ?? config.classifier.model;
@@ -73,7 +78,7 @@ export function updateGuardStatus(ctx: ExtensionContext, state: RuntimeState): v
     return;
   }
   const backend = state.backend?.name ?? config?.backend ?? "unknown";
-  const network = config?.network.enabled ? `${config.network.allowedDomains.length} domains` : "network off";
+  const network = config ? networkPolicyLabel(config) : "network unknown";
   const hasImportantStats = stats.classifierDenials > 0 || stats.blocked > 0 || stats.errors > 0;
   ctx.ui.setStatus("guard", `${muted(`Guard: ${backend}, ${network}, ${classifierModelLabel(ctx, config, state)} `)}${hasImportantStats ? warning(compact) : muted(compact)}`);
 }
@@ -82,8 +87,24 @@ export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConf
   const classifierOn = classifierEnabled(config, state.classifier);
   const health = state.enabled && state.initialized ? "enforcing" : state.enabled ? "enabled but not initialized" : state.disabledForNextAgent ? "disabled for next agent turn" : "disabled";
   const effective = state.backend?.describeEffectivePolicy(config);
-  const allowedDomains = effective?.network.allowedDomains ?? (config.network.enabled ? config.network.allowedDomains : []);
-  const network = allowedDomains.length > 0 ? `${allowedDomains.length} allowed domain(s)` : "network off";
+  const allowedDomains = config.network.enabled ? (effective?.network.allowedDomains ?? config.network.allowedDomains) : [];
+  const network = !config.network.enabled
+    ? "Network: restrictions disabled (unrestricted)"
+    : allowedDomains.length > 0
+      ? `Network: ${allowedDomains.length} allowed domain(s)`
+      : "Network: blocked (deny all)";
+  const filesystemPolicy = config.filesystem.enabled
+    ? [
+        "  Filesystem restrictions: enabled",
+        `  Read mode: ${config.filesystem.allowRead.length === 0 ? "blacklist (all paths except denyRead)" : "whitelist"}`,
+        `  Read roots: ${config.filesystem.allowRead.length === 0 ? "(all)" : formatArray(effective?.filesystem.allowRead ?? config.filesystem.allowRead)}`,
+        `  Write roots: ${formatArray(effective?.filesystem.allowWrite ?? config.filesystem.allowWrite)}`,
+        "  Deny read:",
+        ...bulletList(effective?.filesystem.denyRead ?? config.filesystem.denyRead),
+        "  Deny write:",
+        ...bulletList(effective?.filesystem.denyWrite ?? config.filesystem.denyWrite),
+      ]
+    : ["  Filesystem restrictions: disabled (unrestricted)"];
   const lines = [
     "# Pi Guard",
     "",
@@ -113,13 +134,8 @@ export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConf
       : ["  (none yet)"]),
     "",
     "## Policy summary",
-    `  Read mode: ${config.filesystem.allowRead.length === 0 ? "blacklist (all paths except denyRead)" : "whitelist"}`,
-    `  Read roots: ${config.filesystem.allowRead.length === 0 ? "(all)" : formatArray(effective?.filesystem.allowRead ?? config.filesystem.allowRead)}`,
-    `  Write roots: ${formatArray(effective?.filesystem.allowWrite ?? config.filesystem.allowWrite)}`,
-    "  Deny read:",
-    ...bulletList(effective?.filesystem.denyRead ?? config.filesystem.denyRead),
-    "  Deny write:",
-    ...bulletList(effective?.filesystem.denyWrite ?? config.filesystem.denyWrite),
+    `  ${network}`,
+    ...filesystemPolicy,
     "",
     "## Config",
     `  Persistent config: ${getPersistentConfigPath()}`,

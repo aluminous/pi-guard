@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "backend": "seatbelt",
+  "filesystem": {
+    "enabled": true,
+    "allowWrite": [".", "/tmp"],
+    "denyWrite": [".git", ".pi", ".env", ".env.*", "*.pem", "*.key", "~/.ssh", "~/.aws", "~/.azure", "~/.gnupg", "~/.kube", "~/.docker", "~/.netrc"]
+  },
+  "network": {
+    "enabled": true,
+    "allowedDomains": [],
+    "deniedDomains": ["*"]
+  },
+  "classifier": {
+    "enabled": true,
+    "model": "auto",
+    "failClosed": true
+  }
+}

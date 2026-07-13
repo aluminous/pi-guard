@@ -77,7 +77,11 @@ export function createGuardCommand(deps: GuardCommandDeps) {
           ? `auto (${model.provider}/${model.id})`
           : `${model.provider}/${model.id}`
         : `unavailable (${spec})`;
-    const network = config.network.enabled ? `${config.network.allowedDomains.length} domains` : "network off";
+    const network = !config.network.enabled
+      ? "network unrestricted"
+      : config.network.allowedDomains.length > 0
+        ? `${config.network.allowedDomains.length} domains`
+        : "network blocked";
     const s = state.stats;
     return [
       `${state.backend?.name ?? config.backend} · ${health} · ${network} · classifier ${classifier}`,

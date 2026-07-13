@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "backend": "seatbelt",
+  "filesystem": {
+    "enabled": true
+  },
+  "network": {
+    "enabled": true
+  },
+  "classifier": {
+    "enabled": true,
+    "model": "auto",
+    "failClosed": true
+  }
+}

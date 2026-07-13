@@ -115,6 +115,7 @@ Example `.pi/guard.json`:
   "enabled": true,
   "backend": "seatbelt",
   "filesystem": {
+    "enabled": true,
     "allowRead": [],
     "denyRead": ["~/.ssh", "~/.aws", "~/.gnupg", "~/.kube", "~/.docker", "~/.netrc", ".env", ".env.*", "*.pem", "*.key"],
     "allowWrite": [".", "/tmp", "~/.cache", "~/Library/Caches", "~/.npm", "~/.cargo/registry", "~/.cargo/git", "~/.gradle/caches", "~/.m2/repository", "~/go/pkg/mod"],
@@ -138,6 +139,23 @@ Example `.pi/guard.json`:
 }
 ```
 
+The `filesystem.enabled` and `network.enabled` fields control whether those
+restriction layers are enforced; they do not turn Pi Guard or the classifier
+on and off. Both default to `true`.
+
+Ready-to-copy profiles are available under [`examples/configs`](examples/configs):
+
+- [`classifier-focused.json`](examples/configs/classifier-focused.json): unrestricted files and network, with classifier review enabled.
+- [`balanced.json`](examples/configs/balanced.json): the default filesystem and network restrictions plus classifier review.
+- [`offline-restricted.json`](examples/configs/offline-restricted.json): narrower write access, no networking, and classifier review.
+- [`network-allowlist.json`](examples/configs/network-allowlist.json): unrestricted files with an allowlist-only network policy.
+- [`filesystem-denylist.json`](examples/configs/filesystem-denylist.json): unrestricted networking with a denylist-driven filesystem policy.
+- [`classifier-allowlist-only.json`](examples/configs/classifier-allowlist-only.json): only explicitly listed read-only/local-validation actions pass classifier review; hard file/network restrictions are disabled.
+- [`classifier-denylist-only.json`](examples/configs/classifier-denylist-only.json): ordinary local coding work passes unless it matches a classifier deny rule; hard file/network restrictions are disabled.
+
+Config files are layered over the built-in defaults, so omitted arrays retain
+their defaults rather than becoming empty.
+
 The default classifier model is `"auto"`: Pi Guard picks the best available
 model from a known-good list (see `src/classifier-models.ts`), preferring
 subscription providers (openai-codex, github-copilot) over per-token providers
@@ -149,6 +167,11 @@ to opt out of auto selection.
 
 ## Filesystem policy
 
+Set `filesystem.enabled` to `false` to disable deterministic path checks for
+Pi file tools and filesystem restrictions for sandboxed commands. File actions
+still reach the classifier when classifier review is enabled. Environment
+scrubbing is configured separately.
+
 Reads are blacklist-based by default: tools and sandboxed commands can read ordinary system, project, and home files unless the path matches `denyRead`. The default read denylist covers common credential stores and sensitive app profiles on macOS and Linux, including SSH, cloud credentials, GPG, Kubernetes, Docker, browser profiles, keychains/keyrings, `.env` files, and private key files.
 
 Writes are whitelist-based by default: tools and sandboxed commands can write to the project directory, including local `.git` metadata for normal source-control operations, temp directories, and common development caches such as npm/pnpm/yarn, Cargo registry/git caches, Gradle caches/wrapper, Maven local repository, Go module/build caches, pip caches, NuGet packages, Ivy/Coursier, Bazel, uv, Ruff, and pre-commit caches. Sensitive paths in `denyWrite` remain hard-blocked even if they overlap an allowed write root.
@@ -157,20 +180,31 @@ Use project or global config to narrow these defaults for more sensitive workspa
 
 ## Network policy
 
-Network access is enabled by default but allowlisted. The default allowed domains cover GitHub and common container registries: GitHub/GitHubusercontent/GHCR, Docker Hub, Quay, Google Container Registry and Artifact Registry, Kubernetes registry, Microsoft Container Registry, and public ECR. All other domains are denied by default.
+Network restrictions are enabled by default. The default allowed domains cover GitHub and common container registries: GitHub/GitHubusercontent/GHCR, Docker Hub, Quay, Google Container Registry and Artifact Registry, Kubernetes registry, Microsoft Container Registry, and public ECR. All other domains are denied by default.
 
-Set `network.enabled` to `false` to block network access entirely, or override `allowedDomains` in global/project config for stricter or broader workflows.
+Set `network.enabled` to `false` to disable network restrictions and allow
+normal unrestricted networking. To block networking entirely, keep the policy
+enabled and use an empty allowlist:
+
+```json
+{
+  "network": {
+    "enabled": true,
+    "allowedDomains": [],
+    "deniedDomains": ["*"]
+  }
+}
+```
 
 ## What is protected
 
 - Agent `bash` tool calls are routed through Pi Guard.
 - User `!` and `!!` bash commands are routed through Pi Guard.
-- Built-in `read`, `write`, and `edit` tool calls are checked by deterministic path policy because Seatbelt only contains subprocesses.
-- Reads are allowed by default except for configured sensitive paths.
-- Writes are limited to configured write roots and blocked for configured sensitive paths.
+- When filesystem restrictions are enabled, built-in `read`, `write`, and `edit` tool calls are checked by deterministic path policy because Seatbelt only contains subprocesses.
+- When filesystem restrictions are enabled, reads are allowed by default except for configured sensitive paths, and writes are limited to configured roots.
 - Environment variables are scrubbed before guarded commands are spawned.
 - If enabled, the classifier reviews `bash`, `read`, `write`, and `edit` calls after deterministic policy checks and before execution.
-- Classifier timeouts/network failures are retried with bounded exponential backoff up to five attempts and surfaced to the user. If no usable classifier model is available, Pi Guard stops the current turn. If fail-closed review still fails after retries, Pi Guard stops the session for user intervention.
+- Classifier timeouts/network failures are retried with bounded exponential backoff up to five attempts and surfaced to the user. If no usable classifier model is available, or fail-closed review still fails after retries, Pi Guard stops the current turn for user intervention without exiting Pi.
 
 ## Limitations
 
@@ -181,6 +215,7 @@ Pi Guard is a defense-in-depth containment layer, not a complete adversarial sec
 - Broad workspace write access can still allow project-local persistence. Local `.git` writes are allowed so explicit git commands can work; rely on classifier review for risky source-control actions, and keep protected paths like `.pi`, `.env`, keys, and shell startup files denied.
 - Unix sockets, Docker sockets, inherited credentials, and overly broad writable directories can weaken isolation.
 - The LLM classifier is a semantic reviewer, not enforcement. It cannot override deterministic deny rules or Seatbelt.
+- Disabling filesystem or network restrictions deliberately removes those hard boundaries; classifier decisions can be wrong or unavailable.
 
 ## Future container backend
 

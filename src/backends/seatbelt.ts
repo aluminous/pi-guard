@@ -77,24 +77,46 @@ export function getSeatbeltRuntimeConfig(config: ResolvedGuardConfig, cwd = proc
   const denyRead = normalizeSandboxPaths(config.filesystem.denyRead, cwd);
   const denyWrite = normalizeSandboxPaths(config.filesystem.denyWrite, cwd);
 
+  const seatbelt = config.seatbelt as Partial<SandboxRuntimeConfig>;
+  const network = {
+    allowedDomains: config.network.allowedDomains,
+    deniedDomains: config.network.deniedDomains,
+    ...((seatbelt.network ?? {}) as Record<string, unknown>),
+  } as Record<string, unknown>;
+  if (!config.network.enabled) {
+    // sandbox-runtime enables domain filtering by the presence of
+    // allowedDomains. Omitting it leaves networking unrestricted, while an
+    // explicitly empty array means deny all.
+    delete network.allowedDomains;
+    network.deniedDomains = [];
+    network.strictAllowlist = false;
+  }
+
+  const filesystem = {
+    allowRead,
+    denyRead,
+    allowWrite,
+    denyWrite,
+    ...((seatbelt.filesystem ?? {}) as Record<string, unknown>),
+    disabled: config.filesystem.enabled
+      ? Boolean((seatbelt.filesystem as { disabled?: boolean } | undefined)?.disabled)
+      : true,
+  };
+
+  const credentials = {
+    files: denyRead.map((filePath) => ({ path: filePath, mode: "deny" as const })),
+    envVars: config.environment.unset
+      .filter((name) => !name.includes("*"))
+      .map((name) => ({ name, mode: "deny" as const })),
+    ...((seatbelt.credentials ?? {}) as Record<string, unknown>),
+  };
+  if (!config.filesystem.enabled) credentials.files = [];
+
   return {
-    network: {
-      allowedDomains: config.network.enabled ? config.network.allowedDomains : [],
-      deniedDomains: config.network.enabled ? config.network.deniedDomains : ["*"],
-    },
-    filesystem: {
-      allowRead,
-      denyRead,
-      allowWrite,
-      denyWrite,
-    },
-    credentials: {
-      files: denyRead.map((filePath) => ({ path: filePath, mode: "deny" as const })),
-      envVars: config.environment.unset
-        .filter((name) => !name.includes("*"))
-        .map((name) => ({ name, mode: "deny" as const })),
-    },
-    ...(config.seatbelt as Partial<SandboxRuntimeConfig>),
+    ...seatbelt,
+    network,
+    filesystem,
+    credentials,
   } as SandboxRuntimeConfig;
 }
 
@@ -153,10 +175,10 @@ export class SeatbeltBackend implements GuardBackend {
     const network = (runtime.network ?? {}) as Record<string, unknown>;
     return {
       filesystem: {
-        allowRead: asStringArray(filesystem.allowRead, config.filesystem.allowRead),
-        denyRead: asStringArray(filesystem.denyRead, config.filesystem.denyRead),
-        allowWrite: asStringArray(filesystem.allowWrite, config.filesystem.allowWrite),
-        denyWrite: asStringArray(filesystem.denyWrite, config.filesystem.denyWrite),
+        allowRead: config.filesystem.enabled ? asStringArray(filesystem.allowRead, config.filesystem.allowRead) : [],
+        denyRead: config.filesystem.enabled ? asStringArray(filesystem.denyRead, config.filesystem.denyRead) : [],
+        allowWrite: config.filesystem.enabled ? asStringArray(filesystem.allowWrite, config.filesystem.allowWrite) : [],
+        denyWrite: config.filesystem.enabled ? asStringArray(filesystem.denyWrite, config.filesystem.denyWrite) : [],
       },
       network: {
         allowedDomains: asStringArray(network.allowedDomains, config.network.enabled ? config.network.allowedDomains : []),

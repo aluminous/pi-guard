@@ -119,6 +119,8 @@ function isDenied(cwd: string, candidate: string, patterns: string[]): string | 
 
 export function decidePathAccess(config: ResolvedGuardConfig, cwd: string, inputPath: string, kind: AccessKind): PolicyDecision {
   const normalizedPath = normalizeUserPath(cwd, inputPath);
+  if (!config.filesystem.enabled) return { allowed: true, normalizedPath };
+
   const canonical = kind === "write" ? canonicalizeWritePath(normalizedPath) : canonicalizeExistingPath(normalizedPath);
   if (!canonical.ok) {
     return { allowed: false, code: "unresolvable", normalizedPath, reason: `${kind} path could not be resolved: ${canonical.reason}` };
@@ -164,9 +166,19 @@ export function scrubEnvironment(env: NodeJS.ProcessEnv | undefined, config: Res
 }
 
 export function summarizePolicy(config: ResolvedGuardConfig): string[] {
-  return [
+  const network = !config.network.enabled
+    ? "disabled (unrestricted)"
+    : config.network.allowedDomains.length > 0
+      ? `enabled (${config.network.allowedDomains.length} allowed domains)`
+      : "enabled (deny all)";
+  const summary = [
     `Backend: ${config.backend}`,
-    `Network: ${config.network.enabled ? "enabled" : "disabled"}`,
+    `Network restrictions: ${network}`,
+    `Filesystem restrictions: ${config.filesystem.enabled ? "enabled" : "disabled (unrestricted)"}`,
+  ];
+  if (!config.filesystem.enabled) return summary;
+  return [
+    ...summary,
     `Read mode: ${config.filesystem.allowRead.length === 0 ? "blacklist (all paths except denyRead)" : `whitelist (${config.filesystem.allowRead.join(", ")})`}`,
     `Write roots: ${config.filesystem.allowWrite.join(", ") || "(none)"}`,
     `Deny read: ${config.filesystem.denyRead.join(", ") || "(none)"}`,

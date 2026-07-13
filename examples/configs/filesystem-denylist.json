@@ -1,0 +1,19 @@
+{
+  "enabled": true,
+  "backend": "seatbelt",
+  "filesystem": {
+    "enabled": true,
+    "allowRead": [],
+    "denyRead": ["~/.ssh", "~/.aws", "~/.azure", "~/.gnupg", "~/.kube", "~/.docker", "~/.netrc", ".env", ".env.*", "*.pem", "*.key"],
+    "allowWrite": ["/"],
+    "denyWrite": ["~/.ssh", "~/.aws", "~/.azure", "~/.gnupg", "~/.kube", "~/.docker", "~/.netrc", ".pi", ".env", ".env.*", "*.pem", "*.key"]
+  },
+  "network": {
+    "enabled": false
+  },
+  "classifier": {
+    "enabled": true,
+    "model": "auto",
+    "failClosed": true
+  }
+}

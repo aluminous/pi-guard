@@ -21,6 +21,19 @@ export interface ToolCallBlock {
   reason: string;
 }
 
+interface TurnAbortContext {
+  abort(): void;
+  ui: {
+    notify(message: string, type?: "info" | "warning" | "error"): void;
+  };
+}
+
+export function stopTurnForClassifierFailure(ctx: TurnAbortContext, reason: string): ToolCallBlock {
+  ctx.ui.notify(`Guard classifier failed closed: ${reason}. Stopping this turn for user intervention.`, "error");
+  ctx.abort();
+  return { block: true, reason: `Guard classifier failed closed: ${reason}. This turn was stopped for user intervention.` };
+}
+
 function isApprovedPath(approvedRoots: string[], target: string): boolean {
   return approvedRoots.some((root) => target === root || target.startsWith(`${root}/`));
 }
@@ -83,7 +96,7 @@ export async function interceptToolCall(
 
   let allowedReadPath: string | undefined;
 
-  if (spec.access.length > 0) {
+  if (config.filesystem.enabled && spec.access.length > 0) {
     const target = spec.path?.(input);
     if (typeof target !== "string") return;
     for (const kind of spec.access) {
@@ -101,7 +114,7 @@ export async function interceptToolCall(
     }
   }
 
-  if (event.toolName === "read" && allowedReadPath && isPiPackageDocsOrExamplePath(allowedReadPath)) return;
+  if (config.filesystem.enabled && event.toolName === "read" && allowedReadPath && isPiPackageDocsOrExamplePath(allowedReadPath)) return;
 
   if (!classifierEnabled(config, state.classifier)) return;
 
@@ -136,9 +149,6 @@ export async function interceptToolCall(
       return;
     }
     updateGuardStatus(ctx, state);
-    ctx.ui.notify(`Guard classifier failed closed: ${reason}. Stopping the session for user intervention.`, "error");
-    ctx.abort();
-    ctx.shutdown();
-    return { block: true, reason: `Guard classifier failed closed: ${reason}. Pi Guard is stopping the session for user intervention.` };
+    return stopTurnForClassifierFailure(ctx, reason);
   }
 }

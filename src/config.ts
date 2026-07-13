@@ -33,6 +33,7 @@ export interface GuardConfig {
   enabled?: boolean;
   backend?: GuardBackendName;
   filesystem?: {
+    enabled?: boolean;
     allowRead?: string[];
     denyRead?: string[];
     allowWrite?: string[];
@@ -56,6 +57,7 @@ export interface ResolvedGuardConfig {
   enabled: boolean;
   backend: GuardBackendName;
   filesystem: {
+    enabled: boolean;
     allowRead: string[];
     denyRead: string[];
     allowWrite: string[];
@@ -175,6 +177,7 @@ export const DEFAULT_CONFIG: ResolvedGuardConfig = {
   enabled: true,
   backend: "seatbelt",
   filesystem: {
+    enabled: true,
     allowRead: [],
     denyRead: defaultDenyReadPaths(),
     allowWrite: defaultAllowWritePaths(),
@@ -251,6 +254,7 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
   else if (override.backend !== undefined) diagnostics.push(`Ignoring ${source}.backend: unsupported backend`);
 
   if (isObject(override.filesystem)) {
+    if (typeof override.filesystem.enabled === "boolean") next.filesystem.enabled = override.filesystem.enabled;
     next.filesystem.allowRead = asStringArray(override.filesystem.allowRead, `${source}.filesystem.allowRead`, diagnostics) ?? next.filesystem.allowRead;
     next.filesystem.denyRead = asStringArray(override.filesystem.denyRead, `${source}.filesystem.denyRead`, diagnostics) ?? next.filesystem.denyRead;
     next.filesystem.allowWrite = asStringArray(override.filesystem.allowWrite, `${source}.filesystem.allowWrite`, diagnostics) ?? next.filesystem.allowWrite;

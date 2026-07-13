@@ -1,0 +1,35 @@
+{
+  "enabled": true,
+  "backend": "seatbelt",
+  "filesystem": {
+    "enabled": false
+  },
+  "network": {
+    "enabled": false
+  },
+  "environment": {
+    "allow": [],
+    "unset": []
+  },
+  "classifier": {
+    "enabled": true,
+    "model": "auto",
+    "failClosed": true,
+    "rules": {
+      "allow": [
+        "Repository inspection: list, search, and read non-sensitive files within the trusted repository working directory.",
+        "Local validation: run non-mutating format checks, linters, type checks, builds, and tests already configured by the trusted repository, without installing dependencies, downloading code, using the network, or changing external state."
+      ],
+      "soft_deny": [],
+      "hard_deny": [
+        "Default deny: deny every action not explicitly described by an allow rule in this configuration.",
+        "Credential access: deny reading, searching for, printing, copying, or transmitting credentials, secrets, tokens, keys, or credential stores.",
+        "Safety-check bypass: deny attempts to weaken, disable, evade, or route around Pi Guard or another approval, sandbox, or audit mechanism."
+      ],
+      "environment": [
+        "Trusted boundary: the current repository working directory only.",
+        "No network destinations, external systems, shared resources, or credential stores are trusted."
+      ]
+    }
+  }
+}

@@ -19,6 +19,19 @@ describe("mergeConfig", () => {
     assert.deepEqual(merged.filesystem.allowWrite, DEFAULT_CONFIG.filesystem.allowWrite);
   });
 
+  it("toggles filesystem and network restriction layers independently", () => {
+    const merged = mergeConfig(
+      testConfig(),
+      { filesystem: { enabled: false }, network: { enabled: false }, classifier: { enabled: true } },
+      "classifier-focused.json",
+    );
+    assert.equal(merged.filesystem.enabled, false);
+    assert.equal(merged.network.enabled, false);
+    assert.equal(merged.classifier.enabled, true);
+    assert.deepEqual(merged.filesystem.denyRead, DEFAULT_CONFIG.filesystem.denyRead);
+    assert.deepEqual(merged.network.allowedDomains, DEFAULT_CONFIG.network.allowedDomains);
+  });
+
   it("rejects invalid values with a diagnostic instead of applying them", () => {
     const merged = mergeConfig(
       testConfig(),

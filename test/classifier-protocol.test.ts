@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  FAST_SYSTEM_PROMPT,
   buildFastReviewText,
   buildFullReviewText,
   isModelUnavailableError,
@@ -10,6 +11,13 @@ import {
   projectToolCall,
 } from "../src/classifier-protocol.ts";
 import { testConfig } from "./helpers.ts";
+
+describe("fast system prompt", () => {
+  it("requires the classifier to respect configured allow and deny rules", () => {
+    assert.match(FAST_SYSTEM_PROMPT, /only when an allow rule clearly covers/);
+    assert.match(FAST_SYSTEM_PROMPT, /no soft_deny or hard_deny rule applies/);
+  });
+});
 
 describe("parseResult", () => {
   it("parses a well-formed reviewer response", () => {
@@ -89,6 +97,16 @@ describe("projectToolCall", () => {
   it("includes the policy summary for classifier context", () => {
     const projection = projectToolCall("bash", { command: "ls" }, "/repo", testConfig());
     assert.ok(projection.policySummary.some((line) => line.startsWith("Backend:")));
+  });
+
+  it("tells the classifier when hard restriction layers are disabled", () => {
+    const config = testConfig((c) => {
+      c.filesystem.enabled = false;
+      c.network.enabled = false;
+    });
+    const projection = projectToolCall("bash", { command: "ls" }, "/repo", config);
+    assert.ok(projection.policySummary.includes("Filesystem restrictions: disabled (unrestricted)"));
+    assert.ok(projection.policySummary.includes("Network restrictions: disabled (unrestricted)"));
   });
 });
 

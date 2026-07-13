@@ -79,4 +79,35 @@ describe("policy and seatbelt agree on default deny paths", () => {
     assert.ok(envDenials.includes("GITHUB_TOKEN"));
     assert.ok(envDenials.includes("ANTHROPIC_API_KEY"));
   });
+
+  it("disables filesystem enforcement in both engines", () => {
+    const config = testConfig((c) => {
+      c.filesystem.enabled = false;
+    });
+    assert.equal(decidePathAccess(config, cwd, path.join(fakeHome, ".ssh", "credential"), "read").allowed, true);
+    const runtime = getSeatbeltRuntimeConfig(config, cwd);
+    assert.equal((runtime.filesystem as { disabled?: boolean }).disabled, true);
+    assert.deepEqual((runtime.credentials as { files: unknown[] }).files, []);
+  });
+
+  it("omits the allowlist to disable network restrictions", () => {
+    const config = testConfig((c) => {
+      c.network.enabled = false;
+    });
+    const runtime = getSeatbeltRuntimeConfig(config, cwd);
+    assert.equal(Object.hasOwn(runtime.network, "allowedDomains"), false);
+    assert.deepEqual(runtime.network.deniedDomains, []);
+  });
+
+  it("keeps an empty allowlist when network restrictions should deny all", () => {
+    const config = testConfig((c) => {
+      c.network.enabled = true;
+      c.network.allowedDomains = [];
+      c.network.deniedDomains = ["*"];
+    });
+    const runtime = getSeatbeltRuntimeConfig(config, cwd);
+    assert.equal(Object.hasOwn(runtime.network, "allowedDomains"), true);
+    assert.deepEqual(runtime.network.allowedDomains, []);
+    assert.deepEqual(runtime.network.deniedDomains, ["*"]);
+  });
 });

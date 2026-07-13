@@ -30,6 +30,13 @@ describe("normalizeUserPath", () => {
 });
 
 describe("decidePathAccess read", () => {
+  it("allows denied paths when filesystem restrictions are disabled", () => {
+    const config = testConfig((c) => {
+      c.filesystem.enabled = false;
+    });
+    assert.equal(decidePathAccess(config, cwd, ".env", "read").allowed, true);
+  });
+
   it("allows normal project files in blacklist mode", () => {
     const decision = decidePathAccess(testConfig(), cwd, "src/app.ts", "read");
     assert.equal(decision.allowed, true);
@@ -70,6 +77,13 @@ describe("decidePathAccess read", () => {
 });
 
 describe("decidePathAccess write", () => {
+  it("allows paths outside write roots when filesystem restrictions are disabled", () => {
+    const config = testConfig((c) => {
+      c.filesystem.enabled = false;
+    });
+    assert.equal(decidePathAccess(config, cwd, "/usr/local/pwned.txt", "write").allowed, true);
+  });
+
   it("allows writes inside cwd via the '.' root", () => {
     const decision = decidePathAccess(testConfig(), cwd, "src/new-file.ts", "write");
     assert.equal(decision.allowed, true);
