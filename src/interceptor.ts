@@ -13,7 +13,6 @@ import {
   recordPolicyBlock,
   type RuntimeState,
 } from "./state.ts";
-import { updateGuardStatus } from "./status.ts";
 import { formatError } from "./util.ts";
 
 export interface ToolCallBlock {
@@ -57,7 +56,6 @@ async function askPathApproval(params: {
   recordApprovalRequested(params.state, params.toolName, params.kind, params.path);
   if (!params.ctx.hasUI) {
     recordApprovalDenied(params.state);
-    updateGuardStatus(params.ctx, params.state);
     return { block: true, reason: `${params.kind} requires approval for ${params.path}: ${params.reason}` };
   }
   const ok = await params.ctx.ui.confirm(
@@ -67,11 +65,9 @@ async function askPathApproval(params: {
   if (ok) {
     params.state.approvals[params.kind].push(params.path);
     recordApprovalGranted(params.state, params.toolName, params.kind, params.path);
-    updateGuardStatus(params.ctx, params.state);
     return;
   }
   recordApprovalDenied(params.state);
-  updateGuardStatus(params.ctx, params.state);
   return { block: true, reason: `${params.kind} approval denied for ${params.path}. Do not work around the guard; ask the user.` };
 }
 
@@ -90,7 +86,6 @@ export async function interceptToolCall(
 
   const block = (reason: string): ToolCallBlock => {
     recordPolicyBlock(state, event.toolName, reason);
-    updateGuardStatus(ctx, state);
     return { block: true, reason: `${reason}. Do not work around the guard; choose an allowed path or ask the user.` };
   };
 
@@ -123,22 +118,18 @@ export async function interceptToolCall(
     state.classifier.lastDecision = { ...result, toolName: event.toolName, at: Date.now() };
     state.classifier.lastError = undefined;
     recordClassifierResult(state, event.toolName, result);
-    updateGuardStatus(ctx, state);
     if (result.decision === "allow") return;
     if (result.decision === "ask" && ctx.hasUI) {
       const ok = await ctx.ui.confirm("Guard reviewer asks for approval", `${result.reason}\n\nAllow ${event.toolName}?`);
       if (ok) {
-        updateGuardStatus(ctx, state);
         return;
       }
     }
-    updateGuardStatus(ctx, state);
     return { block: true, reason: `Guard reviewer ${result.decision}: ${result.reason}. Do not work around this denial; choose a safer path or ask the user.` };
   } catch (error) {
     const reason = formatError(error);
     state.classifier.lastError = reason;
     recordClassifierError(state, event.toolName, reason);
-    updateGuardStatus(ctx, state);
     if (isClassifierModelUnavailable(error)) {
       ctx.ui.notify(`Guard classifier unavailable: ${reason}. Stopping this turn for user intervention.`, "error");
       ctx.abort();
@@ -148,7 +139,6 @@ export async function interceptToolCall(
       ctx.ui.notify(`Guard classifier failed open: ${reason}`, "warning");
       return;
     }
-    updateGuardStatus(ctx, state);
     return stopTurnForClassifierFailure(ctx, reason);
   }
 }

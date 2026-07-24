@@ -13,6 +13,15 @@ describe("mergeConfig", () => {
     assert.deepEqual(merged.sources, ["defaults", "test.json"]);
   });
 
+  it("applies a valid statusLine mode and rejects an invalid one", () => {
+    const merged = mergeConfig(testConfig(), { statusLine: "auto" }, "test.json");
+    assert.equal(merged.statusLine, "auto");
+    const rejected = mergeConfig(testConfig(), { statusLine: "sometimes" as never }, "test.json");
+    assert.equal(rejected.statusLine, "always");
+    assert.equal(rejected.diagnostics.length, 1);
+    assert.match(rejected.diagnostics[0]!, /statusLine/);
+  });
+
   it("replaces arrays wholesale rather than concatenating", () => {
     const merged = mergeConfig(testConfig(), { filesystem: { denyRead: ["/only/this"] } }, "test.json");
     assert.deepEqual(merged.filesystem.denyRead, ["/only/this"]);

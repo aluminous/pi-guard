@@ -95,8 +95,17 @@ Guard: seatbelt, 26 domains, auto (openai-codex/gpt-5.4-mini) R2(+1) C4 D1 ↑12
 ```
 
 `R` = deterministic policy rule hits, `C` = classifier reviews, `D` = classifier
-denials, `(+n)` = added this turn, `↑`/`↓` = classifier input/output tokens this
-session. The counters turn yellow when there are denials, blocks, or errors.
+denials, `(+n)` = added since your last message, `↑`/`↓` = classifier input/output
+tokens this session. The counters turn yellow when there are denials, blocks, or
+errors.
+
+The top-level `statusLine` config field controls when the statusline is shown
+(also settable from the `/guard` panel, which saves it globally):
+
+- `"always"` (default): always visible.
+- `"never"`: never shown.
+- `"auto"`: shown only when something needs attention — the guard is disabled
+  or erroring, or a call was denied or blocked since your last message.
 
 ## Configuration
 
@@ -114,6 +123,7 @@ Example `.pi/guard.json`:
 {
   "enabled": true,
   "backend": "seatbelt",
+  "statusLine": "always",
   "filesystem": {
     "enabled": true,
     "allowRead": [],

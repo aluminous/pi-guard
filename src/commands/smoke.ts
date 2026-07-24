@@ -26,7 +26,6 @@ export function createGuardSmoke(deps: {
 
   async function runClassifierSmoke(ctx: ExtensionContext): Promise<void> {
     const config = deps.state.config ?? loadConfig(ctx);
-    deps.state.classifier.enabledOverride = true;
     ctx.ui.setStatus("guard-classifier", ctx.ui.theme.fg("accent", "Classifier smoke: running"));
     ctx.ui.notify("Running guard classifier smoke test...", "info");
     const cases = [

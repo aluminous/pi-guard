@@ -6,6 +6,9 @@ import { DEFAULT_CLASSIFIER_RULES } from "./classifier-rules.ts";
 
 export type GuardBackendName = "seatbelt" | "none" | "container";
 
+/** When the guard statusline is visible: always, never, or auto (only when the guard is off/erroring or something was denied since the last user message). */
+export type StatusLineMode = "always" | "never" | "auto";
+
 export interface ClassifierRulesConfig {
   allow?: string[];
   soft_deny?: string[];
@@ -32,6 +35,7 @@ export interface ResolvedClassifierConfig {
 export interface GuardConfig {
   enabled?: boolean;
   backend?: GuardBackendName;
+  statusLine?: StatusLineMode;
   filesystem?: {
     enabled?: boolean;
     allowRead?: string[];
@@ -56,6 +60,7 @@ export interface GuardConfig {
 export interface ResolvedGuardConfig {
   enabled: boolean;
   backend: GuardBackendName;
+  statusLine: StatusLineMode;
   filesystem: {
     enabled: boolean;
     allowRead: string[];
@@ -176,6 +181,7 @@ function defaultAllowWritePaths(): string[] {
 export const DEFAULT_CONFIG: ResolvedGuardConfig = {
   enabled: true,
   backend: "seatbelt",
+  statusLine: "always",
   filesystem: {
     enabled: true,
     allowRead: [],
@@ -252,6 +258,9 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
 
   if (override.backend === "seatbelt" || override.backend === "none" || override.backend === "container") next.backend = override.backend;
   else if (override.backend !== undefined) diagnostics.push(`Ignoring ${source}.backend: unsupported backend`);
+
+  if (override.statusLine === "always" || override.statusLine === "never" || override.statusLine === "auto") next.statusLine = override.statusLine;
+  else if (override.statusLine !== undefined) diagnostics.push(`Ignoring ${source}.statusLine: expected "always", "never", or "auto"`);
 
   if (isObject(override.filesystem)) {
     if (typeof override.filesystem.enabled === "boolean") next.filesystem.enabled = override.filesystem.enabled;

@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { classifierEnabled, resolveClassifierModel } from "./classifier.ts";
-import type { ResolvedGuardConfig } from "./config.ts";
+import type { ResolvedGuardConfig, StatusLineMode } from "./config.ts";
 import { getPersistentConfigPath } from "./persistent-settings.ts";
 import type { GuardEvent, RuntimeState } from "./state.ts";
 
@@ -54,7 +54,18 @@ function classifierModelLabel(ctx: ExtensionContext, config: ResolvedGuardConfig
   return spec === "auto" ? `auto (${model.provider}/${model.id})` : `${model.provider}/${model.id}`;
 }
 
+/** In "auto" mode the statusline appears only when something needs attention: the guard is off or erroring, or a call was denied/blocked since the last user message. */
+export function statusLineVisible(mode: StatusLineMode, state: RuntimeState): boolean {
+  if (mode === "never") return false;
+  if (mode === "always") return true;
+  return !state.enabled || state.lastError !== undefined || state.stats.turnClassifierDenials > 0 || state.stats.turnBlocked > 0;
+}
+
 export function updateGuardStatus(ctx: ExtensionContext, state: RuntimeState): void {
+  if (!statusLineVisible(state.config?.statusLine ?? "always", state)) {
+    ctx.ui.setStatus("guard", undefined);
+    return;
+  }
   const theme = ctx.ui.theme;
   const muted = (text: string) => theme.fg("muted", text);
   const warning = (text: string) => theme.fg("warning", text);

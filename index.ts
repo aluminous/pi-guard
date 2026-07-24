@@ -44,6 +44,10 @@ export default function (pi: ExtensionAPI) {
     });
   }
 
+  // Statusline convention: the statusline is a pure projection of RuntimeState.
+  // Mutators (enableGuard, record* helpers, commands) never refresh it themselves;
+  // instead every entry point — each event handler below and the /guard command
+  // dispatch — ends with a single updateGuardStatus call, usually in a finally.
   async function enableGuard(ctx: ExtensionContext): Promise<void> {
     const config = state.config ?? loadConfig(ctx);
     config.enabled = true;
@@ -52,22 +56,17 @@ export default function (pi: ExtensionAPI) {
     state.enabled = true;
     state.disabledForNextAgent = false;
     state.lastError = undefined;
-    if (state.initialized && state.backend) {
-      updateGuardStatus(ctx, state);
-      return;
-    }
+    if (state.initialized && state.backend) return;
     state.backend = makeBackend(config);
     const support = await state.backend.supported();
     if (!support.ok) throw new Error(support.reason);
     await state.backend.initialize(config, ctx);
     state.initialized = true;
-    updateGuardStatus(ctx, state);
   }
 
-  async function disableGuard(ctx: ExtensionContext, scope: "next-agent" | "session" = "next-agent"): Promise<void> {
+  async function disableGuard(_ctx: ExtensionContext, scope: "next-agent" | "session" = "next-agent"): Promise<void> {
     state.enabled = false;
     state.disabledForNextAgent = scope === "next-agent";
-    updateGuardStatus(ctx, state);
   }
 
   pi.registerTool({
@@ -88,11 +87,16 @@ export default function (pi: ExtensionAPI) {
     return { operations: ops };
   });
 
-  pi.on("tool_call", (event, ctx) => {
-    return interceptToolCall(event, ctx, state);
+  pi.on("tool_call", async (event, ctx) => {
+    try {
+      return await interceptToolCall(event, ctx, state);
+    } finally {
+      updateGuardStatus(ctx, state);
+    }
   });
 
-  pi.on("turn_start", (_event, ctx) => {
+  // turn_start/turn_end fire on every agent-loop iteration; per-turn stats span a whole user prompt, so reset on agent_start.
+  pi.on("agent_start", (_event, ctx) => {
     resetTurnStats(state);
     updateGuardStatus(ctx, state);
   });
@@ -101,59 +105,68 @@ export default function (pi: ExtensionAPI) {
     updateGuardStatus(ctx, state);
   });
 
+  // The classifier label can show "current"/"auto", which resolve against the session model.
+  pi.on("model_select", (_event, ctx) => {
+    updateGuardStatus(ctx, state);
+  });
+
   pi.on("session_start", async (_event, ctx) => {
-    resetSessionState(state);
-
-    const disabledByFlag = pi.getFlag("no-guard") as boolean;
-    const config = loadConfig(ctx);
-    state.config = config;
-    state.warnings.push(...config.diagnostics);
-    state.availableModelSpecs = ctx.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`);
-
-    for (const warning of state.warnings) ctx.ui.notify(warning, "warning");
-
-    if (disabledByFlag) {
-      state.enabled = false;
-      state.disabledForNextAgent = false;
-      state.backend = new NoneBackend();
-      updateGuardStatus(ctx, state);
-      ctx.ui.notify("Pi Guard disabled by --no-guard; bash will run unguarded.", "warning");
-      return;
-    }
-
-    if (!config.enabled) {
-      state.enabled = false;
-      state.disabledForNextAgent = false;
-      state.backend = new NoneBackend();
-      updateGuardStatus(ctx, state);
-      ctx.ui.notify("Guard disabled by config; bash will run unguarded.", "info");
-      return;
-    }
-
     try {
-      await enableGuard(ctx);
-      ctx.ui.notify(`Guard initialized with ${state.backend?.name ?? config.backend} backend.`, "info");
-    } catch (error) {
-      state.initialized = false;
-      state.lastError = formatError(error);
+      resetSessionState(state);
+
+      const disabledByFlag = pi.getFlag("no-guard") as boolean;
+      const config = loadConfig(ctx);
+      state.config = config;
+      state.warnings.push(...config.diagnostics);
+      state.availableModelSpecs = ctx.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`);
+
+      for (const warning of state.warnings) ctx.ui.notify(warning, "warning");
+
+      if (disabledByFlag) {
+        state.enabled = false;
+        state.disabledForNextAgent = false;
+        state.backend = new NoneBackend();
+        ctx.ui.notify("Pi Guard disabled by --no-guard; bash will run unguarded.", "warning");
+        return;
+      }
+
+      if (!config.enabled) {
+        state.enabled = false;
+        state.disabledForNextAgent = false;
+        state.backend = new NoneBackend();
+        ctx.ui.notify("Guard disabled by config; bash will run unguarded.", "info");
+        return;
+      }
+
+      try {
+        await enableGuard(ctx);
+        ctx.ui.notify(`Guard initialized with ${state.backend?.name ?? config.backend} backend.`, "info");
+      } catch (error) {
+        state.initialized = false;
+        state.lastError = formatError(error);
+        ctx.ui.notify(`Guard initialization failed; bash will be blocked: ${state.lastError}`, "error");
+      }
+    } finally {
       updateGuardStatus(ctx, state);
-      ctx.ui.notify(`Guard initialization failed; bash will be blocked: ${state.lastError}`, "error");
     }
   });
 
   pi.on("agent_end", async (_event, ctx) => {
-    if (!state.disabledForNextAgent) return;
-    state.disabledForNextAgent = false;
-    if (!state.config?.enabled) return;
     try {
-      await enableGuard(ctx);
-      ctx.ui.notify("Pi Guard re-enabled after one unguarded turn.", "info");
-    } catch (error) {
-      state.enabled = false;
-      state.initialized = false;
-      state.lastError = formatError(error);
+      if (!state.disabledForNextAgent) return;
+      state.disabledForNextAgent = false;
+      if (!state.config?.enabled) return;
+      try {
+        await enableGuard(ctx);
+        ctx.ui.notify("Pi Guard re-enabled after one unguarded turn.", "info");
+      } catch (error) {
+        state.enabled = false;
+        state.initialized = false;
+        state.lastError = formatError(error);
+        ctx.ui.notify(`Could not re-enable Pi Guard: ${state.lastError}`, "error");
+      }
+    } finally {
       updateGuardStatus(ctx, state);
-      ctx.ui.notify(`Could not re-enable Pi Guard: ${state.lastError}`, "error");
     }
   });
 

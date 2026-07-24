@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { classifierEnabled, resolveClassifierModel } from "../classifier.ts";
-import { loadConfig } from "../config.ts";
+import { loadConfig, type StatusLineMode } from "../config.ts";
+import { updatePersistentStatusLine } from "../persistent-settings.ts";
 import type { RuntimeState } from "../state.ts";
 import { formatGuardStatus, updateGuardStatus } from "../status.ts";
 import { pickFromList, type SelectItem } from "../tui/select-list.ts";
@@ -42,7 +43,6 @@ export function createGuardCommand(deps: GuardCommandDeps) {
       state.enabled = false;
       state.initialized = false;
       state.lastError = formatError(error);
-      updateGuardStatus(ctx, state);
       show(ctx, `Could not enable Pi Guard: ${state.lastError}`, "error");
     }
   }
@@ -89,7 +89,34 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     ];
   }
 
-  type PanelAction = "on" | "off-turn" | "off-session" | "model" | "smoke" | "critique" | "status";
+  const STATUS_LINE_MODES: Array<{ value: StatusLineMode; description: string }> = [
+    { value: "always", description: "Show the guard statusline at all times" },
+    { value: "auto", description: "Show only when the guard is off or erroring, or something was denied since your last message" },
+    { value: "never", description: "Hide the guard statusline entirely" },
+  ];
+
+  async function chooseStatusLine(ctx: ExtensionContext): Promise<void> {
+    const config = state.config ?? loadConfig(ctx);
+    state.config = config;
+    const items: SelectItem<StatusLineMode>[] = STATUS_LINE_MODES.map((mode) => ({
+      value: mode.value,
+      label: mode.value,
+      searchText: `${mode.value} statusline ${mode.description}`,
+      description: mode.description,
+      current: config.statusLine === mode.value,
+    }));
+    const picked = await pickFromList<StatusLineMode>(ctx, { title: "Guard statusline", items });
+    if (!picked) return;
+    config.statusLine = picked.value;
+    try {
+      updatePersistentStatusLine(picked.value);
+      show(ctx, `Guard statusline set to ${picked.value} and saved.`);
+    } catch (error) {
+      show(ctx, `Guard statusline set to ${picked.value} for this session, but saving failed: ${formatError(error)}`, "warning");
+    }
+  }
+
+  type PanelAction = "on" | "off-turn" | "off-session" | "model" | "statusline" | "smoke" | "critique" | "status";
 
   async function openPanel(ctx: ExtensionContext): Promise<void> {
     const items: SelectItem<PanelAction>[] = [];
@@ -103,6 +130,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     }
     items.push(
       { value: "model", label: "Classifier model…", searchText: "model classifier auto choose select", description: "Pick auto, the current model, a specific model, or turn review off" },
+      { value: "statusline", label: "Statusline visibility…", searchText: "statusline status line visibility always never auto hide show", description: "Show the guard statusline always, never, or only when notable" },
       { value: "smoke", label: "Run smoke tests", searchText: "smoke test verify sandbox classifier", description: "Verify sandboxed execution and classifier decisions end to end" },
       { value: "critique", label: "Critique rules", searchText: "critique rules review improve", description: "Have Pi's current model review the classifier rules for gaps" },
       { value: "status", label: "Full status report", searchText: "status report details approvals policy", description: "Post the detailed report: policy, approvals, recent decisions" },
@@ -122,6 +150,8 @@ export function createGuardCommand(deps: GuardCommandDeps) {
       }
       case "model":
         return runModelCommand("", ctx, state);
+      case "statusline":
+        return chooseStatusLine(ctx);
       case "smoke":
         return deps.runGuardSmoke(ctx);
       case "critique":
@@ -132,6 +162,14 @@ export function createGuardCommand(deps: GuardCommandDeps) {
   }
 
   async function handler(args: string, ctx: ExtensionContext): Promise<void> {
+    try {
+      await dispatch(args, ctx);
+    } finally {
+      updateGuardStatus(ctx, state);
+    }
+  }
+
+  async function dispatch(args: string, ctx: ExtensionContext): Promise<void> {
     const trimmed = args.trim();
     const [head = "", ...restParts] = trimmed.split(/\s+/);
     const rest = restParts.join(" ");

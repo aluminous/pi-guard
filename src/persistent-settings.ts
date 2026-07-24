@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { GuardConfig } from "./config.ts";
+import type { GuardConfig, StatusLineMode } from "./config.ts";
 
 function configPath(): string {
   return path.join(getAgentDir(), "extensions", "guard.json");
@@ -64,6 +64,14 @@ export function updatePersistentClassifierSettings(update: { enabled?: boolean; 
         ...update,
       },
     };
+    writeFileSync(filePath, JSON.stringify(next, null, 2), "utf8");
+  });
+}
+
+export function updatePersistentStatusLine(mode: StatusLineMode): void {
+  withConfigLock(() => {
+    const filePath = configPath();
+    const next: GuardConfig = { ...readConfigUnlocked(), statusLine: mode };
     writeFileSync(filePath, JSON.stringify(next, null, 2), "utf8");
   });
 }

@@ -26,6 +26,7 @@ export interface GuardStats {
   turnRuleHits: number;
   turnClassifierHits: number;
   turnClassifierDenials: number;
+  turnBlocked: number;
 }
 
 export interface RuntimeState {
@@ -63,6 +64,7 @@ export function createGuardStats(): GuardStats {
     turnRuleHits: 0,
     turnClassifierHits: 0,
     turnClassifierDenials: 0,
+    turnBlocked: 0,
   };
 }
 
@@ -95,10 +97,12 @@ export function resetSessionState(state: RuntimeState): void {
   state.stats = createGuardStats();
 }
 
+/** Resets the per-turn counters. A "turn" spans from one user message to the next, not each agent loop iteration. */
 export function resetTurnStats(state: RuntimeState): void {
   state.stats.turnRuleHits = 0;
   state.stats.turnClassifierHits = 0;
   state.stats.turnClassifierDenials = 0;
+  state.stats.turnBlocked = 0;
 }
 
 function pushRecent(state: RuntimeState, event: GuardEvent) {
@@ -111,6 +115,7 @@ export function recordPolicyBlock(state: RuntimeState, toolName: string, reason:
   state.stats.ruleHits++;
   state.stats.turnRuleHits++;
   state.stats.blocked++;
+  state.stats.turnBlocked++;
   pushRecent(state, { at: Date.now(), toolName, decision: "block", reason });
 }
 
@@ -128,6 +133,7 @@ export function recordApprovalGranted(state: RuntimeState, toolName: string, kin
 
 export function recordApprovalDenied(state: RuntimeState): void {
   state.stats.blocked++;
+  state.stats.turnBlocked++;
 }
 
 export function recordClassifierResult(state: RuntimeState, toolName: string, result: ClassifierResult): void {

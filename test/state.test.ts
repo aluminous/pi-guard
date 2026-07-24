@@ -75,7 +75,17 @@ describe("decision recording", () => {
     recordPolicyBlock(state, "read", "x");
     resetTurnStats(state);
     assert.equal(state.stats.turnRuleHits, 0);
+    assert.equal(state.stats.turnBlocked, 0);
     assert.equal(state.stats.ruleHits, 1);
+    assert.equal(state.stats.blocked, 1);
+  });
+
+  it("counts blocks and denied approvals in the per-turn blocked counter", () => {
+    const state = createRuntimeState();
+    recordPolicyBlock(state, "read", "x");
+    recordApprovalDenied(state);
+    assert.equal(state.stats.turnBlocked, 2);
+    assert.equal(state.stats.blocked, 2);
   });
 
   it("resets session state in place, preserving object identity", () => {
