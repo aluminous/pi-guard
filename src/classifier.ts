@@ -224,7 +224,7 @@ export async function runReview(params: {
   };
   const fast = parseFastResult(fastResponse.text);
   if (fast.triviallySafe) {
-    return { decision: "allow", risk: "low", authorization: "medium", reason: `Fast-path trivially safe: ${fast.reason}`, tokenUsage: usage };
+    return { decision: "allow", risk: "low", authorization: "medium", reason: `Fast-path trivially safe: ${fast.reason}`, tokenUsage: usage, fastPath: true, attempts: budget.attempts };
   }
 
   const fullResponse = await completeText({
@@ -238,7 +238,7 @@ export async function runReview(params: {
   usage.input += fullResponse.usage?.input ?? 0;
   usage.output += fullResponse.usage?.output ?? 0;
   const result = parseResult(fullResponse.text);
-  return { ...result, tokenUsage: usage };
+  return { ...result, tokenUsage: usage, fastPath: false, attempts: budget.attempts };
 }
 
 export async function reviewToolCall(params: {

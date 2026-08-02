@@ -17,6 +17,10 @@ export interface ClassifierResult {
   authorization: AuthorizationLevel;
   reason: string;
   tokenUsage?: ClassifierTokenUsage;
+  /** True when the fast-path stage decided without a full review. */
+  fastPath?: boolean;
+  /** Total model call attempts across both review stages (shared retry budget). */
+  attempts?: number;
 }
 
 export interface ReviewProjection {

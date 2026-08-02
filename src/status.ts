@@ -129,6 +129,7 @@ export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConf
     `  ${classifierOn ? "enabled" : "disabled"}`,
     `  Model: ${state.classifier.modelOverride ?? config.classifier.model}`,
     `  Fail closed: ${config.classifier.failClosed ? "yes" : "no"}`,
+    `  Telemetry: ${config.classifier.telemetry}`,
     state.classifier.lastError ? `  Last error: ${state.classifier.lastError}` : undefined,
     "",
     "## Decisions this session",

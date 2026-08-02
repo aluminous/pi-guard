@@ -21,6 +21,8 @@ export interface ClassifierConfig {
   model?: string;
   timeoutMs?: number;
   failClosed?: boolean;
+  /** Decision telemetry written to pi's session log: off, minimal (truncated), or full. */
+  telemetry?: "off" | "minimal" | "full";
   rules?: ClassifierRulesConfig;
 }
 
@@ -29,6 +31,7 @@ export interface ResolvedClassifierConfig {
   model: string;
   timeoutMs: number;
   failClosed: boolean;
+  telemetry: "off" | "minimal" | "full";
   rules: Required<ClassifierRulesConfig>;
 }
 
@@ -203,6 +206,7 @@ export const DEFAULT_CONFIG: ResolvedGuardConfig = {
     model: "auto",
     timeoutMs: 8000,
     failClosed: true,
+    telemetry: "minimal",
     rules: DEFAULT_CLASSIFIER_RULES,
   },
   seatbelt: {},
@@ -290,6 +294,13 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
       diagnostics.push(`Ignoring ${source}.classifier.timeoutMs: expected a positive number`);
     }
     if (typeof override.classifier.failClosed === "boolean") next.classifier.failClosed = override.classifier.failClosed;
+    if (override.classifier.telemetry !== undefined) {
+      if (override.classifier.telemetry === "off" || override.classifier.telemetry === "minimal" || override.classifier.telemetry === "full") {
+        next.classifier.telemetry = override.classifier.telemetry;
+      } else {
+        diagnostics.push(`Ignoring ${source}.classifier.telemetry: expected "off", "minimal", or "full"`);
+      }
+    }
     if (isObject(override.classifier.rules)) {
       next.classifier.rules = { ...next.classifier.rules };
       next.classifier.rules.allow = asStringArray(override.classifier.rules.allow, `${source}.classifier.rules.allow`, diagnostics) ?? next.classifier.rules.allow;

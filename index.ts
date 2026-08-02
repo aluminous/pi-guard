@@ -32,6 +32,9 @@ export default function (pi: ExtensionAPI) {
   const localBash = createBashTool(localCwd);
   const localBashOps = createLocalBashOperations();
   const state = createRuntimeState();
+  // Decision telemetry lands in pi's own session log as custom entries
+  // (user-approved feature: guard decision records via pi.appendEntry).
+  state.appendEntry = (customType, data) => pi.appendEntry(customType, data);
 
   function guardedOps() {
     if (!state.backend || !state.config) return undefined;

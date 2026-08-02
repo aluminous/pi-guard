@@ -46,6 +46,8 @@ export interface RuntimeState {
   recent: GuardEvent[];
   /** provider/id specs with configured auth, cached at session start for argument completions (which get no ctx). */
   availableModelSpecs: string[];
+  /** Writes a custom entry to pi's session log (pi.appendEntry). Undefined in tests without session wiring. */
+  appendEntry?: (customType: string, data: unknown) => void;
 }
 
 export function createGuardStats(): GuardStats {

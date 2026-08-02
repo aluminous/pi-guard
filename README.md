@@ -144,7 +144,8 @@ Example `.pi/guard.json`:
     "enabled": false,
     "model": "auto",
     "timeoutMs": 8000,
-    "failClosed": true
+    "failClosed": true,
+    "telemetry": "minimal"
   }
 }
 ```
@@ -218,6 +219,34 @@ enabled and use an empty allowlist:
 - Environment variables are scrubbed before guarded commands are spawned.
 - If enabled, the classifier reviews `bash`, `read`, `write`, and `edit` calls after deterministic policy checks and before execution.
 - Classifier timeouts/network failures are retried with bounded exponential backoff up to five attempts and surfaced to the user. If no usable classifier model is available, or fail-closed review still fails after retries, Pi Guard stops the current turn for user intervention without exiting Pi.
+
+## Decision telemetry
+
+Every guard decision — classifier reviews, deterministic policy blocks, path
+approvals, and classifier errors — is recorded as a `custom` entry
+(`customType: "guard"`) in pi's own session log, next to the tool call it
+judged. Entries do not participate in LLM context and are written
+best-effort: telemetry never blocks or breaks a tool call, and ephemeral
+sessions simply skip persistence.
+
+`classifier.telemetry` controls verbosity:
+
+- `"minimal"` (default): decision, risk, fast-path flag, attempts, latency,
+  token usage, model, reason, and a truncated projection of the tool input.
+- `"full"`: complete projection including the policy summary, for eval-case
+  extraction.
+- `"off"`: no telemetry.
+
+Note that session files can be shared (`pi share` uploads the whole file), so
+records stay minimal by default even though the session already contains the
+full tool call inputs.
+
+`npm run telemetry` (`eval/session-stats.ts`) aggregates guard entries across
+all local sessions: decision rates, fast-path and retry rates, latency
+p50/p95/max, token cost, models used, path approvals, and errors.
+`npm run telemetry -- --cases` dumps denied/rejected reviews as eval-case
+candidates, flagging ones where the same command was executed later in the
+session (false-positive candidates worth adding to `eval/cases.ts`).
 
 ## Limitations
 
