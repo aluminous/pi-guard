@@ -193,7 +193,10 @@ Use project or global config to narrow these defaults for more sensitive workspa
 Network restrictions are enabled by default. The default allowed domains cover GitHub and common container registries: GitHub/GitHubusercontent/GHCR, Docker Hub, Quay, Google Container Registry and Artifact Registry, Kubernetes registry, Microsoft Container Registry, and public ECR. All other domains are denied by default.
 
 Set `network.enabled` to `false` to disable network restrictions and allow
-normal unrestricted networking. To block networking entirely, keep the policy
+normal unrestricted networking. With networking disabled, no proxy is set up:
+the sandbox runtime's local proxy is never started and sandboxed commands get
+no proxy-related environment variables, so tools that break under proxying
+work normally. To block networking entirely, keep the policy
 enabled and use an empty allowlist:
 
 ```json

@@ -86,10 +86,24 @@ export function getSeatbeltRuntimeConfig(config: ResolvedGuardConfig, cwd = proc
   if (!config.network.enabled) {
     // sandbox-runtime enables domain filtering by the presence of
     // allowedDomains. Omitting it leaves networking unrestricted, while an
-    // explicitly empty array means deny all.
+    // explicitly empty array means deny all. Strip every other proxy-engaging
+    // field as well so a seatbelt.network override cannot re-arm the proxy
+    // while network sandboxing is disabled.
     delete network.allowedDomains;
+    delete network.mitmProxy;
+    delete network.tlsTerminate;
+    delete network.filterRequest;
+    delete network.parentProxy;
     network.deniedDomains = [];
     network.strictAllowlist = false;
+    // sandbox-runtime starts its local proxy listeners at initialize() unless
+    // both ports are declared external. Point them at the discard port so the
+    // proxy is never set up at all. These ports never reach sandboxed
+    // commands (proxy env injection is keyed off allowedDomains, which is
+    // absent), and if a future version routes through them anyway the
+    // connection fails fast instead of silently proxying.
+    network.httpProxyPort = 9;
+    network.socksProxyPort = 9;
   }
 
   const filesystem = {
