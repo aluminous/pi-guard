@@ -3,7 +3,7 @@ import { getPackageDir, type ExtensionContext } from "@earendil-works/pi-coding-
 import { askGuardApproval } from "./approvals.ts";
 import { addSessionGuidance, classifierEnabled, isClassifierModelUnavailable, projectToolCall, resolveClassifierModel, reviewToolCall } from "./classifier.ts";
 import type { ResolvedGuardConfig } from "./config.ts";
-import { GUARDED_TOOLS } from "./guarded-tools.ts";
+import { GUARDED_TOOLS, type GuardedToolSpec } from "./guarded-tools.ts";
 import { decidePathAccess, isClassifierExemptRead, normalizeUserPath, type AccessKind } from "./policy.ts";
 import { appendGuardTelemetry } from "./telemetry.ts";
 import {
@@ -92,6 +92,61 @@ async function askPathApproval(params: {
   return { block: true, reason: `${params.kind} approval denied for ${params.path}.${commentSuffix} Do not work around the guard; ask the user.` };
 }
 
+type PathStageResult =
+  | { outcome: "continue"; allowedReadPath?: string }
+  | { outcome: "done" }
+  | { outcome: "block"; block: ToolCallBlock };
+
+/** Stage 1: deterministic path policy — hard blocks and out-of-roots approval prompts. */
+async function enforcePathPolicy(
+  event: { toolName: string; input: unknown },
+  ctx: ExtensionContext,
+  state: RuntimeState,
+  config: ResolvedGuardConfig,
+  spec: GuardedToolSpec,
+  input: Record<string, unknown>,
+): Promise<PathStageResult> {
+  if (!config.filesystem.enabled || spec.access.length === 0) return { outcome: "continue" };
+  const target = spec.path?.(input);
+  if (typeof target !== "string") return { outcome: "done" };
+
+  const block = (reason: string): ToolCallBlock => {
+    recordPolicyBlock(state, event.toolName, reason);
+    appendGuardTelemetry(state, { kind: "block", tool: event.toolName, reason });
+    return { block: true, reason: `${reason}. Do not work around the guard; choose an allowed path or ask the user.` };
+  };
+
+  let allowedReadPath: string | undefined;
+  for (const kind of spec.access) {
+    const decision = decidePathAccess(config, ctx.cwd, target, kind);
+    if (decision.allowed) {
+      if (kind === "read") allowedReadPath = decision.normalizedPath;
+      continue;
+    }
+    if (decision.code === "outside-roots") {
+      const approval = await askPathApproval({ ctx, state, kind, toolName: event.toolName, path: decision.normalizedPath, reason: decision.reason });
+      if (approval) return { outcome: "block", block: approval };
+      continue;
+    }
+    return { outcome: "block", block: block(`${event.toolName} blocked for ${target}: ${decision.reason}`) };
+  }
+  return { outcome: "continue", allowedReadPath };
+}
+
+/**
+ * Stage 2: deterministic classifier exemption for reads. A trusted path is
+ * the whole action for a read (its projection carries no content), so in-cwd
+ * and allowlisted reads skip review entirely — whether or not filesystem
+ * enforcement is on; enabled:false only disables blocking, not trust.
+ */
+function isExemptReadCall(spec: GuardedToolSpec, input: Record<string, unknown>, cwd: string, config: ResolvedGuardConfig, allowedReadPath: string | undefined): boolean {
+  if (!spec.access.includes("read") || spec.access.includes("write")) return false;
+  const target = spec.path?.(input);
+  if (typeof target !== "string") return false;
+  const canonicalTarget = allowedReadPath ?? normalizeUserPath(cwd, target);
+  return isPiPackageDocsOrExamplePath(canonicalTarget) || isClassifierExemptRead(config, cwd, target);
+}
+
 export async function interceptToolCall(
   event: { toolName: string; input: unknown },
   ctx: ExtensionContext,
@@ -105,49 +160,25 @@ export async function interceptToolCall(
   const spec = GUARDED_TOOLS[event.toolName];
   if (!spec) return;
 
-  const block = (reason: string): ToolCallBlock => {
-    recordPolicyBlock(state, event.toolName, reason);
-    appendGuardTelemetry(state, { kind: "block", tool: event.toolName, reason });
-    return { block: true, reason: `${reason}. Do not work around the guard; choose an allowed path or ask the user.` };
-  };
-
-  let allowedReadPath: string | undefined;
-
-  if (config.filesystem.enabled && spec.access.length > 0) {
-    const target = spec.path?.(input);
-    if (typeof target !== "string") return;
-    for (const kind of spec.access) {
-      const decision = decidePathAccess(config, ctx.cwd, target, kind);
-      if (decision.allowed) {
-        if (kind === "read") allowedReadPath = decision.normalizedPath;
-        continue;
-      }
-      if (decision.code === "outside-roots") {
-        const approval = await askPathApproval({ ctx, state, kind, toolName: event.toolName, path: decision.normalizedPath, reason: decision.reason });
-        if (approval) return approval;
-        continue;
-      }
-      return block(`${event.toolName} blocked for ${target}: ${decision.reason}`);
-    }
-  }
+  const path = await enforcePathPolicy(event, ctx, state, config, spec, input);
+  if (path.outcome === "done") return;
+  if (path.outcome === "block") return path.block;
 
   if (!classifierEnabled(config, state.classifier)) return;
-
-  // Deterministic classifier exemption for reads. A trusted path is the whole
-  // action for a read (its projection carries no content), so in-cwd and
-  // allowlisted reads skip review entirely — whether or not filesystem
-  // enforcement is on; enabled:false only disables blocking, not trust.
-  if (spec.access.includes("read") && !spec.access.includes("write")) {
-    const target = spec.path?.(input);
-    if (typeof target === "string") {
-      const canonicalTarget = allowedReadPath ?? normalizeUserPath(ctx.cwd, target);
-      if (isPiPackageDocsOrExamplePath(canonicalTarget) || isClassifierExemptRead(config, ctx.cwd, target)) {
-        recordClassifierSkip(state);
-        return;
-      }
-    }
+  if (isExemptReadCall(spec, input, ctx.cwd, config, path.allowedReadPath)) {
+    recordClassifierSkip(state);
+    return;
   }
+  return runClassifierReview(event, ctx, state, config);
+}
 
+/** Stage 3: LLM review — two-stage classify, ask-with-comment flow, fail-open/closed error handling. */
+async function runClassifierReview(
+  event: { toolName: string; input: unknown },
+  ctx: ExtensionContext,
+  state: RuntimeState,
+  config: ResolvedGuardConfig,
+): Promise<ToolCallBlock | undefined> {
   const startedAt = performance.now();
   let telemetryModel: string | undefined;
   try {

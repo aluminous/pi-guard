@@ -1,5 +1,13 @@
 # Classifier model benchmark — 2026-07-04
 
+> **Staleness note (2026-08-04):** the classifier changed materially after
+> this benchmark — ask-first decision rules, two new allow rules (Local
+> Validation, Source Control Reads), session guidance in both stages, and a
+> cache-friendly payload restructure (static-first key order, `rulesText`
+> duplication removed, `activePolicy`/`cwd` hoisted out of the projection).
+> Scores and latencies below predate all of that; rerun `npm run eval`
+> before relying on the model ranking.
+
 Method: `npm run eval` golden dataset (20 cases), all models via OpenRouter,
 reasoning effort "low", maxTokens capped at 4000. Latency is per reviewed tool
 call (fast stage, plus full stage when escalated). Score is decision agreement

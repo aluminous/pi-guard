@@ -1,9 +1,9 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { classifierEnabled, resolveClassifierModel } from "../classifier.ts";
 import { loadConfig, type StatusLineMode } from "../config.ts";
 import { updatePersistentStatusLine } from "../persistent-settings.ts";
-import type { RuntimeState } from "../state.ts";
-import { formatGuardPolicy, formatGuardStatus, toggleGuardOverlay, toggleGuardWidget, updateGuardStatus } from "../status.ts";
+import type { GuardViewKind, RuntimeState } from "../state.ts";
+import { classifierModelLabel, formatGuardPolicy, formatGuardStatus, networkPolicyLabel, updateGuardStatus } from "../status.ts";
+import { toggleGuardOverlay, toggleGuardWidget } from "../live-view.ts";
 import { pickFromList, type SelectItem } from "../tui/select-list.ts";
 import { formatError } from "../util.ts";
 import { runModelCommand } from "./model.ts";
@@ -58,58 +58,35 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     show(ctx, "Pi Guard disabled for this session; bash and file-tool policy checks are unguarded.", "warning");
   }
 
-  function postStatus(ctx: ExtensionContext): void {
+  function reportFor(ctx: ExtensionContext, kind: GuardViewKind): string {
     const config = state.config ?? loadConfig(ctx);
-    const output = formatGuardStatus(state, config);
+    return kind === "status" ? formatGuardStatus(state, config) : formatGuardPolicy(state, config);
+  }
+
+  /** Posts the report into the conversation — visible to the user AND the agent (custom messages enter LLM context). */
+  function postReport(ctx: ExtensionContext, kind: GuardViewKind): void {
+    const output = reportFor(ctx, kind);
     if (!ctx.hasUI) console.log(output);
     pi.sendMessage({ customType: "pi-guard", content: output, display: true });
-    ctx.ui.notify("Guard status posted.", state.lastError ? "warning" : "info");
+    ctx.ui.notify(`Guard ${kind} posted.`, kind === "status" && state.lastError ? "warning" : "info");
   }
 
-  /** TUI: toggle the live status popup. RPC: toggle a live widget. Headless: post the report. */
-  function showStatus(ctx: ExtensionContext): void {
-    const lines = () => formatGuardStatus(state, state.config ?? loadConfig(ctx)).split("\n");
-    if (ctx.mode === "tui" && ctx.hasUI) return toggleGuardOverlay(ctx, state, "status", lines);
-    if (ctx.hasUI) return toggleGuardWidget(ctx, state, "status", lines);
-    return postStatus(ctx);
-  }
-
-  function postPolicy(ctx: ExtensionContext): void {
-    const config = state.config ?? loadConfig(ctx);
-    const output = formatGuardPolicy(state, config);
-    if (!ctx.hasUI) console.log(output);
-    pi.sendMessage({ customType: "pi-guard", content: output, display: true });
-    ctx.ui.notify("Guard policy posted.", "info");
-  }
-
-  /** TUI: toggle the policy popup. RPC: toggle a live widget. Headless: post the policy report. */
-  function showPolicy(ctx: ExtensionContext): void {
-    const lines = () => formatGuardPolicy(state, state.config ?? loadConfig(ctx)).split("\n");
-    if (ctx.mode === "tui" && ctx.hasUI) return toggleGuardOverlay(ctx, state, "policy", lines);
-    if (ctx.hasUI) return toggleGuardWidget(ctx, state, "policy", lines);
-    return postPolicy(ctx);
+  /** TUI: toggle the live popup. RPC: toggle a live widget. Headless: post the report. */
+  function showView(ctx: ExtensionContext, kind: GuardViewKind): void {
+    const lines = () => reportFor(ctx, kind).split("\n");
+    if (ctx.mode === "tui" && ctx.hasUI) return toggleGuardOverlay(ctx, state, kind, lines);
+    if (ctx.hasUI) return toggleGuardWidget(ctx, state, kind, lines);
+    return postReport(ctx, kind);
   }
 
   function panelHeader(ctx: ExtensionContext): string[] {
     const config = state.config ?? loadConfig(ctx);
     const health = state.enabled && state.initialized ? "enforcing" : state.enabled ? "enabled, not initialized" : state.disabledForNextAgent ? "off next turn" : "disabled";
-    const spec = state.classifier.modelOverride ?? config.classifier.model;
-    const model = resolveClassifierModel(ctx, config, state.classifier);
-    const classifier = !classifierEnabled(config, state.classifier)
-      ? "off"
-      : model
-        ? spec === "auto"
-          ? `auto (${model.provider}/${model.id})`
-          : `${model.provider}/${model.id}`
-        : `unavailable (${spec})`;
-    const network = !config.network.enabled
-      ? "network unrestricted"
-      : config.network.allowedDomains.length > 0
-        ? `${config.network.allowedDomains.length} domains`
-        : "network blocked";
+    const modelLabel = classifierModelLabel(ctx, config, state);
+    const classifier = modelLabel.startsWith("classifier") ? modelLabel : `classifier ${modelLabel}`;
     const s = state.stats;
     return [
-      `${state.backend?.name ?? config.backend} · ${health} · ${network} · classifier ${classifier}`,
+      `${state.backend?.name ?? config.backend} · ${health} · ${networkPolicyLabel(config)} · ${classifier}`,
       `R${s.ruleHits} rule hits · C${s.classifierHits} reviews · D${s.classifierDenials} denials · ${s.blocked} blocked · ${s.errors} errors · ↑${s.classifierInputTokens} ↓${s.classifierOutputTokens} tokens`,
     ];
   }
@@ -183,9 +160,9 @@ export function createGuardCommand(deps: GuardCommandDeps) {
       case "critique":
         return deps.runCritique("", ctx);
       case "status":
-        return showStatus(ctx);
+        return showView(ctx, "status");
       case "policy":
-        return showPolicy(ctx);
+        return showView(ctx, "policy");
     }
   }
 
@@ -205,15 +182,11 @@ export function createGuardCommand(deps: GuardCommandDeps) {
 
     if (!sub) {
       if (ctx.hasUI) return openPanel(ctx);
-      return postStatus(ctx);
+      return postReport(ctx, "status");
     }
-    if (sub === "status") {
-      if (rest.toLowerCase() === "post") return postStatus(ctx);
-      return showStatus(ctx);
-    }
-    if (sub === "policy") {
-      if (rest.toLowerCase() === "post") return postPolicy(ctx);
-      return showPolicy(ctx);
+    if (sub === "status" || sub === "policy") {
+      if (rest.toLowerCase() === "post") return postReport(ctx, sub);
+      return showView(ctx, sub);
     }
     if (sub === "on" || sub === "enable") return enable(ctx);
     if (sub === "off" || sub === "disable") {

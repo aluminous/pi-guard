@@ -53,7 +53,3 @@ export const GUARDED_TOOLS: Record<string, GuardedToolSpec> = {
     },
   },
 };
-
-export function shouldReviewToolCall(toolName: string): boolean {
-  return toolName in GUARDED_TOOLS;
-}

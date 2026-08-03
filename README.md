@@ -286,7 +286,7 @@ and the denial reason is the propagation channel that exists today. To
 propagate the *question* instead, run subagents in RPC mode and forward the
 extension-UI requests to the parent's UI — that works with unmodified
 pi-guard. A guard-to-guard approval side channel was considered and deferred
-(see FEEDBACK_PLAN.md).
+(see [docs/history/FEEDBACK_PLAN.md](docs/history/FEEDBACK_PLAN.md)).
 
 ## Decision telemetry
 

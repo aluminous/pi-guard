@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createRuntimeState, resetTurnStats } from "../src/state.ts";
-import { formatGuardPolicy, formatGuardStatus, statusLineVisible, toggleGuardWidget } from "../src/status.ts";
+import { formatGuardPolicy, formatGuardStatus, statusLineVisible } from "../src/status.ts";
+import { toggleGuardWidget } from "../src/live-view.ts";
 import { testConfig } from "./helpers.ts";
 
 describe("guard status restriction labels", () => {
