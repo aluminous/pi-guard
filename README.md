@@ -77,16 +77,9 @@ Flags:
 
 Commands — everything lives under `/guard`, with argument autocomplete:
 
-- `/guard`: open the control panel (searchable actions with a live status header; a plain select dialog over RPC). Headless, it prints the status report.
-- `/guard status`: toggle the live status popup — an overlay that floats over the chat, keeps updating while the agent works (decisions, approvals, session guidance), and never blocks the agent. Esc closes it, Tab pins it so you can keep typing, arrows/page keys scroll. Over RPC it toggles a live widget; headless it prints to stdout.
-- `/guard policy`: show the resolved policy — filesystem/network/environment rules plus the classifier's allow, soft-deny, and hard-deny rule lists and environment assumptions. Same popup/widget/stdout behavior.
-
-Guard reports are **never placed into the conversation**: pi delivers custom
-messages to the LLM as user messages, and a status or policy report is a map
-of the guard's rules, approvals, and session guidance — exactly what a
-compromised agent would want to read. All guard output goes through
-user-only channels (popups, widgets, notifications, stdout); the agent only
-ever sees the block reason attached to a denied tool call.
+- `/guard`: open the control panel (searchable actions with a live status header; a plain select dialog over RPC).
+- `/guard status`: toggle the live status popup — an overlay that floats over the chat, keeps updating while the agent works (decisions, approvals, session guidance), and never blocks the agent. Esc closes it, Tab pins it so you can keep typing, arrows/page keys scroll. Over RPC it toggles a live widget.
+- `/guard policy`: show the resolved policy — filesystem/network/environment rules plus the classifier's allow, soft-deny, and hard-deny rule lists and environment assumptions. Same popup/widget behavior.
 - `/guard on`: enable Pi Guard.
 - `/guard off`: disable for the next agent turn, then re-enable automatically.
 - `/guard off session`: disable until the session ends.
@@ -95,6 +88,15 @@ ever sees the block reason attached to a denied tool call.
 - `/guard model status`: print classifier status, resolved model, and available models.
 - `/guard smoke`: run the command-containment and classifier smoke tests.
 - `/guard critique [provider/model-id]`: critique the classifier rules with Pi's current model or a specific one.
+
+Guard reports are **never placed into the conversation**: pi delivers custom
+messages to the LLM as user messages, and a status or policy report is a map
+of the guard's rules, approvals, and session guidance — exactly what a
+compromised agent would want to read. All guard output goes through
+user-only channels (popups, widgets, notifications); the agent only ever
+sees the block reason attached to a denied tool call. Guard commands are
+user-facing: in headless modes (json/print) there is no one to invoke or see
+them, so views are a stderr error and pickers resolve as cancelled.
 
 Statusline legend — the guard statusline is deliberately terse:
 
@@ -345,6 +347,29 @@ npm install
 npm run check   # tsc --noEmit
 npm test        # node --test (Node 22.18+ runs TypeScript directly)
 ```
+
+### UI architecture
+
+Three seam modules own every run-mode branch; feature code never inspects
+`ctx.mode` to pick a presentation:
+
+- `src/live-view.ts` — display surfaces (status, policy, smoke/critique
+  reports): custom overlay in the TUI, `setWidget` over RPC, a stderr error
+  headless. `showGuardView` replaces any open view; `toggleGuardView` adds
+  toggle semantics for the recurring status/policy views.
+- `src/approvals.ts` — response dialogs (approval prompts): a custom dialog
+  with inline comment input in the TUI, `select`+`input` protocol dialogs
+  over RPC. Callers gate on `ctx.hasUI` first because headless approval
+  absence is a policy decision (block with an explanatory reason), not a
+  presentation choice.
+- `src/tui/select-list.ts` — pickers (control panel, model selector,
+  statusline chooser): searchable list in the TUI, plain `select` dialog
+  elsewhere; resolves `undefined` where no dialog capability exists, which
+  callers already treat as cancel.
+
+Transient signals (`notify`, `setStatus`) work in TUI and RPC and no-op
+headless. New UI belongs in one of these seams — extend them rather than
+branching on mode inline, so every surface degrades consistently.
 
 ### Classifier testing layers
 

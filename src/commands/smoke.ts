@@ -20,7 +20,6 @@ export function createGuardSmoke(deps: {
       },
     });
     const message = `guard smoke exit=${result.exitCode}\n${output.trimEnd()}`;
-    if (!ctx.hasUI) console.log(message);
     ctx.ui.notify(message, result.exitCode === 0 ? "info" : "warning");
   }
 

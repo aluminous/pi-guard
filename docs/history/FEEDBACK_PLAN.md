@@ -307,3 +307,14 @@ or stdout when headless. `pi.sendMessage` no longer appears in the codebase;
 the pi-guard message renderer stays registered so old sessions still render
 their historical reports. If context-excluded transcript messages ever land
 upstream (option C), a display-only post can return.
+
+### Addendum 2 (2026-08-04): headless is an error, RPC widgets are the pattern
+
+Direction from Austin: headless modes have no user to invoke smoke/status,
+so those paths need no output support — views are now a stderr error and
+pickers resolve as cancelled (the stdout report fallback was speculative
+support for a caller that doesn't exist). For RPC, remote widgets are the
+standing degradation for anything that would use custom TUI, and the
+architecture makes the divide explicit: three seam modules (live-view,
+approvals, select-list) own every mode branch; feature code never inspects
+ctx.mode. Documented in README "UI architecture".

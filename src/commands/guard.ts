@@ -166,10 +166,9 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     const rest = restParts.join(" ");
     const sub = head.toLowerCase();
 
-    if (!sub) {
-      if (ctx.hasUI) return openPanel(ctx);
-      return showView(ctx, "status");
-    }
+    // Headless modes have no user to drive these; the seam modules turn them
+    // into a clean no-op (pickFromList resolves undefined) or stderr error.
+    if (!sub) return openPanel(ctx);
     if (sub === "status" || sub === "policy") return showView(ctx, sub);
     if (sub === "on" || sub === "enable") return enable(ctx);
     if (sub === "off" || sub === "disable") {

@@ -111,6 +111,22 @@ describe("guard live views over RPC", () => {
     assert.deepEqual(calls.at(-1), { key: "guard-report", lines: ["second critique"] });
     assert.equal(state.liveView?.kind, "report");
   });
+
+  it("is a stderr error, not a view, when headless", () => {
+    const state = createRuntimeState();
+    const ctx = { mode: "print", hasUI: false, ui: {} } as unknown as ExtensionContext;
+    const errors: string[] = [];
+    const original = console.error;
+    console.error = (message: string) => void errors.push(message);
+    try {
+      showGuardView(ctx, state, "report", () => ["secret rules"]);
+    } finally {
+      console.error = original;
+    }
+    assert.equal(state.liveView, undefined);
+    assert.equal(errors.length, 1);
+    assert.doesNotMatch(errors[0]!, /secret rules/);
+  });
 });
 
 describe("statusLineVisible", () => {

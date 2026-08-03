@@ -63,7 +63,7 @@ export async function runModelCommand(args: string, ctx: ExtensionContext, state
     return;
   }
 
-  if (!arg && ctx.hasUI) {
+  if (!arg) {
     ctx.modelRegistry.refresh();
     const choice = await selectClassifierModel({
       ctx,

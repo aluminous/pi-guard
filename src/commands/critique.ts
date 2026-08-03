@@ -109,7 +109,6 @@ export function createCritiqueRunner(deps: { state: RuntimeState }) {
       ctx.ui.notify("Guard rule critique ready.", "info");
     } catch (error) {
       const reason = formatError(error);
-      if (!ctx.hasUI) console.log(`Guard critique failed: ${reason}`);
       ctx.ui.notify(`Guard critique failed: ${reason}`, "error");
     } finally {
       ctx.ui.setStatus("guard-critique", undefined);

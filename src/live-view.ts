@@ -89,17 +89,19 @@ function openWidget(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewK
 
 /**
  * Shows a guard report, replacing any open view: an overlay popup in the TUI,
- * a live widget over RPC, plain stdout when headless. This is the ONLY output
- * path for guard reports — they are never posted into the conversation,
- * because pi delivers custom messages to the LLM as user messages and guard
- * reports map the guard's rules, approvals, and guidance for a possibly
- * compromised agent. The agent only ever sees tool-call block reasons.
+ * a live widget over RPC. This is the ONLY output path for guard reports —
+ * they are never posted into the conversation, because pi delivers custom
+ * messages to the LLM as user messages and guard reports map the guard's
+ * rules, approvals, and guidance for a possibly compromised agent. The agent
+ * only ever sees tool-call block reasons. Headless modes have no user to
+ * show a view to (or to invoke these commands); that is an error, not a
+ * fallback path.
  */
 export function showGuardView(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, lines: () => string[]): void {
   state.liveView?.close();
   if (ctx.mode === "tui" && ctx.hasUI) return openOverlay(ctx, state, kind, lines);
   if (ctx.hasUI) return openWidget(ctx, state, kind, lines);
-  console.log(lines().join("\n"));
+  console.error("Guard views require an interactive session (TUI or RPC).");
 }
 
 /** Toggle variant for the recurring status/policy views: the same kind closes, anything else shows. */
