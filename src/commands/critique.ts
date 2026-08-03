@@ -1,7 +1,8 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { complete, type Message } from "@earendil-works/pi-ai/compat";
 import { buildClassifierPromptForCritique } from "../classifier.ts";
 import { loadConfig, type ResolvedGuardConfig } from "../config.ts";
+import { showGuardView } from "../live-view.ts";
 import { getPersistentConfigPath } from "../persistent-settings.ts";
 import type { RuntimeState } from "../state.ts";
 import { formatError } from "../util.ts";
@@ -43,8 +44,8 @@ function formatRulesForCritique(config: ResolvedGuardConfig): string {
 }
 
 /** Handles `/guard critique [provider/model]`; defaults to Pi's current model. */
-export function createCritiqueRunner(deps: { pi: ExtensionAPI; state: RuntimeState }) {
-  const { pi, state } = deps;
+export function createCritiqueRunner(deps: { state: RuntimeState }) {
+  const { state } = deps;
 
   return async function runCritiqueCommand(args: string, ctx: ExtensionContext) {
     const config = state.config ?? loadConfig(ctx);
@@ -104,9 +105,8 @@ export function createCritiqueRunner(deps: { pi: ExtensionAPI; state: RuntimeSta
         "",
         critique || "No critique returned.",
       ].join("\n");
-      if (!ctx.hasUI) console.log(output);
-      pi.sendMessage({ customType: "pi-guard", content: output, display: true });
-      ctx.ui.notify("Guard rule critique posted.", "info");
+      showGuardView(ctx, state, "report", () => output.split("\n"));
+      ctx.ui.notify("Guard rule critique ready.", "info");
     } catch (error) {
       const reason = formatError(error);
       if (!ctx.hasUI) console.log(`Guard critique failed: ${reason}`);

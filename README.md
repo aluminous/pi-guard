@@ -77,9 +77,16 @@ Flags:
 
 Commands — everything lives under `/guard`, with argument autocomplete:
 
-- `/guard`: open the control panel (searchable actions with a live status header). Outside the TUI it posts the status report instead.
-- `/guard status`: toggle the live status popup — an overlay that floats over the chat, keeps updating while the agent works (decisions, approvals, session guidance), and never blocks the agent. Esc closes it, Tab pins it so you can keep typing, arrows/page keys scroll. Outside the TUI it posts the report instead; `/guard status post` posts into the conversation on purpose. Note that posted reports become part of the agent's context (pi delivers custom messages to the LLM as user messages) — that can be exactly what you want ("look at the guard status"), but it is not free.
-- `/guard policy`: show the resolved policy — filesystem/network/environment rules plus the classifier's allow, soft-deny, and hard-deny rule lists and environment assumptions. Same popup behavior; `/guard policy post` posts it (also agent-visible).
+- `/guard`: open the control panel (searchable actions with a live status header; a plain select dialog over RPC). Headless, it prints the status report.
+- `/guard status`: toggle the live status popup — an overlay that floats over the chat, keeps updating while the agent works (decisions, approvals, session guidance), and never blocks the agent. Esc closes it, Tab pins it so you can keep typing, arrows/page keys scroll. Over RPC it toggles a live widget; headless it prints to stdout.
+- `/guard policy`: show the resolved policy — filesystem/network/environment rules plus the classifier's allow, soft-deny, and hard-deny rule lists and environment assumptions. Same popup/widget/stdout behavior.
+
+Guard reports are **never placed into the conversation**: pi delivers custom
+messages to the LLM as user messages, and a status or policy report is a map
+of the guard's rules, approvals, and session guidance — exactly what a
+compromised agent would want to read. All guard output goes through
+user-only channels (popups, widgets, notifications, stdout); the agent only
+ever sees the block reason attached to a denied tool call.
 - `/guard on`: enable Pi Guard.
 - `/guard off`: disable for the next agent turn, then re-enable automatically.
 - `/guard off session`: disable until the session ends.
@@ -273,8 +280,8 @@ the question *is* the authorization process.
   `/guard status` and `/guard policy` toggle live *widgets* (fire-and-forget
   `setWidget` requests keyed `guard-status`/`guard-policy`, refreshed on every
   guard event) — user-visible in any client that renders widgets, and never
-  part of agent context. The `post` variants remain for transcript-visible
-  (and agent-visible) reports.
+  part of agent context. Smoke and critique results arrive the same way,
+  keyed `guard-report`.
 - **json / print modes** — truly headless: there is no one to ask. Ask
   decisions and out-of-roots path approvals become blocks whose reason states
   exactly that ("headless session with no user to ask"), so the agent — or a

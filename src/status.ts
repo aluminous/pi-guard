@@ -190,6 +190,12 @@ export function styleGuardLine(line: string, theme: GuardLineTheme): string {
   return line;
 }
 
+/**
+ * Renders pi-guard custom messages in the transcript. Nothing posts new
+ * guard messages anymore (reports were dropped from the conversation because
+ * custom messages enter agent context); this stays registered so sessions
+ * recorded before that change still render their guard reports.
+ */
 export function registerGuardMessageRenderer(pi: ExtensionAPI): void {
   pi.registerMessageRenderer("pi-guard", (message, _options, theme) => {
     const raw = String(message.content ?? "");

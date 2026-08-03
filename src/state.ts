@@ -34,7 +34,8 @@ export interface GuardStats {
   turnBlocked: number;
 }
 
-export type GuardViewKind = "status" | "policy";
+/** "status"/"policy" are the toggleable live views; "report" is one-shot output (smoke, critique). */
+export type GuardViewKind = "status" | "policy" | "report";
 
 /**
  * An open live guard view — a TUI overlay popup or an RPC widget.

@@ -1,15 +1,14 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type StatusLineMode } from "../config.ts";
 import { updatePersistentStatusLine } from "../persistent-settings.ts";
-import type { GuardViewKind, RuntimeState } from "../state.ts";
+import type { RuntimeState } from "../state.ts";
 import { classifierModelLabel, formatGuardPolicy, formatGuardStatus, networkPolicyLabel, updateGuardStatus } from "../status.ts";
-import { toggleGuardOverlay, toggleGuardWidget } from "../live-view.ts";
+import { toggleGuardView } from "../live-view.ts";
 import { pickFromList, type SelectItem } from "../tui/select-list.ts";
 import { formatError } from "../util.ts";
 import { runModelCommand } from "./model.ts";
 
 export interface GuardCommandDeps {
-  pi: ExtensionAPI;
   state: RuntimeState;
   enableGuard(ctx: ExtensionContext): Promise<void>;
   disableGuard(ctx: ExtensionContext, scope: "next-agent" | "session"): Promise<void>;
@@ -18,8 +17,8 @@ export interface GuardCommandDeps {
 }
 
 const SUBCOMMANDS: Array<{ value: string; description: string }> = [
-  { value: "status", description: "Toggle the live status popup (or: status post)" },
-  { value: "policy", description: "Show the resolved policy and classifier rules (or: policy post)" },
+  { value: "status", description: "Toggle the live status popup" },
+  { value: "policy", description: "Show the resolved policy and classifier rules" },
   { value: "on", description: "Enable the guard" },
   { value: "off", description: "Disable for the next agent turn, then re-enable" },
   { value: "off session", description: "Disable until the session ends (unguarded!)" },
@@ -29,7 +28,7 @@ const SUBCOMMANDS: Array<{ value: string; description: string }> = [
 ];
 
 export function createGuardCommand(deps: GuardCommandDeps) {
-  const { pi, state } = deps;
+  const { state } = deps;
 
   const show = (ctx: ExtensionContext, message: string, level: "info" | "warning" | "error" = "info") => {
     if (!ctx.hasUI) console.log(message);
@@ -58,25 +57,12 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     show(ctx, "Pi Guard disabled for this session; bash and file-tool policy checks are unguarded.", "warning");
   }
 
-  function reportFor(ctx: ExtensionContext, kind: GuardViewKind): string {
-    const config = state.config ?? loadConfig(ctx);
-    return kind === "status" ? formatGuardStatus(state, config) : formatGuardPolicy(state, config);
-  }
-
-  /** Posts the report into the conversation — visible to the user AND the agent (custom messages enter LLM context). */
-  function postReport(ctx: ExtensionContext, kind: GuardViewKind): void {
-    const output = reportFor(ctx, kind);
-    if (!ctx.hasUI) console.log(output);
-    pi.sendMessage({ customType: "pi-guard", content: output, display: true });
-    ctx.ui.notify(`Guard ${kind} posted.`, kind === "status" && state.lastError ? "warning" : "info");
-  }
-
-  /** TUI: toggle the live popup. RPC: toggle a live widget. Headless: post the report. */
-  function showView(ctx: ExtensionContext, kind: GuardViewKind): void {
-    const lines = () => reportFor(ctx, kind).split("\n");
-    if (ctx.mode === "tui" && ctx.hasUI) return toggleGuardOverlay(ctx, state, kind, lines);
-    if (ctx.hasUI) return toggleGuardWidget(ctx, state, kind, lines);
-    return postReport(ctx, kind);
+  /** TUI: toggle the live popup. RPC: toggle a live widget. Headless: print to stdout. Never posted to the agent. */
+  function showView(ctx: ExtensionContext, kind: "status" | "policy"): void {
+    toggleGuardView(ctx, state, kind, () => {
+      const config = state.config ?? loadConfig(ctx);
+      return (kind === "status" ? formatGuardStatus(state, config) : formatGuardPolicy(state, config)).split("\n");
+    });
   }
 
   function panelHeader(ctx: ExtensionContext): string[] {
@@ -182,12 +168,9 @@ export function createGuardCommand(deps: GuardCommandDeps) {
 
     if (!sub) {
       if (ctx.hasUI) return openPanel(ctx);
-      return postReport(ctx, "status");
+      return showView(ctx, "status");
     }
-    if (sub === "status" || sub === "policy") {
-      if (rest.toLowerCase() === "post") return postReport(ctx, sub);
-      return showView(ctx, sub);
-    }
+    if (sub === "status" || sub === "policy") return showView(ctx, sub);
     if (sub === "on" || sub === "enable") return enable(ctx);
     if (sub === "off" || sub === "disable") {
       if (rest.toLowerCase() === "session") return disableSession(ctx);

@@ -7,18 +7,10 @@ import { TextOverlayViewer } from "./tui/text-overlay.ts";
 type OverlayHandleSlice = { unfocus(): void };
 
 /**
- * Toggles the guard overlay popup for the given view. A second call with the
- * same kind closes it; a different kind replaces the content source. The
- * overlay never blocks the agent — it floats over the chat and refreshes
- * live from updateGuardStatus. TUI only; RPC uses toggleGuardWidget.
+ * TUI presentation: a floating overlay popup over the chat. Never blocks the
+ * agent; refreshes live from updateGuardStatus.
  */
-export function toggleGuardOverlay(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, lines: () => string[]): void {
-  if (state.liveView?.kind === kind) {
-    state.liveView.close();
-    return;
-  }
-  state.liveView?.close();
-
+function openOverlay(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, lines: () => string[]): void {
   let viewer: TextOverlayViewer | undefined;
   let handle: OverlayHandleSlice | undefined;
   let doneFn: ((value: undefined) => void) | undefined;
@@ -66,20 +58,12 @@ export function toggleGuardOverlay(ctx: ExtensionContext, state: RuntimeState, k
 }
 
 /**
- * RPC analog of toggleGuardOverlay: renders the same report as a live widget
- * above the editor via the fire-and-forget setWidget extension-UI request.
- * Re-setting the key updates it in place (updateGuardStatus drives refreshes,
- * so decisions stream in live; age labels only tick on events since there is
- * no client-side timer); clearing the key closes it. Toggle semantics match
- * the overlay: same kind closes, different kind replaces.
+ * RPC presentation: the same report as a live widget above the editor via the
+ * fire-and-forget setWidget extension-UI request. Re-setting the key updates
+ * it in place (updateGuardStatus drives refreshes; age labels only tick on
+ * events since there is no client-side timer); clearing the key closes it.
  */
-export function toggleGuardWidget(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, lines: () => string[]): void {
-  if (state.liveView?.kind === kind) {
-    state.liveView.close();
-    return;
-  }
-  state.liveView?.close();
-
+function openWidget(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, lines: () => string[]): void {
   const key = `guard-${kind}`;
   const entry = {
     kind,
@@ -101,4 +85,28 @@ export function toggleGuardWidget(ctx: ExtensionContext, state: RuntimeState, ki
   };
   state.liveView = entry;
   entry.refresh();
+}
+
+/**
+ * Shows a guard report, replacing any open view: an overlay popup in the TUI,
+ * a live widget over RPC, plain stdout when headless. This is the ONLY output
+ * path for guard reports — they are never posted into the conversation,
+ * because pi delivers custom messages to the LLM as user messages and guard
+ * reports map the guard's rules, approvals, and guidance for a possibly
+ * compromised agent. The agent only ever sees tool-call block reasons.
+ */
+export function showGuardView(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, lines: () => string[]): void {
+  state.liveView?.close();
+  if (ctx.mode === "tui" && ctx.hasUI) return openOverlay(ctx, state, kind, lines);
+  if (ctx.hasUI) return openWidget(ctx, state, kind, lines);
+  console.log(lines().join("\n"));
+}
+
+/** Toggle variant for the recurring status/policy views: the same kind closes, anything else shows. */
+export function toggleGuardView(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, lines: () => string[]): void {
+  if (state.liveView?.kind === kind) {
+    state.liveView.close();
+    return;
+  }
+  showGuardView(ctx, state, kind, lines);
 }

@@ -1,11 +1,11 @@
-import type { BashOperations, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { BashOperations, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { reviewToolCall } from "../classifier.ts";
 import { loadConfig } from "../config.ts";
+import { showGuardView } from "../live-view.ts";
 import type { RuntimeState } from "../state.ts";
 import { formatError } from "../util.ts";
 
 export function createGuardSmoke(deps: {
-  pi: ExtensionAPI;
   state: RuntimeState;
   guardedOps: () => BashOperations | undefined;
 }) {
@@ -64,9 +64,8 @@ export function createGuardSmoke(deps: {
       `${"-".repeat(nameWidth)}  ${"-".repeat(decisionWidth)}  --------  --------  ------`,
       ...rows.map((row) => `${row.name.padEnd(nameWidth)}  ${row.decision.padEnd(decisionWidth)}  ${row.risk.padEnd(8)}  ${row.auth.padEnd(8)}  ${row.reason}`),
     ].join("\n");
-    if (!ctx.hasUI) console.log(output);
-    deps.pi.sendMessage({ customType: "pi-guard", content: output, display: true });
-    ctx.ui.notify("Classifier smoke complete. Result posted.", "info");
+    showGuardView(ctx, deps.state, "report", () => output.split("\n"));
+    ctx.ui.notify("Classifier smoke complete.", "info");
   }
 
   return async function runGuardSmoke(ctx: ExtensionContext): Promise<void> {

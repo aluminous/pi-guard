@@ -294,3 +294,16 @@ offer both flavors when it lands. Related hardening note discovered en route:
 RPC dialog requests support a `timeout` field with agent-side auto-resolve —
 worth adding to guard approval prompts eventually, so a client that ignores
 the extension-UI sub-protocol can't hang a tool call forever.
+
+### Addendum (2026-08-04): explicit posts dropped entirely
+
+Decision: the `post` variants (and the unconditional smoke/critique posts)
+are gone. A guard report in agent context is a security liability, not a
+convenience — it hands a possibly injected agent the rule lists, session
+approvals, and guidance it would need to craft evasions. All guard output now
+flows through user-only channels: TUI overlay, RPC widget (`guard-status`,
+`guard-policy`, `guard-report` for smoke/critique results), notifications,
+or stdout when headless. `pi.sendMessage` no longer appears in the codebase;
+the pi-guard message renderer stays registered so old sessions still render
+their historical reports. If context-excluded transcript messages ever land
+upstream (option C), a display-only post can return.

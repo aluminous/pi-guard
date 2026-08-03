@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createGuardCommand } from "../src/commands/guard.ts";
 import { createRuntimeState } from "../src/state.ts";
 
@@ -8,7 +7,6 @@ function makeCommand(specs: string[] = []) {
   const state = createRuntimeState();
   state.availableModelSpecs = specs;
   return createGuardCommand({
-    pi: {} as ExtensionAPI,
     state,
     enableGuard: async () => {},
     disableGuard: async () => {},

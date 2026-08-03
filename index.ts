@@ -186,9 +186,9 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setStatus("guard", undefined);
   });
 
-  const runGuardSmoke = createGuardSmoke({ pi, state, guardedOps });
-  const runCritique = createCritiqueRunner({ pi, state });
-  const guardCommand = createGuardCommand({ pi, state, enableGuard, disableGuard, runGuardSmoke, runCritique });
+  const runGuardSmoke = createGuardSmoke({ state, guardedOps });
+  const runCritique = createCritiqueRunner({ state });
+  const guardCommand = createGuardCommand({ state, enableGuard, disableGuard, runGuardSmoke, runCritique });
 
   pi.registerCommand("guard", {
     description: "Pi Guard control panel; or: status|on|off|off session|model|smoke|critique",

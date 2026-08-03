@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { createRuntimeState, resetTurnStats } from "../src/state.ts";
 import { formatGuardPolicy, formatGuardStatus, statusLineVisible } from "../src/status.ts";
-import { toggleGuardWidget } from "../src/live-view.ts";
+import { showGuardView, toggleGuardView } from "../src/live-view.ts";
 import { testConfig } from "./helpers.ts";
 
 describe("guard status restriction labels", () => {
@@ -63,10 +63,14 @@ describe("formatGuardPolicy", () => {
   });
 });
 
-describe("toggleGuardWidget", () => {
+describe("guard live views over RPC", () => {
   function widgetCtx() {
     const calls: Array<{ key: string; lines: string[] | undefined }> = [];
-    const ctx = { ui: { setWidget: (key: string, lines: string[] | undefined) => calls.push({ key, lines }) } };
+    const ctx = {
+      mode: "rpc",
+      hasUI: true,
+      ui: { setWidget: (key: string, lines: string[] | undefined) => calls.push({ key, lines }) },
+    };
     return { ctx: ctx as unknown as ExtensionContext, calls };
   }
 
@@ -74,7 +78,7 @@ describe("toggleGuardWidget", () => {
     const { ctx, calls } = widgetCtx();
     const state = createRuntimeState();
     let content = ["line one"];
-    toggleGuardWidget(ctx, state, "status", () => content);
+    toggleGuardView(ctx, state, "status", () => content);
     assert.deepEqual(calls, [{ key: "guard-status", lines: ["line one"] }]);
     assert.equal(state.liveView?.kind, "status");
 
@@ -82,7 +86,7 @@ describe("toggleGuardWidget", () => {
     state.liveView?.refresh();
     assert.deepEqual(calls.at(-1), { key: "guard-status", lines: ["line two"] });
 
-    toggleGuardWidget(ctx, state, "status", () => content);
+    toggleGuardView(ctx, state, "status", () => content);
     assert.deepEqual(calls.at(-1), { key: "guard-status", lines: undefined });
     assert.equal(state.liveView, undefined);
   });
@@ -90,13 +94,22 @@ describe("toggleGuardWidget", () => {
   it("replaces a different-kind view instead of stacking", () => {
     const { ctx, calls } = widgetCtx();
     const state = createRuntimeState();
-    toggleGuardWidget(ctx, state, "status", () => ["status"]);
-    toggleGuardWidget(ctx, state, "policy", () => ["policy"]);
+    toggleGuardView(ctx, state, "status", () => ["status"]);
+    toggleGuardView(ctx, state, "policy", () => ["policy"]);
     assert.deepEqual(
       calls.map((c) => `${c.key}:${c.lines ? "set" : "clear"}`),
       ["guard-status:set", "guard-status:clear", "guard-policy:set"],
     );
     assert.equal(state.liveView?.kind, "policy");
+  });
+
+  it("showGuardView replaces a same-kind report instead of toggling it closed", () => {
+    const { ctx, calls } = widgetCtx();
+    const state = createRuntimeState();
+    showGuardView(ctx, state, "report", () => ["first critique"]);
+    showGuardView(ctx, state, "report", () => ["second critique"]);
+    assert.deepEqual(calls.at(-1), { key: "guard-report", lines: ["second critique"] });
+    assert.equal(state.liveView?.kind, "report");
   });
 });
 
