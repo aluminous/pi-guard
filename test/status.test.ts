@@ -82,9 +82,13 @@ describe("guard live views over RPC", () => {
     assert.deepEqual(calls, [{ key: "guard-status", lines: ["line one"] }]);
     assert.equal(state.liveView?.kind, "status");
 
+    state.liveView?.refresh();
+    assert.equal(calls.length, 1, "unchanged content must not re-send the widget");
+
     content = ["line two"];
     state.liveView?.refresh();
     assert.deepEqual(calls.at(-1), { key: "guard-status", lines: ["line two"] });
+    assert.equal(calls.length, 2);
 
     toggleGuardView(ctx, state, "status", () => content);
     assert.deepEqual(calls.at(-1), { key: "guard-status", lines: undefined });

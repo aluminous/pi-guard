@@ -65,11 +65,19 @@ function openOverlay(ctx: ExtensionContext, state: RuntimeState, kind: GuardView
  */
 function openWidget(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, lines: () => string[]): void {
   const key = `guard-${kind}`;
+  // refresh() fires on every guard event while the view is open; skip the
+  // protocol round-trip when content is unchanged (also collapses the
+  // open-then-updateGuardStatus double send into one setWidget).
+  let lastSent: string | undefined;
   const entry = {
     kind,
     refresh: () => {
       try {
-        ctx.ui.setWidget(key, lines());
+        const next = lines();
+        const joined = next.join("\n");
+        if (joined === lastSent) return;
+        lastSent = joined;
+        ctx.ui.setWidget(key, next);
       } catch {
         // Widget updates are cosmetic; never let a stale UI context break a guard event.
       }
