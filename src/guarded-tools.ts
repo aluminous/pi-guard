@@ -14,6 +14,22 @@ function pathParam(input: Record<string, unknown>): string | undefined {
   return typeof input.path === "string" ? input.path : undefined;
 }
 
+/**
+ * Compact "tool: action" line for approval dialogs and session guidance,
+ * built from a projection's inputSummary so both always describe the same
+ * thing the classifier reviewed.
+ */
+export function describeAction(toolName: string, inputSummary: Record<string, unknown>): string {
+  if (typeof inputSummary.command === "string" && inputSummary.command) {
+    return `${toolName}: ${textPrefix(inputSummary.command, 300)}`;
+  }
+  if (typeof inputSummary.path === "string" && inputSummary.path) {
+    const writes = typeof inputSummary.contentLength === "number" ? ` (writes ${inputSummary.contentLength} chars)` : "";
+    return `${toolName}: ${inputSummary.path}${writes}`;
+  }
+  return toolName;
+}
+
 export const GUARDED_TOOLS: Record<string, GuardedToolSpec> = {
   bash: {
     access: [],

@@ -3,7 +3,7 @@ import { getPackageDir, type ExtensionContext } from "@earendil-works/pi-coding-
 import { askGuardApproval } from "./approvals.ts";
 import { addSessionGuidance, classifierEnabled, isClassifierModelUnavailable, projectToolCall, resolveClassifierModel, reviewToolCall } from "./classifier.ts";
 import type { ResolvedGuardConfig } from "./config.ts";
-import { GUARDED_TOOLS, type GuardedToolSpec } from "./guarded-tools.ts";
+import { describeAction, GUARDED_TOOLS, type GuardedToolSpec } from "./guarded-tools.ts";
 import { decidePathAccess, isClassifierExemptRead, normalizeUserPath, type AccessKind } from "./policy.ts";
 import { appendGuardTelemetry } from "./telemetry.ts";
 import {
@@ -214,11 +214,13 @@ async function runClassifierReview(
       return;
     }
     if (result.decision === "ask" && ctx.hasUI) {
-      const answer = await askGuardApproval(ctx, "Guard reviewer asks for approval", `${result.reason}\n\nAllow ${event.toolName}?`);
+      // Action first: the classifier's reason alone can be too vague to approve on.
+      const subject = describeAction(event.toolName, telemetry.projection.inputSummary);
+      const answer = await askGuardApproval(ctx, "Guard reviewer asks for approval", `${subject}\n\n${result.reason}\n\nAllow?`);
       if (answer.comment) {
-        const summary = telemetry.projection.inputSummary;
-        const subject = typeof summary.command === "string" ? summary.command : typeof summary.path === "string" ? summary.path : event.toolName;
-        addSessionGuidance(state.classifier, answer.approved ? "allowed" : "denied", event.toolName, subject, answer.comment);
+        // addSessionGuidance already prefixes the tool name; strip it from the shared subject.
+        const guidanceSubject = subject.startsWith(`${event.toolName}: `) ? subject.slice(event.toolName.length + 2) : subject;
+        addSessionGuidance(state.classifier, answer.approved ? "allowed" : "denied", event.toolName, guidanceSubject, answer.comment);
       }
       appendGuardTelemetry(state, { ...telemetry, userApproved: answer.approved, userComment: answer.comment });
       if (answer.approved) return;
