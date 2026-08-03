@@ -2,6 +2,7 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { ResolvedGuardConfig } from "./config.ts";
 import { expandHome } from "./paths.ts";
+import { unique } from "./util.ts";
 
 export type AccessKind = "read" | "write";
 
@@ -16,10 +17,13 @@ function stripAtPrefix(value: string): string {
   return trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
 }
 
+/** The one home-expansion + cwd-resolution used for every configured path, in both engines. */
+export function resolveConfigPath(cwd: string, value: string): string {
+  return path.resolve(cwd, expandHome(value));
+}
+
 export function normalizeUserPath(cwd: string, inputPath: string): string {
-  const stripped = stripAtPrefix(inputPath);
-  const expanded = expandHome(stripped);
-  return path.resolve(cwd, expanded);
+  return resolveConfigPath(cwd, stripAtPrefix(inputPath));
 }
 
 function canonicalizeExistingPath(normalizedPath: string): { ok: true; path: string } | { ok: false; reason: string } {
@@ -87,26 +91,106 @@ function isInside(root: string, candidate: string): boolean {
   return rel === "" || (!!rel && !rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
-function patternMatches(cwd: string, candidate: string, pattern: string): boolean {
-  const expanded = expandHome(pattern);
-  const normalizedPattern = expanded.split(path.sep).join("/");
-  const relativeCandidate = path.relative(cwd, candidate).split(path.sep).join("/");
-  const basename = path.basename(candidate);
+/**
+ * How the policy engine interprets a config pattern, plus `sandboxPath` — the
+ * one literal a Seatbelt profile can hold for it. Classified in a single place
+ * so patternMatches and compileFilesystemPolicy cannot drift apart: only
+ * "root" patterns mean exactly subpath(sandboxPath); glob and bare-name
+ * matching have no literal-path equivalent.
+ */
+export type ClassifiedPattern =
+  | { kind: "glob"; scope: "path" | "relative" | "basename"; glob: string; sandboxPath: string }
+  | { kind: "root"; sandboxPath: string }
+  | { kind: "basename"; name: string; sandboxPath: string };
 
+export function classifyPattern(cwd: string, pattern: string): ClassifiedPattern {
+  const expanded = expandHome(pattern);
+  const sandboxPath = path.resolve(cwd, expanded);
   if (hasGlob(pattern)) {
     if (path.isAbsolute(expanded) || expanded.startsWith("~")) {
-      return globToRegex(path.resolve(cwd, expanded).split(path.sep).join("/")).test(candidate.split(path.sep).join("/"));
+      return { kind: "glob", scope: "path", glob: sandboxPath.split(path.sep).join("/"), sandboxPath };
     }
-    if (normalizedPattern.includes("/")) return globToRegex(normalizedPattern).test(relativeCandidate);
-    return globToRegex(normalizedPattern).test(basename);
+    const normalized = expanded.split(path.sep).join("/");
+    if (normalized.includes("/")) return { kind: "glob", scope: "relative", glob: normalized, sandboxPath };
+    return { kind: "glob", scope: "basename", glob: normalized, sandboxPath };
   }
-
-  const absolute = path.resolve(cwd, expanded);
-  const checkedAbsolute = existsSync(absolute) ? realpathSync.native(absolute) : absolute;
   if (pattern.includes("/") || path.isAbsolute(expanded) || expanded.startsWith("~") || pattern === ".") {
-    return isInside(checkedAbsolute, candidate);
+    return { kind: "root", sandboxPath };
   }
-  return basename === pattern || relativeCandidate === pattern || relativeCandidate.startsWith(`${pattern}/`);
+  return { kind: "basename", name: pattern, sandboxPath };
+}
+
+function patternMatches(cwd: string, candidate: string, pattern: string): boolean {
+  const classified = classifyPattern(cwd, pattern);
+  const relativeCandidate = path.relative(cwd, candidate).split(path.sep).join("/");
+  const basename = path.basename(candidate);
+  if (classified.kind === "glob") {
+    const regex = globToRegex(classified.glob);
+    if (classified.scope === "path") return regex.test(candidate.split(path.sep).join("/"));
+    return regex.test(classified.scope === "relative" ? relativeCandidate : basename);
+  }
+  if (classified.kind === "root") {
+    const root = existsSync(classified.sandboxPath) ? realpathSync.native(classified.sandboxPath) : classified.sandboxPath;
+    return isInside(root, candidate);
+  }
+  return basename === classified.name || relativeCandidate === classified.name || relativeCandidate.startsWith(`${classified.name}/`);
+}
+
+export type FilesystemListName = "allowRead" | "denyRead" | "allowWrite" | "denyWrite";
+
+const FILESYSTEM_LISTS: FilesystemListName[] = ["allowRead", "denyRead", "allowWrite", "denyWrite"];
+
+/** A config pattern whose sandbox literal is weaker than the policy engine's match. */
+export interface DegradedPattern {
+  list: FilesystemListName;
+  pattern: string;
+  /** The literal path the sandbox receives in place of the pattern. */
+  sandboxPath: string;
+  /** What the literal cannot express: glob matching, or match-any-basename. */
+  cause: "glob" | "basename";
+}
+
+export interface CompiledFilesystemPolicy {
+  /** The pattern lists exactly as decidePathAccess matches them. */
+  patterns: Record<FilesystemListName, string[]>;
+  /** Home-expanded, cwd-resolved literals — the only form a Seatbelt profile accepts. */
+  sandboxPaths: Record<FilesystemListName, string[]>;
+  degraded: DegradedPattern[];
+}
+
+/**
+ * The single translation of config.filesystem into what each engine consumes.
+ * Non-root patterns keep their literal in sandboxPaths as best effort but are
+ * reported in `degraded` rather than silently losing their wider
+ * policy-engine semantics in the sandbox.
+ */
+export function compileFilesystemPolicy(config: ResolvedGuardConfig, cwd: string): CompiledFilesystemPolicy {
+  const patterns: Record<FilesystemListName, string[]> = {
+    allowRead: [...config.filesystem.allowRead],
+    denyRead: [...config.filesystem.denyRead],
+    allowWrite: [...config.filesystem.allowWrite],
+    denyWrite: [...config.filesystem.denyWrite],
+  };
+  const sandboxPaths: Record<FilesystemListName, string[]> = { allowRead: [], denyRead: [], allowWrite: [], denyWrite: [] };
+  const degraded: DegradedPattern[] = [];
+  for (const list of FILESYSTEM_LISTS) {
+    for (const pattern of patterns[list]) {
+      const classified = classifyPattern(cwd, pattern);
+      sandboxPaths[list].push(classified.sandboxPath);
+      if (classified.kind !== "root") {
+        degraded.push({ list, pattern, sandboxPath: classified.sandboxPath, cause: classified.kind });
+      }
+    }
+    sandboxPaths[list] = unique(sandboxPaths[list]);
+  }
+  return { patterns, sandboxPaths, degraded };
+}
+
+/** One warning line naming the patterns the sandbox cannot hold bash to, or undefined when it is faithful. */
+export function summarizeDegradedPatterns(degraded: DegradedPattern[]): string | undefined {
+  if (degraded.length === 0) return undefined;
+  const names = unique(degraded.map((entry) => entry.pattern));
+  return `Filesystem patterns enforced for file tools but not for bash (Seatbelt takes literal paths only): ${names.join(", ")}`;
 }
 
 function isAllowedByRoots(cwd: string, candidate: string, roots: string[]): boolean {

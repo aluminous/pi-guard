@@ -8,6 +8,7 @@ import { createGuardCommand } from "./src/commands/guard.ts";
 import { createGuardSmoke } from "./src/commands/smoke.ts";
 import { loadConfig, type ResolvedGuardConfig } from "./src/config.ts";
 import { interceptToolCall } from "./src/interceptor.ts";
+import { compileFilesystemPolicy, summarizeDegradedPatterns } from "./src/policy.ts";
 import { createRuntimeState, resetSessionState, resetTurnStats } from "./src/state.ts";
 import { registerGuardMessageRenderer, updateGuardStatus } from "./src/status.ts";
 import { createGuardedBashOps } from "./src/tools/bash.ts";
@@ -121,6 +122,10 @@ export default function (pi: ExtensionAPI) {
       const config = loadConfig(ctx);
       state.config = config;
       state.warnings.push(...config.diagnostics);
+      if (config.enabled && config.backend === "seatbelt" && config.filesystem.enabled) {
+        const degraded = summarizeDegradedPatterns(compileFilesystemPolicy(config, ctx.cwd).degraded);
+        if (degraded) state.warnings.push(degraded);
+      }
       state.availableModelSpecs = ctx.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`);
 
       for (const warning of state.warnings) ctx.ui.notify(warning, "warning");

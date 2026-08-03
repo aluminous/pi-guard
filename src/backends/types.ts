@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ResolvedGuardConfig } from "../config.ts";
+import type { DegradedPattern } from "../policy.ts";
 
 export interface WrappedCommand {
   command: string;
@@ -16,6 +17,8 @@ export interface EffectivePolicy {
     denyRead: string[];
     allowWrite: string[];
     denyWrite: string[];
+    /** Config patterns this backend's sandbox cannot express faithfully. */
+    degraded: DegradedPattern[];
   };
   network: {
     allowedDomains: string[];

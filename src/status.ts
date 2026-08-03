@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import type { EffectivePolicy } from "./backends/types.ts";
 import { classifierEnabled, resolveClassifierModel } from "./classifier.ts";
 import type { ResolvedGuardConfig, StatusLineMode } from "./config.ts";
 import { getPersistentConfigPath } from "./persistent-settings.ts";
@@ -46,6 +47,16 @@ function bulletList(items: string[], max = 3): string[] {
 
 function formatArray(value: string[]): string {
   return value.length > 0 ? value.join(", ") : "(none)";
+}
+
+/** Lines naming the patterns the backend's sandbox cannot express, from the compiled policy's degraded list. */
+function sandboxFidelityLines(effective: EffectivePolicy | undefined, max: number): string[] {
+  const degraded = effective?.filesystem.degraded ?? [];
+  if (degraded.length === 0) return [];
+  return [
+    "  Enforced for file tools only (bash sandbox sees literal paths):",
+    ...bulletList(degraded.map((entry) => `${entry.pattern} (${entry.list})`), max),
+  ];
 }
 
 export function networkPolicyLabel(config: ResolvedGuardConfig): string {
@@ -123,6 +134,7 @@ export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConf
         ...bulletList(effective?.filesystem.denyRead ?? config.filesystem.denyRead),
         "  Deny write:",
         ...bulletList(effective?.filesystem.denyWrite ?? config.filesystem.denyWrite),
+        ...sandboxFidelityLines(effective, 3),
       ]
     : ["  Filesystem restrictions: disabled (unrestricted)"];
   const lines = [
@@ -228,6 +240,7 @@ export function formatGuardPolicy(state: RuntimeState, config: ResolvedGuardConf
     ...bulletList(effective?.filesystem.denyRead ?? config.filesystem.denyRead, Number.POSITIVE_INFINITY),
     "  Deny write:",
     ...bulletList(effective?.filesystem.denyWrite ?? config.filesystem.denyWrite, Number.POSITIVE_INFINITY),
+    ...sandboxFidelityLines(effective, Number.POSITIVE_INFINITY),
     "",
     "## Network",
     `  Restrictions: ${config.network.enabled ? "enabled" : "disabled (unrestricted)"}`,

@@ -3,7 +3,8 @@ import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import type { ResolvedGuardConfig } from "../config.ts";
-import { existingRealPath, expandHome } from "../paths.ts";
+import { existingRealPath } from "../paths.ts";
+import { compileFilesystemPolicy, resolveConfigPath } from "../policy.ts";
 import { asStringArray, unique } from "../util.ts";
 import type { EffectivePolicy, GuardBackend, WrappedCommand } from "./types.ts";
 
@@ -59,23 +60,18 @@ function tempReadWriteAllowlist(): string[] {
   return unique(["/tmp", "/private/tmp", os.tmpdir(), existingRealPath(os.tmpdir())]);
 }
 
-function normalizeSandboxPath(filePath: string, cwd: string): string {
-  const expanded = expandHome(filePath);
-  return path.isAbsolute(expanded) ? expanded : path.resolve(cwd, expanded);
-}
-
-function normalizeSandboxPaths(filePaths: string[], cwd: string): string[] {
-  return unique(filePaths.map((filePath) => normalizeSandboxPath(filePath, cwd)));
-}
-
 export function getSeatbeltRuntimeConfig(config: ResolvedGuardConfig, cwd = process.cwd()): SandboxRuntimeConfig {
-  const tempPaths = tempReadWriteAllowlist();
-  const allowRead = config.filesystem.allowRead.length === 0
+  // Config pattern lists arrive pre-resolved through the shared compiler; only
+  // the seatbelt-specific system allowlists are resolved here.
+  const compiled = compileFilesystemPolicy(config, cwd);
+  const resolveAll = (filePaths: string[]) => filePaths.map((filePath) => resolveConfigPath(cwd, filePath));
+  const tempPaths = resolveAll(tempReadWriteAllowlist());
+  const allowRead = compiled.patterns.allowRead.length === 0
     ? []
-    : normalizeSandboxPaths([...config.filesystem.allowRead, ...SYSTEM_READ_ALLOWLIST, ...XCODE_SELECT_READ_ALLOWLIST, ...gitAndGhReadAllowlist(), ...tempPaths], cwd);
-  const allowWrite = normalizeSandboxPaths([...config.filesystem.allowWrite, ...tempPaths], cwd);
-  const denyRead = normalizeSandboxPaths(config.filesystem.denyRead, cwd);
-  const denyWrite = normalizeSandboxPaths(config.filesystem.denyWrite, cwd);
+    : unique([...compiled.sandboxPaths.allowRead, ...resolveAll([...SYSTEM_READ_ALLOWLIST, ...XCODE_SELECT_READ_ALLOWLIST, ...gitAndGhReadAllowlist()]), ...tempPaths]);
+  const allowWrite = unique([...compiled.sandboxPaths.allowWrite, ...tempPaths]);
+  const denyRead = compiled.sandboxPaths.denyRead;
+  const denyWrite = compiled.sandboxPaths.denyWrite;
 
   const seatbelt = config.seatbelt as Partial<SandboxRuntimeConfig>;
   const network = {
@@ -184,7 +180,8 @@ export class SeatbeltBackend implements GuardBackend {
   }
 
   describeEffectivePolicy(config: ResolvedGuardConfig): EffectivePolicy {
-    const runtime = getSeatbeltRuntimeConfig(config);
+    const cwd = process.cwd();
+    const runtime = getSeatbeltRuntimeConfig(config, cwd);
     const filesystem = (runtime.filesystem ?? {}) as Record<string, unknown>;
     const network = (runtime.network ?? {}) as Record<string, unknown>;
     return {
@@ -193,6 +190,7 @@ export class SeatbeltBackend implements GuardBackend {
         denyRead: config.filesystem.enabled ? asStringArray(filesystem.denyRead, config.filesystem.denyRead) : [],
         allowWrite: config.filesystem.enabled ? asStringArray(filesystem.allowWrite, config.filesystem.allowWrite) : [],
         denyWrite: config.filesystem.enabled ? asStringArray(filesystem.denyWrite, config.filesystem.denyWrite) : [],
+        degraded: config.filesystem.enabled ? compileFilesystemPolicy(config, cwd).degraded : [],
       },
       network: {
         allowedDomains: asStringArray(network.allowedDomains, config.network.enabled ? config.network.allowedDomains : []),

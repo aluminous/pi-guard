@@ -1,13 +1,15 @@
 // The same filesystem config is enforced by two engines: src/policy.ts for Pi's
 // file tools (in-process) and the Seatbelt profile for bash (via sandbox-runtime).
-// These tests pin down that both engines deny the same sensitive locations, using
-// a fake HOME so nothing depends on the developer's real machine.
+// Both consume compileFilesystemPolicy; these tests pin down that the two deny
+// the same sensitive locations and that every pattern the sandbox cannot express
+// is declared in the compiled policy's `degraded` list rather than silently
+// weakened. A fake HOME keeps everything off the developer's real machine.
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { getSeatbeltRuntimeConfig } from "../src/backends/seatbelt.ts";
-import { decidePathAccess } from "../src/policy.ts";
+import { compileFilesystemPolicy, decidePathAccess, resolveConfigPath, type FilesystemListName } from "../src/policy.ts";
 import { makeFixtureDir, testConfig } from "./helpers.ts";
 
 const fixture = makeFixtureDir();
@@ -15,8 +17,9 @@ const fakeHome = path.join(fixture.dir, "home");
 const cwd = path.join(fixture.dir, "repo");
 const originalHome = process.env.HOME;
 
-// Home-relative deny patterns shared by both engines; globs are excluded because
-// Seatbelt receives them as literal resolved paths (a known semantic gap).
+// Home-relative deny patterns shared faithfully by both engines; glob and
+// bare-name patterns cannot be, and must show up in compileFilesystemPolicy's
+// degraded list instead (pinned by the invariants below).
 const homeDenyPatterns = ["~/.ssh", "~/.aws", "~/.gnupg", "~/.kube", "~/.docker", "~/.netrc"];
 
 before(() => {
@@ -109,5 +112,69 @@ describe("policy and seatbelt agree on default deny paths", () => {
     assert.equal(Object.hasOwn(runtime.network, "allowedDomains"), true);
     assert.deepEqual(runtime.network.allowedDomains, []);
     assert.deepEqual(runtime.network.deniedDomains, ["*"]);
+  });
+});
+
+describe("compiled filesystem policy invariants", () => {
+  const lists: FilesystemListName[] = ["allowRead", "denyRead", "allowWrite", "denyWrite"];
+
+  it("gives every configured pattern its resolved literal in the sandbox lists", () => {
+    const compiled = compileFilesystemPolicy(testConfig(), cwd);
+    for (const list of lists) {
+      for (const pattern of compiled.patterns[list]) {
+        assert.ok(compiled.sandboxPaths[list].includes(resolveConfigPath(cwd, pattern)), `${list} sandbox literal missing for ${pattern}`);
+      }
+    }
+  });
+
+  it("marks exactly the glob and bare-name patterns as degraded", () => {
+    const compiled = compileFilesystemPolicy(testConfig(), cwd);
+    for (const list of lists) {
+      for (const pattern of compiled.patterns[list]) {
+        // Independent oracle: only a non-glob pattern anchored at a path root
+        // translates faithfully to a Seatbelt subpath literal.
+        const isGlob = /[*?\[\]{}]/.test(pattern);
+        const anchored = !isGlob && (pattern.includes("/") || pattern.startsWith("~") || path.isAbsolute(pattern) || pattern === ".");
+        const entry = compiled.degraded.find((d) => d.list === list && d.pattern === pattern);
+        if (anchored) {
+          assert.equal(entry, undefined, `${list} pattern ${pattern} should not be degraded`);
+        } else {
+          assert.ok(entry, `${list} pattern ${pattern} must be listed as degraded`);
+          assert.equal(entry.cause, isGlob ? "glob" : "basename");
+          assert.equal(entry.sandboxPath, resolveConfigPath(cwd, pattern));
+        }
+      }
+    }
+  });
+
+  it("feeds seatbelt the compiled literals verbatim", () => {
+    const config = testConfig();
+    const compiled = compileFilesystemPolicy(config, cwd);
+    const runtime = getSeatbeltRuntimeConfig(config, cwd);
+    const filesystem = runtime.filesystem as { denyRead: string[]; denyWrite: string[]; allowWrite: string[] };
+    assert.deepEqual(filesystem.denyRead, compiled.sandboxPaths.denyRead);
+    assert.deepEqual(filesystem.denyWrite, compiled.sandboxPaths.denyWrite);
+    for (const literal of compiled.sandboxPaths.allowWrite) {
+      assert.ok(filesystem.allowWrite.includes(literal), `seatbelt allowWrite should include ${literal}`);
+    }
+  });
+
+  it("declares the gap the sandbox cannot cover: a nested .env only the policy engine denies", () => {
+    const nested = path.join(cwd, "nested", ".env");
+    mkdirSync(path.dirname(nested), { recursive: true });
+    writeFileSync(nested, "SECRET=1");
+    const config = testConfig();
+
+    const decision = decidePathAccess(config, cwd, nested, "read");
+    assert.equal(decision.allowed, false);
+    assert.equal(decision.allowed === false && decision.code, "denied-by-pattern");
+
+    const compiled = compileFilesystemPolicy(config, cwd);
+    const covered = compiled.sandboxPaths.denyRead.some((literal) => nested === literal || nested.startsWith(`${literal}/`));
+    assert.equal(covered, false, "no sandbox literal covers the nested path");
+    assert.ok(
+      compiled.degraded.some((d) => d.list === "denyRead" && d.pattern === ".env" && d.cause === "basename"),
+      "the uncovered pattern must be declared degraded",
+    );
   });
 });
