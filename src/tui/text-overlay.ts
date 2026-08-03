@@ -59,7 +59,10 @@ export class TextOverlayViewer extends Container {
   refresh(): void {
     const theme = this.params.theme;
     const lines = this.params.lines();
-    const maxVisible = Math.max(8, this.params.tui.terminal.rows - 8);
+    // Headroom accounts for the overlay's margin/anchor chrome; too little and
+    // the footer line renders off-screen on tall content (seen at 40 rows with
+    // the policy view during TUI integration testing).
+    const maxVisible = Math.max(8, this.params.tui.terminal.rows - 12);
     const maxScroll = Math.max(0, lines.length - maxVisible);
     if (this.scroll > maxScroll) this.scroll = maxScroll;
     this.body.clear();
