@@ -346,6 +346,7 @@ The backend interface is in `src/backends/types.ts`. A future `container` backen
 npm install
 npm run check   # tsc --noEmit
 npm test        # node --test (Node 22.18+ runs TypeScript directly)
+npm run test:tui  # tmux-driven TUI integration test (skips without tmux + pi)
 ```
 
 ### UI architecture

@@ -28,6 +28,7 @@
     "build": "echo 'nothing to build'",
     "check": "tsc --noEmit",
     "test": "node --test test/*.test.ts",
+    "test:tui": "node --test test-integration/tui.ts",
     "eval": "node eval/run.ts",
     "telemetry": "node eval/session-stats.ts"
   },
