@@ -147,6 +147,26 @@ export function decidePathAccess(config: ResolvedGuardConfig, cwd: string, input
   return { allowed: true, normalizedPath: checkedPath };
 }
 
+/**
+ * Whether a read of this path may skip classifier review entirely: the
+ * canonical path is inside the session cwd or matches an explicit allowRead
+ * entry, and does not match denyRead. Evaluated regardless of
+ * filesystem.enabled — the configured lists express user trust even when
+ * enforcement is off. Reads only: the guard's read projection never carries
+ * file content, so an allowlisted path is the whole action; write/edit
+ * content still needs review no matter how trusted the path is.
+ */
+export function isClassifierExemptRead(config: ResolvedGuardConfig, cwd: string, inputPath: string): boolean {
+  const normalizedPath = normalizeUserPath(cwd, inputPath);
+  const canonical = canonicalizeExistingPath(normalizedPath);
+  if (!canonical.ok) return false;
+  const canonicalCwd = canonicalizeExistingPath(cwd);
+  if (!canonicalCwd.ok) return false;
+  if (isDenied(canonicalCwd.path, canonical.path, config.filesystem.denyRead)) return false;
+  if (isInside(canonicalCwd.path, canonical.path)) return true;
+  return isAllowedByRoots(canonicalCwd.path, canonical.path, config.filesystem.allowRead);
+}
+
 function wildcardMatches(value: string, pattern: string): boolean {
   return globToRegex(pattern).test(value);
 }

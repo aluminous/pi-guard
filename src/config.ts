@@ -14,6 +14,13 @@ export interface ClassifierRulesConfig {
   soft_deny?: string[];
   hard_deny?: string[];
   environment?: string[];
+  /**
+   * When true, provided lists replace the merged base wholesale (profile
+   * semantics). Default is name-based merging: rules are "Name: text", a
+   * same-name entry overrides the base rule in place, "Name:" with an empty
+   * body deletes it, and new names append.
+   */
+  replace?: boolean;
 }
 
 export interface ClassifierConfig {
@@ -32,7 +39,7 @@ export interface ResolvedClassifierConfig {
   timeoutMs: number;
   failClosed: boolean;
   telemetry: "off" | "minimal" | "full";
-  rules: Required<ClassifierRulesConfig>;
+  rules: Required<Omit<ClassifierRulesConfig, "replace">>;
 }
 
 export interface GuardConfig {
@@ -243,6 +250,39 @@ function readJson(filePath: string, diagnostics: string[]): Partial<GuardConfig>
   }
 }
 
+function parseRuleName(entry: string): { name: string; body: string } | undefined {
+  const colon = entry.indexOf(":");
+  if (colon <= 0) return undefined;
+  return { name: entry.slice(0, colon).trim(), body: entry.slice(colon + 1).trim() };
+}
+
+/**
+ * Merges a user rule list into the base by rule name ("Name: text"): a
+ * same-name entry overrides the base rule in place (keeping its position, so
+ * the classifier prompt prefix stays stable), "Name:" with an empty body
+ * deletes it, and new or nameless entries append.
+ */
+function mergeRuleList(base: string[], incoming: string[], listName: string, diagnostics: string[]): string[] {
+  const result = [...base];
+  const indexOfName = (name: string) => result.findIndex((rule) => parseRuleName(rule)?.name.toLowerCase() === name.toLowerCase());
+  for (const entry of incoming) {
+    const parsed = parseRuleName(entry);
+    if (!parsed) {
+      result.push(entry);
+      continue;
+    }
+    const at = indexOfName(parsed.name);
+    if (!parsed.body) {
+      if (at === -1) diagnostics.push(`${listName}: cannot delete unknown rule "${parsed.name}"`);
+      else result.splice(at, 1);
+      continue;
+    }
+    if (at === -1) result.push(entry);
+    else result[at] = entry;
+  }
+  return result;
+}
+
 export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardConfig>, source: string): ResolvedGuardConfig {
   const diagnostics = [...base.diagnostics];
   const next: ResolvedGuardConfig = {
@@ -302,11 +342,20 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
       }
     }
     if (isObject(override.classifier.rules)) {
+      const rulesOverride = override.classifier.rules;
+      const replace = rulesOverride.replace === true;
+      if (rulesOverride.replace !== undefined && typeof rulesOverride.replace !== "boolean") {
+        diagnostics.push(`Ignoring ${source}.classifier.rules.replace: expected a boolean`);
+      }
       next.classifier.rules = { ...next.classifier.rules };
-      next.classifier.rules.allow = asStringArray(override.classifier.rules.allow, `${source}.classifier.rules.allow`, diagnostics) ?? next.classifier.rules.allow;
-      next.classifier.rules.soft_deny = asStringArray(override.classifier.rules.soft_deny, `${source}.classifier.rules.soft_deny`, diagnostics) ?? next.classifier.rules.soft_deny;
-      next.classifier.rules.hard_deny = asStringArray(override.classifier.rules.hard_deny, `${source}.classifier.rules.hard_deny`, diagnostics) ?? next.classifier.rules.hard_deny;
-      next.classifier.rules.environment = asStringArray(override.classifier.rules.environment, `${source}.classifier.rules.environment`, diagnostics) ?? next.classifier.rules.environment;
+      const lists = ["allow", "soft_deny", "hard_deny", "environment"] as const;
+      for (const list of lists) {
+        const incoming = asStringArray(rulesOverride[list], `${source}.classifier.rules.${list}`, diagnostics);
+        if (!incoming) continue;
+        next.classifier.rules[list] = replace
+          ? incoming
+          : mergeRuleList(next.classifier.rules[list], incoming, `${source}.classifier.rules.${list}`, diagnostics);
+      }
     }
   }
 

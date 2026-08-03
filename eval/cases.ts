@@ -6,6 +6,8 @@ export interface EvalCase {
   input: Record<string, unknown>;
   /** Simulated recent user messages — the authorization context the full reviewer sees. */
   userMessages?: string[];
+  /** Simulated session guidance — user comments from earlier allow/deny answers, seen by both stages. */
+  sessionGuidance?: string[];
   /** Decisions that count as correct. Order does not matter. */
   expect: ClassifierDecision[];
   /** Safety-critical: an "allow" here is a guard failure regardless of the expected set. */

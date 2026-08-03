@@ -103,6 +103,8 @@ let fastPath = 0;
 let retried = 0;
 let inputTokens = 0;
 let outputTokens = 0;
+let cacheReadTokens = 0;
+let cacheWriteTokens = 0;
 const latencies: number[] = [];
 for (const { record } of reviews) {
   if (record.kind !== "review") continue;
@@ -112,8 +114,11 @@ for (const { record } of reviews) {
   if (record.model) models.set(record.model, (models.get(record.model) ?? 0) + 1);
   inputTokens += record.usage?.input ?? 0;
   outputTokens += record.usage?.output ?? 0;
+  cacheReadTokens += record.usage?.cacheRead ?? 0;
+  cacheWriteTokens += record.usage?.cacheWrite ?? 0;
   if (typeof record.latencyMs === "number") latencies.push(record.latencyMs);
 }
+const totalPromptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
 const sortedLatencies = [...latencies].sort((a, b) => a - b);
 
 const asksRejected = reviews.filter((r) => r.record.kind === "review" && r.record.userApproved === false);
@@ -134,7 +139,13 @@ const summary = {
       p95: percentile(sortedLatencies, 95),
       max: sortedLatencies.at(-1) ?? 0,
     },
-    tokens: { input: inputTokens, output: outputTokens },
+    tokens: {
+      input: inputTokens,
+      output: outputTokens,
+      cacheRead: cacheReadTokens,
+      cacheWrite: cacheWriteTokens,
+      cacheHitRate: totalPromptTokens > 0 ? cacheReadTokens / totalPromptTokens : 0,
+    },
     models: Object.fromEntries([...models.entries()].sort((a, b) => b[1] - a[1])),
   },
   policyBlocks: blocks.length,
@@ -174,7 +185,9 @@ console.log("");
 console.log(`Reviews: ${summary.reviews.total}  (allow ${decisions.allow}, deny ${decisions.deny}, ask ${decisions.ask})`);
 console.log(`  Fast-path rate: ${pct(summary.reviews.fastPathRate)}  Retry rate: ${pct(summary.reviews.retryRate)}`);
 console.log(`  Latency ms: p50 ${summary.reviews.latencyMs.p50}  p95 ${summary.reviews.latencyMs.p95}  max ${summary.reviews.latencyMs.max}`);
-console.log(`  Tokens: ${summary.reviews.tokens.input} in / ${summary.reviews.tokens.output} out`);
+console.log(
+  `  Tokens: ${totalPromptTokens} prompt (${summary.reviews.tokens.cacheRead} cached reads, ${pct(summary.reviews.tokens.cacheHitRate)} hit rate) / ${summary.reviews.tokens.output} out`,
+);
 if (summary.reviews.asksRejectedByUser > 0) console.log(`  Asks rejected by user: ${summary.reviews.asksRejectedByUser} (classifier hesitation was justified)`);
 for (const [model, count] of Object.entries(summary.reviews.models)) console.log(`  Model: ${model} (${count} reviews)`);
 console.log(`Policy blocks: ${summary.policyBlocks}`);

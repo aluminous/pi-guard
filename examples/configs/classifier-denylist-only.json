@@ -16,6 +16,7 @@
     "model": "auto",
     "failClosed": true,
     "rules": {
+      "replace": true,
       "allow": [
         "Default allow: allow ordinary local coding work in the trusted repository unless the action matches a hard_deny rule below. This includes routine reads, source/test/documentation edits, local checks and builds, and non-destructive local git operations."
       ],

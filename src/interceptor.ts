@@ -1,9 +1,10 @@
 import path from "node:path";
 import { getPackageDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { classifierEnabled, isClassifierModelUnavailable, projectToolCall, resolveClassifierModel, reviewToolCall } from "./classifier.ts";
+import { askGuardApproval } from "./approvals.ts";
+import { addSessionGuidance, classifierEnabled, isClassifierModelUnavailable, projectToolCall, resolveClassifierModel, reviewToolCall } from "./classifier.ts";
 import type { ResolvedGuardConfig } from "./config.ts";
 import { GUARDED_TOOLS } from "./guarded-tools.ts";
-import { decidePathAccess, type AccessKind } from "./policy.ts";
+import { decidePathAccess, isClassifierExemptRead, normalizeUserPath, type AccessKind } from "./policy.ts";
 import { appendGuardTelemetry } from "./telemetry.ts";
 import {
   recordApprovalDenied,
@@ -11,6 +12,7 @@ import {
   recordApprovalRequested,
   recordClassifierError,
   recordClassifierResult,
+  recordClassifierSkip,
   recordPolicyBlock,
   type RuntimeState,
 } from "./state.ts";
@@ -58,21 +60,36 @@ async function askPathApproval(params: {
   if (!params.ctx.hasUI) {
     recordApprovalDenied(params.state);
     appendGuardTelemetry(params.state, { kind: "approval", tool: params.toolName, access: params.kind, path: params.path, approved: false, reason: params.reason });
-    return { block: true, reason: `${params.kind} requires approval for ${params.path}: ${params.reason}` };
+    return {
+      block: true,
+      reason: `${params.kind} requires approval for ${params.path}: ${params.reason}. This is a headless session with no user to ask; rerun interactively or pre-approve the path in guard config.`,
+    };
   }
-  const ok = await params.ctx.ui.confirm(
+  const answer = await askGuardApproval(
+    params.ctx,
     "Guard path approval",
     `${params.toolName} wants ${params.kind} access outside the configured roots:\n\n${params.path}\n\nReason: ${params.reason}\n\nApprove this path for this session?`,
   );
-  if (ok) {
+  if (answer.comment) {
+    addSessionGuidance(params.state.classifier, answer.approved ? "allowed" : "denied", params.toolName, `${params.kind} ${params.path}`, answer.comment);
+  }
+  appendGuardTelemetry(params.state, {
+    kind: "approval",
+    tool: params.toolName,
+    access: params.kind,
+    path: params.path,
+    approved: answer.approved,
+    reason: params.reason,
+    userComment: answer.comment,
+  });
+  if (answer.approved) {
     params.state.approvals[params.kind].push(params.path);
     recordApprovalGranted(params.state, params.toolName, params.kind, params.path);
-    appendGuardTelemetry(params.state, { kind: "approval", tool: params.toolName, access: params.kind, path: params.path, approved: true, reason: params.reason });
     return;
   }
   recordApprovalDenied(params.state);
-  appendGuardTelemetry(params.state, { kind: "approval", tool: params.toolName, access: params.kind, path: params.path, approved: false, reason: params.reason });
-  return { block: true, reason: `${params.kind} approval denied for ${params.path}. Do not work around the guard; ask the user.` };
+  const commentSuffix = answer.comment ? ` User comment: ${answer.comment}` : "";
+  return { block: true, reason: `${params.kind} approval denied for ${params.path}.${commentSuffix} Do not work around the guard; ask the user.` };
 }
 
 export async function interceptToolCall(
@@ -114,9 +131,22 @@ export async function interceptToolCall(
     }
   }
 
-  if (config.filesystem.enabled && event.toolName === "read" && allowedReadPath && isPiPackageDocsOrExamplePath(allowedReadPath)) return;
-
   if (!classifierEnabled(config, state.classifier)) return;
+
+  // Deterministic classifier exemption for reads. A trusted path is the whole
+  // action for a read (its projection carries no content), so in-cwd and
+  // allowlisted reads skip review entirely — whether or not filesystem
+  // enforcement is on; enabled:false only disables blocking, not trust.
+  if (spec.access.includes("read") && !spec.access.includes("write")) {
+    const target = spec.path?.(input);
+    if (typeof target === "string") {
+      const canonicalTarget = allowedReadPath ?? normalizeUserPath(ctx.cwd, target);
+      if (isPiPackageDocsOrExamplePath(canonicalTarget) || isClassifierExemptRead(config, ctx.cwd, target)) {
+        recordClassifierSkip(state);
+        return;
+      }
+    }
+  }
 
   const startedAt = performance.now();
   let telemetryModel: string | undefined;
@@ -143,7 +173,9 @@ export async function interceptToolCall(
       latencyMs,
       model: telemetryModel,
       reason: result.reason,
-      usage: result.tokenUsage ? { input: result.tokenUsage.input, output: result.tokenUsage.output } : undefined,
+      usage: result.tokenUsage
+        ? { input: result.tokenUsage.input, output: result.tokenUsage.output, cacheRead: result.tokenUsage.cacheRead, cacheWrite: result.tokenUsage.cacheWrite }
+        : undefined,
       projection: projectToolCall(event.toolName, event.input, ctx.cwd, config),
     };
     if (result.decision === "allow") {
@@ -151,14 +183,24 @@ export async function interceptToolCall(
       return;
     }
     if (result.decision === "ask" && ctx.hasUI) {
-      const ok = await ctx.ui.confirm("Guard reviewer asks for approval", `${result.reason}\n\nAllow ${event.toolName}?`);
-      appendGuardTelemetry(state, { ...telemetry, userApproved: ok });
-      if (ok) {
-        return;
+      const answer = await askGuardApproval(ctx, "Guard reviewer asks for approval", `${result.reason}\n\nAllow ${event.toolName}?`);
+      if (answer.comment) {
+        const summary = telemetry.projection.inputSummary;
+        const subject = typeof summary.command === "string" ? summary.command : typeof summary.path === "string" ? summary.path : event.toolName;
+        addSessionGuidance(state.classifier, answer.approved ? "allowed" : "denied", event.toolName, subject, answer.comment);
       }
-      return { block: true, reason: `Guard reviewer ${result.decision}: ${result.reason}. Do not work around this denial; choose a safer path or ask the user.` };
+      appendGuardTelemetry(state, { ...telemetry, userApproved: answer.approved, userComment: answer.comment });
+      if (answer.approved) return;
+      const commentSuffix = answer.comment ? ` User comment: ${answer.comment}` : "";
+      return { block: true, reason: `Guard reviewer asked and the user denied: ${result.reason}.${commentSuffix} Do not work around this denial; choose a safer path or ask the user.` };
     }
     appendGuardTelemetry(state, telemetry);
+    if (result.decision === "ask") {
+      return {
+        block: true,
+        reason: `Guard reviewer asks for approval, but this headless session has no user to ask: ${result.reason}. Rerun interactively or adjust guard config to authorize this action.`,
+      };
+    }
     return { block: true, reason: `Guard reviewer ${result.decision}: ${result.reason}. Do not work around this denial; choose a safer path or ask the user.` };
   } catch (error) {
     const reason = formatError(error);

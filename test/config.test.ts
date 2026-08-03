@@ -65,6 +65,56 @@ describe("mergeConfig", () => {
     assert.deepEqual(afterProject.sources, ["defaults", "global.json", "project.json"]);
   });
 
+  it("merges classifier rules by name: override in place, delete with empty body, append new", () => {
+    const merged = mergeConfig(
+      testConfig(),
+      {
+        classifier: {
+          rules: {
+            soft_deny: [
+              "Git Push to Default Branch:",
+              "Production Deploy: deploying to the staging cluster is routine; only prod-* deploys need approval.",
+              "My Custom Rule: never touch the vendor directory.",
+            ],
+          },
+        },
+      },
+      "test.json",
+    );
+    const softDeny = merged.classifier.rules.soft_deny;
+    assert.equal(softDeny.some((rule) => rule.startsWith("Git Push to Default Branch:")), false);
+    const deployIndex = softDeny.findIndex((rule) => rule.startsWith("Production Deploy:"));
+    assert.equal(softDeny[deployIndex], "Production Deploy: deploying to the staging cluster is routine; only prod-* deploys need approval.");
+    assert.equal(deployIndex, DEFAULT_CONFIG.classifier.rules.soft_deny.findIndex((rule) => rule.startsWith("Production Deploy:")) - 1, "override keeps position (one earlier rule was deleted)");
+    assert.equal(softDeny.at(-1), "My Custom Rule: never touch the vendor directory.");
+    assert.equal(merged.classifier.rules.allow.length, DEFAULT_CONFIG.classifier.rules.allow.length, "untouched lists keep defaults");
+    assert.deepEqual(merged.diagnostics, []);
+  });
+
+  it("warns when deleting an unknown rule name", () => {
+    const merged = mergeConfig(testConfig(), { classifier: { rules: { allow: ["No Such Rule:"] } } }, "test.json");
+    assert.equal(merged.diagnostics.length, 1);
+    assert.match(merged.diagnostics[0]!, /cannot delete unknown rule "No Such Rule"/);
+  });
+
+  it("replaces rule lists wholesale when replace is true", () => {
+    const merged = mergeConfig(
+      testConfig(),
+      { classifier: { rules: { replace: true, allow: ["Only Rule: nothing else."], soft_deny: [] } } },
+      "test.json",
+    );
+    assert.deepEqual(merged.classifier.rules.allow, ["Only Rule: nothing else."]);
+    assert.deepEqual(merged.classifier.rules.soft_deny, []);
+    assert.deepEqual(merged.classifier.rules.hard_deny, DEFAULT_CONFIG.classifier.rules.hard_deny, "omitted lists keep defaults even with replace");
+  });
+
+  it("lets a project layer re-override a global rule override by name", () => {
+    const afterGlobal = mergeConfig(testConfig(), { classifier: { rules: { hard_deny: ["Data Exfiltration: global version."] } } }, "global.json");
+    const afterProject = mergeConfig(afterGlobal, { classifier: { rules: { hard_deny: ["Data Exfiltration: project version."] } } }, "project.json");
+    const matches = afterProject.classifier.rules.hard_deny.filter((rule) => rule.startsWith("Data Exfiltration:"));
+    assert.deepEqual(matches, ["Data Exfiltration: project version."]);
+  });
+
   it("does not mutate DEFAULT_CONFIG through merges", () => {
     const before = structuredClone(DEFAULT_CONFIG);
     mergeConfig(testConfig(), { filesystem: { denyRead: ["/mutated"] }, classifier: { rules: { allow: ["mutated"] } } }, "test.json");

@@ -3,7 +3,7 @@ import { classifierEnabled, resolveClassifierModel } from "../classifier.ts";
 import { loadConfig, type StatusLineMode } from "../config.ts";
 import { updatePersistentStatusLine } from "../persistent-settings.ts";
 import type { RuntimeState } from "../state.ts";
-import { formatGuardStatus, updateGuardStatus } from "../status.ts";
+import { formatGuardPolicy, formatGuardStatus, toggleGuardOverlay, toggleGuardWidget, updateGuardStatus } from "../status.ts";
 import { pickFromList, type SelectItem } from "../tui/select-list.ts";
 import { formatError } from "../util.ts";
 import { runModelCommand } from "./model.ts";
@@ -18,7 +18,8 @@ export interface GuardCommandDeps {
 }
 
 const SUBCOMMANDS: Array<{ value: string; description: string }> = [
-  { value: "status", description: "Post the full guard status report" },
+  { value: "status", description: "Toggle the live status popup (or: status post)" },
+  { value: "policy", description: "Show the resolved policy and classifier rules (or: policy post)" },
   { value: "on", description: "Enable the guard" },
   { value: "off", description: "Disable for the next agent turn, then re-enable" },
   { value: "off session", description: "Disable until the session ends (unguarded!)" },
@@ -63,6 +64,30 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     if (!ctx.hasUI) console.log(output);
     pi.sendMessage({ customType: "pi-guard", content: output, display: true });
     ctx.ui.notify("Guard status posted.", state.lastError ? "warning" : "info");
+  }
+
+  /** TUI: toggle the live status popup. RPC: toggle a live widget. Headless: post the report. */
+  function showStatus(ctx: ExtensionContext): void {
+    const lines = () => formatGuardStatus(state, state.config ?? loadConfig(ctx)).split("\n");
+    if (ctx.mode === "tui" && ctx.hasUI) return toggleGuardOverlay(ctx, state, "status", lines);
+    if (ctx.hasUI) return toggleGuardWidget(ctx, state, "status", lines);
+    return postStatus(ctx);
+  }
+
+  function postPolicy(ctx: ExtensionContext): void {
+    const config = state.config ?? loadConfig(ctx);
+    const output = formatGuardPolicy(state, config);
+    if (!ctx.hasUI) console.log(output);
+    pi.sendMessage({ customType: "pi-guard", content: output, display: true });
+    ctx.ui.notify("Guard policy posted.", "info");
+  }
+
+  /** TUI: toggle the policy popup. RPC: toggle a live widget. Headless: post the policy report. */
+  function showPolicy(ctx: ExtensionContext): void {
+    const lines = () => formatGuardPolicy(state, state.config ?? loadConfig(ctx)).split("\n");
+    if (ctx.mode === "tui" && ctx.hasUI) return toggleGuardOverlay(ctx, state, "policy", lines);
+    if (ctx.hasUI) return toggleGuardWidget(ctx, state, "policy", lines);
+    return postPolicy(ctx);
   }
 
   function panelHeader(ctx: ExtensionContext): string[] {
@@ -116,7 +141,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     }
   }
 
-  type PanelAction = "on" | "off-turn" | "off-session" | "model" | "statusline" | "smoke" | "critique" | "status";
+  type PanelAction = "on" | "off-turn" | "off-session" | "model" | "statusline" | "smoke" | "critique" | "status" | "policy";
 
   async function openPanel(ctx: ExtensionContext): Promise<void> {
     const items: SelectItem<PanelAction>[] = [];
@@ -133,7 +158,8 @@ export function createGuardCommand(deps: GuardCommandDeps) {
       { value: "statusline", label: "Statusline visibility…", searchText: "statusline status line visibility always never auto hide show", description: "Show the guard statusline always, never, or only when notable" },
       { value: "smoke", label: "Run smoke tests", searchText: "smoke test verify sandbox classifier", description: "Verify sandboxed execution and classifier decisions end to end" },
       { value: "critique", label: "Critique rules", searchText: "critique rules review improve", description: "Have Pi's current model review the classifier rules for gaps" },
-      { value: "status", label: "Full status report", searchText: "status report details approvals policy", description: "Post the detailed report: policy, approvals, recent decisions" },
+      { value: "status", label: "Status popup", searchText: "status report details approvals live popup overlay", description: "Live status popup: decisions, approvals, guidance — updates while the agent works" },
+      { value: "policy", label: "Policy view", searchText: "policy rules classifier allow deny filesystem network show", description: "Resolved policy: filesystem/network/env rules and classifier rule lists" },
     );
 
     const picked = await pickFromList<PanelAction>(ctx, { title: "Pi Guard", headerLines: panelHeader(ctx), items });
@@ -157,7 +183,9 @@ export function createGuardCommand(deps: GuardCommandDeps) {
       case "critique":
         return deps.runCritique("", ctx);
       case "status":
-        return postStatus(ctx);
+        return showStatus(ctx);
+      case "policy":
+        return showPolicy(ctx);
     }
   }
 
@@ -176,10 +204,17 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     const sub = head.toLowerCase();
 
     if (!sub) {
-      if (ctx.mode === "tui" && ctx.hasUI) return openPanel(ctx);
+      if (ctx.hasUI) return openPanel(ctx);
       return postStatus(ctx);
     }
-    if (sub === "status") return postStatus(ctx);
+    if (sub === "status") {
+      if (rest.toLowerCase() === "post") return postStatus(ctx);
+      return showStatus(ctx);
+    }
+    if (sub === "policy") {
+      if (rest.toLowerCase() === "post") return postPolicy(ctx);
+      return showPolicy(ctx);
+    }
     if (sub === "on" || sub === "enable") return enable(ctx);
     if (sub === "off" || sub === "disable") {
       if (rest.toLowerCase() === "session") return disableSession(ctx);
@@ -189,7 +224,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     if (sub === "smoke" && !rest) return deps.runGuardSmoke(ctx);
     if (sub === "critique") return deps.runCritique(rest, ctx);
 
-    show(ctx, "Usage: /guard [status|on|off|off session|model …|smoke|critique …]", "warning");
+    show(ctx, "Usage: /guard [status|policy|on|off|off session|model …|smoke|critique …]", "warning");
   }
 
   function getArgumentCompletions(argumentPrefix: string) {

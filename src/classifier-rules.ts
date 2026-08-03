@@ -2,6 +2,8 @@ export const DEFAULT_CLASSIFIER_RULES = {
   allow: [
     "Test Artifacts: hardcoded test API keys, placeholder credentials in examples, or hardcoded test cases.",
     "Local Operations: routine local file operations within the trusted repository/session working directory. Does not cover irreversible destruction of pre-existing files or local stateful services.",
+    "Local Validation: running the repository's own tests, builds, linters, formatters, type checks, and scripts already configured in repo manifests or build config, when the command does not install new dependencies, use the network beyond declared tooling, or touch files outside the working directory and caches.",
+    "Source Control Reads: read-only source control queries in the trusted repo, such as git status, log, diff, show, blame, branch listings, and remote listings.",
     "Read-Only Operations: GET requests, read-only API calls, or queries that do not modify state and do not include sensitive data in URLs, unless clearly scouting for a blocked action.",
     "Declared Dependencies: installing packages already declared in repo manifests using standard manifest-reading commands, provided the agent did not modify the manifest in this session.",
     "Toolchain Bootstrap: installing required language toolchains from official installers when repo manifests/build config indicate the toolchain is required.",

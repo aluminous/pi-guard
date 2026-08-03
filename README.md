@@ -78,7 +78,8 @@ Flags:
 Commands — everything lives under `/guard`, with argument autocomplete:
 
 - `/guard`: open the control panel (searchable actions with a live status header). Outside the TUI it posts the status report instead.
-- `/guard status`: post the full status report (policy, approvals, recent decisions, warnings).
+- `/guard status`: toggle the live status popup — an overlay that floats over the chat, keeps updating while the agent works (decisions, approvals, session guidance), and never blocks the agent. Esc closes it, Tab pins it so you can keep typing, arrows/page keys scroll. Outside the TUI it posts the report instead; `/guard status post` posts into the conversation on purpose. Note that posted reports become part of the agent's context (pi delivers custom messages to the LLM as user messages) — that can be exactly what you want ("look at the guard status"), but it is not free.
+- `/guard policy`: show the resolved policy — filesystem/network/environment rules plus the classifier's allow, soft-deny, and hard-deny rule lists and environment assumptions. Same popup behavior; `/guard policy post` posts it (also agent-visible).
 - `/guard on`: enable Pi Guard.
 - `/guard off`: disable for the next agent turn, then re-enable automatically.
 - `/guard off session`: disable until the session ends.
@@ -167,6 +168,25 @@ Ready-to-copy profiles are available under [`examples/configs`](examples/configs
 Config files are layered over the built-in defaults, so omitted arrays retain
 their defaults rather than becoming empty.
 
+### Classifier rule overrides
+
+Classifier rule lists merge **by rule name** rather than replacing the whole
+set. Every rule is `"Name: text"`; in your config:
+
+- `"Production Deploy: staging deploys are routine; only prod-* needs approval."`
+  — overrides the default rule of that name in place (case-insensitive match).
+- `"Git Push to Default Branch:"` — an empty body deletes that rule
+  (a warning is emitted if the name doesn't exist, to catch typos).
+- `"My Custom Rule: never touch the vendor directory."` — new names append.
+
+Overrides keep the original rule's position, so the classifier's cacheable
+prompt prefix stays stable. Layering applies per config file: a project rule
+override wins over a global override of the same name.
+
+Profiles that define a complete rule set from scratch (like the
+`classifier-*-only` examples) set `"replace": true` inside `rules`, which
+restores wholesale replacement for the lists they provide.
+
 The default classifier model is `"auto"`: Pi Guard picks the best available
 model from a known-good list (see `src/classifier-models.ts`), preferring
 subscription providers (openai-codex, github-copilot) over per-token providers
@@ -218,7 +238,55 @@ enabled and use an empty allowlist:
 - When filesystem restrictions are enabled, reads are allowed by default except for configured sensitive paths, and writes are limited to configured roots.
 - Environment variables are scrubbed before guarded commands are spawned.
 - If enabled, the classifier reviews `bash`, `read`, `write`, and `edit` calls after deterministic policy checks and before execution.
+- Trusted reads skip the classifier entirely: a `read` whose canonical path is inside the session working directory or matches an explicit `allowRead` entry — and does not match `denyRead` — is deterministically exempt (0 tokens, 0 latency; counted as "Exempt reads" in the status report). The allow/deny lists are consulted for this routing even when `filesystem.enabled` is `false`, which only disables *blocking*. Writes and edits always keep classifier review: their content is the risk, no matter how trusted the path.
 - Classifier timeouts/network failures are retried with bounded exponential backoff up to five attempts and surfaced to the user. If no usable classifier model is available, or fail-closed review still fails after retries, Pi Guard stops the current turn for user intervention without exiting Pi.
+
+## Approval prompts and session guidance
+
+When the guard needs a human decision — a classifier `ask` or a path outside
+the configured roots — the prompt offers four choices: **Allow**, **Allow with
+comment**, **Deny**, and **Deny with comment**. Comments become *session
+guidance*: user-authored notes injected into both classifier stages for the
+rest of the session, so "allow — staging deploys are fine today" or "deny —
+never touch prod configs" tunes review behavior without editing config files.
+Deny comments are also echoed to the agent in the block reason so it can
+change course immediately. Guidance is session-scoped (last 12 entries) and
+shown in the status popup.
+
+The classifier's decision policy is ask-first: deny is reserved for hard-deny
+rules, critical risk, credential exposure, and guard bypass; everything else
+that merely lacks authorization becomes a question to you, because answering
+the question *is* the authorization process.
+
+## Headless sessions and subagents
+
+`ctx.hasUI` tells the guard whether anyone can answer a prompt:
+
+- **TUI** — prompts are interactive dialogs.
+- **RPC mode** (`pi --mode rpc`) — prompts become `extension_ui_request`
+  events on stdout; the driving client answers them over the protocol, so
+  approvals work if the client implements that sub-protocol (see pi's
+  `docs/rpc.md` and `examples/rpc-extension-ui.ts`). Every guard interface
+  degrades to protocol dialogs there: approval prompts become select+input,
+  and the `/guard` control panel, classifier model picker, and statusline
+  chooser become plain select dialogs (search and live headers are TUI-only).
+  `/guard status` and `/guard policy` toggle live *widgets* (fire-and-forget
+  `setWidget` requests keyed `guard-status`/`guard-policy`, refreshed on every
+  guard event) — user-visible in any client that renders widgets, and never
+  part of agent context. The `post` variants remain for transcript-visible
+  (and agent-visible) reports.
+- **json / print modes** — truly headless: there is no one to ask. Ask
+  decisions and out-of-roots path approvals become blocks whose reason states
+  exactly that ("headless session with no user to ask"), so the agent — or a
+  parent process reading the transcript — knows the block is about approval
+  availability, not policy.
+
+Subagents spawned as `pi --mode json` subprocesses are therefore headless,
+and the denial reason is the propagation channel that exists today. To
+propagate the *question* instead, run subagents in RPC mode and forward the
+extension-UI requests to the parent's UI — that works with unmodified
+pi-guard. A guard-to-guard approval side channel was considered and deferred
+(see FEEDBACK_PLAN.md).
 
 ## Decision telemetry
 

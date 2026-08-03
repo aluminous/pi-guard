@@ -145,8 +145,11 @@ export class SearchableSelectList<V> extends Container {
 }
 
 export interface CustomUiHost {
+  /** Run mode: custom TUI components need "tui"; other dialog-capable modes degrade to select. */
+  mode: string;
   ui: {
     custom<T>(factory: (tui: unknown, theme: Theme, keybindings: Keybindings, done: (value: T) => void) => unknown): Promise<T | undefined>;
+    select(title: string, options: string[]): Promise<string | undefined>;
   };
 }
 
@@ -154,7 +157,18 @@ export async function pickFromList<V>(
   ctx: CustomUiHost,
   params: { title: string; headerLines?: string[]; items: SelectItem<V>[] },
 ): Promise<SelectItem<V> | undefined> {
-  return ctx.ui.custom<SelectItem<V> | undefined>(
-    (_tui, theme, keybindings, done) => new SearchableSelectList<V>({ ...params, theme, keybindings, done }),
-  );
+  if (ctx.mode === "tui") {
+    return ctx.ui.custom<SelectItem<V> | undefined>(
+      (_tui, theme, keybindings, done) => new SearchableSelectList<V>({ ...params, theme, keybindings, done }),
+    );
+  }
+  // Degrade to the plain select dialog, which RPC clients answer over the
+  // extension-UI sub-protocol. Header lines fold into the title; the current
+  // choice is tagged since the check-mark rendering is TUI-only.
+  const title = [params.title, ...(params.headerLines ?? [])].join("\n");
+  const labels = params.items.map((item) => (item.current ? `${item.label} (current)` : item.label));
+  const picked = await ctx.ui.select(title, labels);
+  if (picked === undefined) return undefined;
+  const index = labels.indexOf(picked);
+  return index >= 0 ? params.items[index] : undefined;
 }

@@ -36,7 +36,9 @@ export interface GuardReviewTelemetry extends GuardTelemetryBase {
   reason: string;
   /** Set for "ask" decisions: whether the user approved execution. */
   userApproved?: boolean;
-  usage?: { input: number; output: number };
+  /** User comment attached to an allow/deny answer, if any. */
+  userComment?: string;
+  usage?: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
   projection?: ReviewProjection;
 }
 
@@ -51,6 +53,8 @@ export interface GuardApprovalTelemetry extends GuardTelemetryBase {
   path: string;
   approved: boolean;
   reason: string;
+  /** User comment attached to an allow/deny answer, if any. */
+  userComment?: string;
 }
 
 export interface GuardErrorTelemetry extends GuardTelemetryBase {

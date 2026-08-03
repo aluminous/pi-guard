@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { after, describe, it } from "node:test";
-import { decidePathAccess, normalizeUserPath, scrubEnvironment } from "../src/policy.ts";
+import { decidePathAccess, isClassifierExemptRead, normalizeUserPath, scrubEnvironment } from "../src/policy.ts";
 import { makeFixtureDir, testConfig } from "./helpers.ts";
 
 const fixture = makeFixtureDir();
@@ -26,6 +26,41 @@ describe("normalizeUserPath", () => {
 
   it("strips a leading @ prefix", () => {
     assert.equal(normalizeUserPath(cwd, "@src/app.ts"), path.join(cwd, "src", "app.ts"));
+  });
+});
+
+describe("isClassifierExemptRead", () => {
+  it("exempts reads inside the session cwd", () => {
+    assert.equal(isClassifierExemptRead(testConfig(), cwd, "src/app.ts"), true);
+  });
+
+  it("does not exempt deny-matching reads even inside cwd", () => {
+    assert.equal(isClassifierExemptRead(testConfig(), cwd, ".env"), false);
+  });
+
+  it("still consults the lists when filesystem enforcement is disabled", () => {
+    const config = testConfig((c) => {
+      c.filesystem.enabled = false;
+    });
+    assert.equal(isClassifierExemptRead(config, cwd, "src/app.ts"), true);
+    assert.equal(isClassifierExemptRead(config, cwd, ".env"), false);
+  });
+
+  it("exempts reads matching an explicit allowRead entry outside cwd", () => {
+    const config = testConfig((c) => {
+      c.filesystem.allowRead = [path.join(cwd, "outside")];
+    });
+    writeFileSync(path.join(cwd, "outside", "notes.txt"), "ok");
+    assert.equal(isClassifierExemptRead(config, cwd, path.join(cwd, "outside", "notes.txt")), true);
+  });
+
+  it("does not exempt unlisted reads outside cwd", () => {
+    const config = testConfig();
+    assert.equal(isClassifierExemptRead(config, path.join(cwd, "src"), path.join(cwd, "outside")), false);
+  });
+
+  it("does not exempt unresolvable paths", () => {
+    assert.equal(isClassifierExemptRead(testConfig(), cwd, "no-such-file.txt"), false);
   });
 });
 

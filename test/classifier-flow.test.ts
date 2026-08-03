@@ -81,7 +81,7 @@ describe("two-stage flow", () => {
     assert.equal(result.decision, "allow");
     assert.match(result.reason, /^Fast-path trivially safe/);
     assert.equal(calls.length, 1);
-    assert.deepEqual(result.tokenUsage, { input: 10, output: 5 });
+    assert.deepEqual(result.tokenUsage, { input: 10, output: 5, cacheRead: 0, cacheWrite: 0 });
   });
 
   it("escalates to the full reviewer and accumulates token usage", async () => {
@@ -90,7 +90,7 @@ describe("two-stage flow", () => {
     assert.equal(result.decision, "deny");
     assert.equal(result.risk, "critical");
     assert.equal(calls.length, 2);
-    assert.deepEqual(result.tokenUsage, { input: 20, output: 10 });
+    assert.deepEqual(result.tokenUsage, { input: 20, output: 10, cacheRead: 0, cacheWrite: 0 });
   });
 
   it("keeps user messages out of the fast stage but includes them in the full stage", async () => {

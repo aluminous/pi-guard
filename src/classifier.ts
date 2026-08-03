@@ -28,6 +28,19 @@ export interface ClassifierState {
   modelOverride?: string;
   lastDecision?: ClassifierResult & { toolName: string; at: number };
   lastError?: string;
+  /**
+   * Session-scoped, user-authored guidance collected from allow/deny-with-
+   * comment answers to guard prompts. Injected into both review stages.
+   */
+  sessionGuidance?: string[];
+}
+
+const SESSION_GUIDANCE_LIMIT = 12;
+
+/** Records an allow/deny comment from a guard prompt as classifier guidance for the rest of the session. */
+export function addSessionGuidance(state: ClassifierState, decision: "allowed" | "denied", toolName: string, subject: string, comment: string): void {
+  const entry = `User ${decision} ${toolName} (${textPrefix(subject, 120)}) with comment: ${textPrefix(comment.trim(), 400)}`;
+  state.sessionGuidance = [...(state.sessionGuidance ?? []), entry].slice(-SESSION_GUIDANCE_LIMIT);
 }
 
 export type CompleteFn = typeof complete;
@@ -207,20 +220,24 @@ export async function runReview(params: {
   config: ResolvedGuardConfig;
   toolName: string;
   input: unknown;
+  sessionGuidance?: string[];
 }): Promise<ClassifierResult> {
   const projection = projectToolCall(params.toolName, params.input, params.io.cwd, params.config);
+  const guidance = params.sessionGuidance ?? [];
   const budget: RetryBudget = { attempts: 0, maxAttempts: 5 };
   const fastResponse = await completeText({
     model: params.model,
     io: params.io,
     systemPrompt: FAST_SYSTEM_PROMPT,
-    text: buildFastReviewText(projection, params.config),
+    text: buildFastReviewText(projection, params.config, guidance),
     timeoutMs: params.config.classifier.timeoutMs,
     budget,
   });
   const usage: ClassifierTokenUsage = {
     input: fastResponse.usage?.input ?? 0,
     output: fastResponse.usage?.output ?? 0,
+    cacheRead: fastResponse.usage?.cacheRead ?? 0,
+    cacheWrite: fastResponse.usage?.cacheWrite ?? 0,
   };
   const fast = parseFastResult(fastResponse.text);
   if (fast.triviallySafe) {
@@ -231,12 +248,14 @@ export async function runReview(params: {
     model: params.model,
     io: params.io,
     systemPrompt: FULL_SYSTEM_PROMPT,
-    text: buildFullReviewText(params.io.recentUserMessages(), projection, params.config),
+    text: buildFullReviewText(params.io.recentUserMessages(), projection, params.config, guidance),
     timeoutMs: params.config.classifier.timeoutMs,
     budget,
   });
   usage.input += fullResponse.usage?.input ?? 0;
   usage.output += fullResponse.usage?.output ?? 0;
+  usage.cacheRead = (usage.cacheRead ?? 0) + (fullResponse.usage?.cacheRead ?? 0);
+  usage.cacheWrite = (usage.cacheWrite ?? 0) + (fullResponse.usage?.cacheWrite ?? 0);
   const result = parseResult(fullResponse.text);
   return { ...result, tokenUsage: usage, fastPath: false, attempts: budget.attempts };
 }
@@ -252,7 +271,14 @@ export async function reviewToolCall(params: {
   const model = resolveClassifierModel(params.ctx, params.config, params.state);
   if (!model) throw new ClassifierModelUnavailableError(`Classifier model not found: ${params.state.modelOverride ?? params.config.classifier.model}`);
   const io = createClassifierIO(params.ctx, params.completeFn);
-  return runReview({ io, model, config: params.config, toolName: params.toolName, input: params.input });
+  return runReview({
+    io,
+    model,
+    config: params.config,
+    toolName: params.toolName,
+    input: params.input,
+    sessionGuidance: params.state.sessionGuidance,
+  });
 }
 
 export function buildClassifierPromptForCritique(config: ResolvedGuardConfig): string {

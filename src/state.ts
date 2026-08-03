@@ -21,12 +21,29 @@ export interface GuardStats {
   ruleHits: number;
   classifierHits: number;
   classifierDenials: number;
+  /** Reads exempted from classifier review by deterministic path trust. */
+  classifierSkips: number;
   classifierInputTokens: number;
   classifierOutputTokens: number;
+  /** Input tokens served from the provider prompt cache (subset of total prompt tokens, not of classifierInputTokens). */
+  classifierCacheReadTokens: number;
+  classifierCacheWriteTokens: number;
   turnRuleHits: number;
   turnClassifierHits: number;
   turnClassifierDenials: number;
   turnBlocked: number;
+}
+
+export type GuardViewKind = "status" | "policy";
+
+/**
+ * An open live guard view — a TUI overlay popup or an RPC widget.
+ * refresh() re-renders content from current state, close() dismisses it.
+ */
+export interface GuardLiveView {
+  kind: GuardViewKind;
+  refresh(): void;
+  close(): void;
 }
 
 export interface RuntimeState {
@@ -38,6 +55,8 @@ export interface RuntimeState {
   lastError: string | undefined;
   warnings: string[];
   classifier: ClassifierState;
+  /** Open live status/policy view (TUI overlay or RPC widget), if any. */
+  liveView?: GuardLiveView;
   approvals: {
     read: string[];
     write: string[];
@@ -61,8 +80,11 @@ export function createGuardStats(): GuardStats {
     ruleHits: 0,
     classifierHits: 0,
     classifierDenials: 0,
+    classifierSkips: 0,
     classifierInputTokens: 0,
     classifierOutputTokens: 0,
+    classifierCacheReadTokens: 0,
+    classifierCacheWriteTokens: 0,
     turnRuleHits: 0,
     turnClassifierHits: 0,
     turnClassifierDenials: 0,
@@ -89,6 +111,8 @@ export function createRuntimeState(): RuntimeState {
 
 /** Resets per-session fields in place; the state object identity is shared by closures. */
 export function resetSessionState(state: RuntimeState): void {
+  state.liveView?.close();
+  state.liveView = undefined;
   state.enabled = false;
   state.disabledForNextAgent = false;
   state.initialized = false;
@@ -144,6 +168,8 @@ export function recordClassifierResult(state: RuntimeState, toolName: string, re
   state.stats.turnClassifierHits++;
   state.stats.classifierInputTokens += result.tokenUsage?.input ?? 0;
   state.stats.classifierOutputTokens += result.tokenUsage?.output ?? 0;
+  state.stats.classifierCacheReadTokens += result.tokenUsage?.cacheRead ?? 0;
+  state.stats.classifierCacheWriteTokens += result.tokenUsage?.cacheWrite ?? 0;
   if (result.decision === "allow") state.stats.allowed++;
   if (result.decision === "deny") {
     state.stats.denied++;
@@ -152,6 +178,11 @@ export function recordClassifierResult(state: RuntimeState, toolName: string, re
   }
   if (result.decision === "ask") state.stats.asked++;
   pushRecent(state, { at: Date.now(), toolName, decision: result.decision, risk: result.risk, reason: result.reason });
+}
+
+/** A read skipped classifier review because its path is deterministically trusted. */
+export function recordClassifierSkip(state: RuntimeState): void {
+  state.stats.classifierSkips++;
 }
 
 export function recordClassifierError(state: RuntimeState, toolName: string, reason: string): void {

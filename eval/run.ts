@@ -109,7 +109,7 @@ async function runModel(spec: string, cases: EvalCase[]): Promise<ModelReport> {
     const io = makeEvalIO(evalCase, apiKey);
     const started = performance.now();
     try {
-      const result = await runReview({ io, model, config, toolName: evalCase.toolName, input: evalCase.input });
+      const result = await runReview({ io, model, config, toolName: evalCase.toolName, input: evalCase.input, sessionGuidance: evalCase.sessionGuidance });
       const latencyMs = Math.round(performance.now() - started);
       const pass = evalCase.expect.includes(result.decision);
       results.push({

@@ -16,6 +16,7 @@
     "model": "auto",
     "failClosed": true,
     "rules": {
+      "replace": true,
       "allow": [
         "Repository inspection: list, search, and read non-sensitive files within the trusted repository working directory.",
         "Local validation: run non-mutating format checks, linters, type checks, builds, and tests already configured by the trusted repository, without installing dependencies, downloading code, using the network, or changing external state."

@@ -111,15 +111,37 @@ describe("projectToolCall", () => {
 });
 
 describe("review payloads", () => {
-  it("keeps the fast payload low-context (no user messages)", () => {
+  it("keeps the fast payload low-context (no user messages) with the cache-friendly key order", () => {
     const projection = projectToolCall("bash", { command: "ls" }, "/repo", testConfig());
     const payload = JSON.parse(buildFastReviewText(projection, testConfig()));
-    assert.deepEqual(Object.keys(payload).sort(), ["pendingAction", "rules"]);
+    assert.deepEqual(Object.keys(payload), ["rules", "activePolicy", "cwd", "pendingAction"]);
   });
 
-  it("adds recent user messages only to the full payload", () => {
+  it("adds recent user messages only to the full payload, before pendingAction", () => {
     const projection = projectToolCall("bash", { command: "ls" }, "/repo", testConfig());
     const payload = JSON.parse(buildFullReviewText(["please run ls"], projection, testConfig()));
     assert.deepEqual(payload.recentUserMessages, ["please run ls"]);
+    assert.deepEqual(Object.keys(payload), ["rules", "activePolicy", "cwd", "recentUserMessages", "pendingAction"]);
+  });
+
+  it("injects session guidance into both stages when present, neither when empty", () => {
+    const projection = projectToolCall("bash", { command: "npm run deploy" }, "/repo", testConfig());
+    const guidance = ["User allowed bash (npm run deploy) with comment: staging deploys are fine"];
+    const fast = JSON.parse(buildFastReviewText(projection, testConfig(), guidance));
+    const full = JSON.parse(buildFullReviewText([], projection, testConfig(), guidance));
+    assert.deepEqual(fast.userSessionGuidance, guidance);
+    assert.deepEqual(full.userSessionGuidance, guidance);
+    const bare = JSON.parse(buildFastReviewText(projection, testConfig()));
+    assert.equal("userSessionGuidance" in bare, false);
+  });
+
+  it("keeps the payload prefix byte-stable across calls so provider prompt caches can hit", () => {
+    const config = testConfig();
+    const guidance = ["User allowed bash (npm test) with comment: fine"];
+    const a = buildFullReviewText(["same turn message"], projectToolCall("bash", { command: "npm test" }, "/repo", config), config, guidance);
+    const b = buildFullReviewText(["same turn message"], projectToolCall("write", { path: "src/x.ts", content: "export {}" }, "/repo", config), config, guidance);
+    const divergence = a.indexOf('"pendingAction"');
+    assert.ok(divergence > 0);
+    assert.equal(a.slice(0, divergence), b.slice(0, divergence));
   });
 });
