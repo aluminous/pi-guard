@@ -80,4 +80,28 @@ describe("isCommandAllowlisted", () => {
     assert.equal(isCommandAllowlisted("git log --oneline -5", DEFAULT_COMMAND_ALLOWLIST), true);
     assert.equal(isCommandAllowlisted("git push origin main", DEFAULT_COMMAND_ALLOWLIST), false);
   });
+
+  it("pins the read-only spellings in the expanded defaults", () => {
+    // Exact read-only forms pass; the mutating spellings of the same tools don't.
+    assert.equal(isCommandAllowlisted("git remote -v", DEFAULT_COMMAND_ALLOWLIST), true);
+    assert.equal(isCommandAllowlisted("git remote add origin git@github.com:x/y.git", DEFAULT_COMMAND_ALLOWLIST), false);
+    assert.equal(isCommandAllowlisted("git stash list", DEFAULT_COMMAND_ALLOWLIST), true);
+    assert.equal(isCommandAllowlisted("git stash pop", DEFAULT_COMMAND_ALLOWLIST), false);
+    assert.equal(isCommandAllowlisted("git tag", DEFAULT_COMMAND_ALLOWLIST), true);
+    assert.equal(isCommandAllowlisted("git tag v1.0.0", DEFAULT_COMMAND_ALLOWLIST), false);
+    assert.equal(isCommandAllowlisted("git config --get user.name", DEFAULT_COMMAND_ALLOWLIST), true);
+    assert.equal(isCommandAllowlisted("git config user.name Mallory", DEFAULT_COMMAND_ALLOWLIST), false);
+    assert.equal(isCommandAllowlisted("env", DEFAULT_COMMAND_ALLOWLIST), true);
+    assert.equal(isCommandAllowlisted("env rm -rf /", DEFAULT_COMMAND_ALLOWLIST), false);
+    assert.equal(isCommandAllowlisted("date", DEFAULT_COMMAND_ALLOWLIST), true);
+    assert.equal(isCommandAllowlisted("date -s 2020-01-01", DEFAULT_COMMAND_ALLOWLIST), false);
+    // Write-capable classics stay out entirely.
+    assert.equal(isCommandAllowlisted("sed -n 1p file.txt", DEFAULT_COMMAND_ALLOWLIST), false);
+    assert.equal(isCommandAllowlisted("find . -name '*.ts'", DEFAULT_COMMAND_ALLOWLIST), false);
+    assert.equal(isCommandAllowlisted("sort data.txt", DEFAULT_COMMAND_ALLOWLIST), false);
+    // Chained inspection built from the new entries.
+    assert.equal(isCommandAllowlisted("du -sh node_modules | sort -h", DEFAULT_COMMAND_ALLOWLIST), false);
+    assert.equal(isCommandAllowlisted("git rev-parse HEAD && git describe --tags", DEFAULT_COMMAND_ALLOWLIST), true);
+    assert.equal(isCommandAllowlisted("cat package.json | jq .scripts", DEFAULT_COMMAND_ALLOWLIST), true);
+  });
 });

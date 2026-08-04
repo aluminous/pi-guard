@@ -203,8 +203,15 @@ restores wholesale replacement for the lists they provide.
 deterministically. A rule is words plus an optional trailing `*`: `"pwd"`
 matches exactly that command with no arguments, `"git status *"` matches
 `git status` with any arguments. Heads compare verbatim (`/usr/bin/grep`
-does not match `"grep *"`). The defaults cover modest read-only commands
-like `grep`, `rg`, `ls`, `cat`, and `git status`/`log`/`diff`.
+does not match `"grep *"`). The defaults cover read-only inspection
+(`grep`, `rg`, `ls`, `cat`, `diff`, `du`, `jq`, hashing, …), read-only
+system probes (`ps`, `printenv`, bare `env`/`date`/`hostname`), git's
+read-only spellings (`status`/`log`/`diff`/`show`/`blame`/`grep`, exact
+forms like `git remote -v`, `git stash list`, `git config --get`), and
+toolchain version probes. The inclusion bar: every invocation matching a
+template must be unable to write files, run other programs, or use the
+network — which is why `find`, `sed`, `awk`, `sort`, `tee`, and `env CMD`
+are deliberately absent (see the comment in `src/command-allowlist.ts`).
 
 Commands are parsed with a minimal shell grammar, and a chain (`&&`, `||`,
 `;`, `|`, newlines) is exempt only when *every* command in it matches a rule:

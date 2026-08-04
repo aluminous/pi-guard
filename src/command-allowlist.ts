@@ -11,8 +11,22 @@ import { literalWordText, parseShellCommand, type ShellCommand } from "./shell-p
  * jobs — parses fine and is conservatively not allowlisted.
  */
 
-/** Default allowlist: modest read-only commands whose reach is bounded by the sandbox. */
+/**
+ * Default allowlist. Inclusion bar: EVERY invocation matching a template must
+ * be unable to write files, execute other programs, or reach the network —
+ * the sandbox is the outer bound, but these skip semantic review entirely, so
+ * the templates themselves must be write-proof. That bar is why some obvious
+ * candidates are deliberately absent: find (-exec/-delete), sed (-i), awk
+ * (in-program `print > file`), sort (-o), uniq (positional outfile), xxd
+ * (-r with outfile), tee and tree (-o) write files; env/command/xargs/
+ * timeout/time run other programs; date/hostname with args can attempt to
+ * set system state, so only their bare forms are listed. Mutating git
+ * subcommands (remote add, tag NAME, config KEY VAL, stash push, reflog
+ * expire) are excluded by pinning those subcommands to their read-only
+ * spellings.
+ */
 export const DEFAULT_COMMAND_ALLOWLIST: string[] = [
+  // File and text inspection (stdout-only)
   "grep *",
   "rg *",
   "ls *",
@@ -22,15 +36,82 @@ export const DEFAULT_COMMAND_ALLOWLIST: string[] = [
   "wc *",
   "pwd",
   "which *",
+  "type *",
   "file *",
   "stat *",
   "echo *",
+  "du *",
+  "df *",
+  "diff *",
+  "cmp *",
+  "comm *",
+  "basename *",
+  "dirname *",
+  "realpath *",
+  "readlink *",
+  "nl *",
+  "cut *",
+  "tr *",
+  "column *",
+  "od *",
+  "hexdump *",
+  "strings *",
+  "jq *",
+  "shasum *",
+  "sha256sum *",
+  "md5 *",
+  "cksum *",
+  // System introspection (read-only forms)
+  "printenv *",
+  "env",
+  "ps *",
+  "id",
+  "whoami",
+  "groups",
+  "hostname",
+  "date",
+  "uname *",
+  "sw_vers *",
+  "defaults read *",
+  "sleep *",
+  // Git, read-only spellings only
   "git status *",
   "git log *",
   "git diff *",
   "git show *",
   "git branch *",
   "git blame *",
+  "git grep *",
+  "git shortlog *",
+  "git describe *",
+  "git rev-parse *",
+  "git ls-files *",
+  "git merge-base *",
+  "git show-ref *",
+  "git remote",
+  "git remote -v",
+  "git stash list",
+  "git worktree list",
+  "git tag",
+  "git tag -l *",
+  "git tag --list *",
+  "git config --list",
+  "git config -l",
+  "git config --get *",
+  "git reflog",
+  "git reflog show *",
+  // Toolchain probes
+  "git --version",
+  "node --version",
+  "node -v",
+  "npm --version",
+  "npm ls *",
+  "python3 --version",
+  "python --version",
+  "go version",
+  "cargo --version",
+  "rustc --version",
+  "tsc --version",
 ];
 
 /**
