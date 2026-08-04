@@ -390,3 +390,45 @@ Taxonomy consequences adopted into the sketch:
    nicety; it is how this class is meant to be used).
 4. Broad reads defaulting allow confirms the read-exemption direction and
    keeps the read classes out of the friction budget entirely.
+
+### Adopted (2026-08-05): network-fetch is a class
+
+`network-fetch` joins the core taxonomy, default **judge**. Outbound
+sensitive data is never network-fetch (that is credentials /
+off-machine-effects by classification, regardless of domain). The domain
+allowlist remains sandbox enforcement input; promoting it to a
+deterministic trusted-fetch mapper (trusted domain → allow without review)
+is a later refinement — v1 labeling of fetches comes from the classifier,
+so network policy finally exists even with the sandbox off.
+
+### Adopted (2026-08-05): the disposition settings page replaces /guard policy
+
+The interactive page becomes THE policy surface (mechanism/rule view stays
+reachable as `/guard policy rules` — Stage 0's provenance annotations live
+there). Spec:
+
+- One row per class: name · disposition · session hit stats (hits, allows,
+  denies; asks when present). Left/right (or Enter) cycles
+  allow / ask / deny / judge on the highlighted row.
+- Every toggle takes effect immediately at **session scope**. Rows whose
+  effective disposition differs from the persisted value are highlighted in
+  a distinct color. **Ctrl+S persists** the current table globally
+  (persistent-settings pattern); highlights clear on save.
+- Stats refresh live (liveView refresh hook). Esc closes. Docked panel like
+  the other guard views; select-dialog degradation over RPC.
+- Adding/editing/defining classes in-page: explicitly deferred.
+
+Bootstrap defaults (maintainer calibration): read-project, read-system,
+run-dev-tools, modify-project, install-dependencies → **allow**;
+off-machine-effects → **ask**; credentials, local-destructive,
+persistence, network-fetch, unclassified → **judge**.
+
+v1 enforcement semantics (leapfrogs Stage 1's observe-first caution at
+maintainer direction; telemetry records label vs legacy decisions for
+audit): deterministic mappers (read exemption → read-project, command
+allowlist tags, path denies → credentials) resolve via the table directly;
+classifier emits a label set alongside its decision and the table resolves
+by severity-max over labels, with the classifier's own decision used only
+when no label is emitted. `judge` is a documented placeholder for full
+classifier review until the strong-model judge exists. `ask` uses the
+existing approval dialog; approval comments keep feeding session guidance.
