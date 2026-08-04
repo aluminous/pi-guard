@@ -123,7 +123,7 @@ export function updateGuardStatus(ctx: ExtensionContext, state: RuntimeState): v
     ctx.ui.setStatus("guard", warning(`Guard: ${label} ${compact}`));
     return;
   }
-  const backend = state.backend?.name ?? config?.backend ?? "unknown";
+  const backend = `${state.backend?.name ?? config?.backend ?? "unknown"}${state.readOnly ? " RO" : ""}`;
   const network = config ? networkPolicyLabel(config) : "network unknown";
   const hasImportantStats = stats.classifierDenials > 0 || stats.blocked > 0 || stats.errors > 0;
   ctx.ui.setStatus("guard", `${muted(`Guard: ${backend}, ${network}, ${classifierModelLabel(ctx, config, state)} `)}${hasImportantStats ? warning(compact) : muted(compact)}`);
@@ -157,6 +157,7 @@ export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConf
     "",
     "## Status",
     `  ${health}`,
+    `  Read-only mode: ${state.readOnly ? "on" : "off"}`,
     `  Backend: ${state.backend?.name ?? config.backend}`,
     `  ${network}`,
     state.lastError ? `  Last error: ${state.lastError}` : undefined,

@@ -83,6 +83,7 @@ Commands — everything lives under `/guard`, with argument autocomplete:
 - `/guard on`: enable Pi Guard.
 - `/guard off`: disable for the next agent turn, then re-enable automatically.
 - `/guard off session`: disable until the session ends.
+- `/guard readonly` (or `ro`, or ctrl+alt+r): toggle session read-only mode — `write`/`edit` are blocked, `bash` is classifier-reviewed under a restrictive default-deny ruleset (and blocked outright if the classifier is off).
 - `/guard model`: choose the classifier model interactively.
 - `/guard model auto|current|off|provider/model-id`: set the classifier model directly and save it globally. `auto` (the default) picks the best available known-good model, preferring subscription providers.
 - `/guard model status`: print classifier status, resolved model, and available models.

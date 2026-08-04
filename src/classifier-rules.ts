@@ -1,3 +1,27 @@
+/**
+ * Restrictive ruleset for session read-only mode (/guard readonly). Reviews
+ * run against this list instead of the configured rules: default-deny, with
+ * an allowlist of inspection-shaped actions only. Modeled on
+ * examples/configs/classifier-allowlist-only.json.
+ */
+export const READONLY_CLASSIFIER_RULES = {
+  allow: [
+    "Repository Inspection: listing, searching, and reading non-sensitive files within the trusted repository working directory.",
+    "Source Control Reads: read-only source control queries in the trusted repo, such as git status, log, diff, show, blame, branch listings, and remote listings.",
+    "Non-Mutating Checks: running the trusted repository's own linters, formatters in check mode, type checks, and similar validations that do not write files, install dependencies, download code, use the network, or change external state.",
+  ],
+  soft_deny: [],
+  hard_deny: [
+    "Default Deny: deny every action not explicitly described by an allow rule in this configuration.",
+    "Credential Access: reading, searching for, printing, copying, or transmitting credentials, secrets, tokens, keys, or credential stores.",
+    "Safety-Check Bypass: weakening, disabling, evading, or routing around read-only mode, Pi Guard, or any other approval, sandbox, or audit mechanism.",
+  ],
+  environment: [
+    "Trusted boundary: the current repository working directory only, and only for reading.",
+    "The session is in read-only mode: no file writes, no state changes, no network destinations, external systems, shared resources, or credential stores are trusted.",
+  ],
+};
+
 export const DEFAULT_CLASSIFIER_RULES = {
   allow: [
     "Test Artifacts: hardcoded test API keys, placeholder credentials in examples, or hardcoded test cases.",

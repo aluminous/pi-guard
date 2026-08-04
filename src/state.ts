@@ -52,6 +52,8 @@ export interface RuntimeState {
   backend: GuardBackend | undefined;
   enabled: boolean;
   disabledForNextAgent: boolean;
+  /** Session read-only mode: write/edit blocked, bash reviewed under READONLY_CLASSIFIER_RULES (blocked if the classifier is off). */
+  readOnly: boolean;
   initialized: boolean;
   lastError: string | undefined;
   warnings: string[];
@@ -99,6 +101,7 @@ export function createRuntimeState(): RuntimeState {
     backend: undefined,
     enabled: false,
     disabledForNextAgent: false,
+    readOnly: false,
     initialized: false,
     lastError: undefined,
     warnings: [],
@@ -116,6 +119,7 @@ export function resetSessionState(state: RuntimeState): void {
   state.liveView = undefined;
   state.enabled = false;
   state.disabledForNextAgent = false;
+  state.readOnly = false;
   state.initialized = false;
   state.lastError = undefined;
   state.warnings = [];

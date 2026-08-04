@@ -2,6 +2,7 @@ import path from "node:path";
 import { getPackageDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { askGuardApproval } from "./approvals.ts";
 import { addSessionGuidance, classifierEnabled, isClassifierModelUnavailable, projectToolCall, resolveClassifierModel, reviewToolCall } from "./classifier.ts";
+import { READONLY_CLASSIFIER_RULES } from "./classifier-rules.ts";
 import type { ResolvedGuardConfig } from "./config.ts";
 import { describeAction, GUARDED_TOOLS, type GuardedToolSpec } from "./guarded-tools.ts";
 import { decidePathAccess, isClassifierExemptRead, normalizeUserPath, type AccessKind } from "./policy.ts";
@@ -148,6 +149,26 @@ function isExemptReadCall(spec: GuardedToolSpec, input: Record<string, unknown>,
   return isPiPackageDocsOrExamplePath(canonicalTarget) || isClassifierExemptRead(config, cwd, target);
 }
 
+/**
+ * Session read-only mode (/guard readonly): write and edit are blocked
+ * deterministically; bash must be classifier-reviewed (under
+ * READONLY_CLASSIFIER_RULES) and is blocked outright when the classifier is
+ * disabled — the sandbox still permits writes inside the configured roots, so
+ * letting bash run unreviewed would silently break the read-only promise.
+ */
+function enforceReadOnlyMode(toolName: string, state: RuntimeState, config: ResolvedGuardConfig, spec: GuardedToolSpec): ToolCallBlock | undefined {
+  const block = (reason: string): ToolCallBlock => {
+    recordPolicyBlock(state, toolName, reason);
+    appendGuardTelemetry(state, { kind: "block", tool: toolName, reason });
+    return { block: true, reason: `${reason}. Do not work around the guard; ask the user to toggle read-only mode off (/guard readonly) if changes are wanted.` };
+  };
+  if (spec.access.includes("write")) return block(`${toolName} blocked: guard is in read-only mode`);
+  if (toolName === "bash" && !classifierEnabled(config, state.classifier)) {
+    return block("bash blocked: guard is in read-only mode and the classifier is off, so commands cannot be reviewed for writes");
+  }
+  return undefined;
+}
+
 export async function interceptToolCall(
   event: { toolName: string; input: unknown },
   ctx: ExtensionContext,
@@ -160,6 +181,11 @@ export async function interceptToolCall(
 
   const spec = GUARDED_TOOLS[event.toolName];
   if (!spec) return;
+
+  if (state.readOnly) {
+    const denied = enforceReadOnlyMode(event.toolName, state, config, spec);
+    if (denied) return denied;
+  }
 
   const path = await enforcePathPolicy(event, ctx, state, config, spec, input);
   if (path.outcome === "done") return;
@@ -189,7 +215,14 @@ async function runClassifierReview(
     telemetryModel = undefined;
   }
   try {
-    const result = await reviewToolCall({ ctx, config, state: state.classifier, toolName: event.toolName, input: event.input });
+    const result = await reviewToolCall({
+      ctx,
+      config,
+      state: state.classifier,
+      toolName: event.toolName,
+      input: event.input,
+      rulesOverride: state.readOnly ? READONLY_CLASSIFIER_RULES : undefined,
+    });
     const latencyMs = Math.round(performance.now() - startedAt);
     state.classifier.lastDecision = { ...result, toolName: event.toolName, at: Date.now() };
     state.classifier.lastError = undefined;
@@ -252,7 +285,10 @@ async function runClassifierReview(
       ctx.abort();
       return { block: true, reason: `Guard classifier unavailable: ${reason}. This turn was stopped for user intervention.` };
     }
-    if (!config.classifier.failClosed) {
+    // Read-only mode never fails open for bash: an unreviewed command could
+    // still perform sandbox-allowed writes, silently breaking the read-only
+    // promise, so a review failure must block even with failClosed disabled.
+    if (!config.classifier.failClosed && !(state.readOnly && event.toolName === "bash")) {
       ctx.ui.notify(`Guard classifier failed open: ${reason}`, "warning");
       return;
     }

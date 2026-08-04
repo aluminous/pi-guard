@@ -1,6 +1,6 @@
 import { complete, type Message, type Model, type Api } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ResolvedGuardConfig } from "./config.ts";
+import type { ResolvedClassifierConfig, ResolvedGuardConfig } from "./config.ts";
 import {
   buildFastReviewText,
   buildFullReviewText,
@@ -221,6 +221,8 @@ export async function runReview(params: {
   toolName: string;
   input: unknown;
   sessionGuidance?: string[];
+  /** Replaces the config's classifier rules for this review (read-only mode passes READONLY_CLASSIFIER_RULES). */
+  rulesOverride?: ResolvedClassifierConfig["rules"];
   /**
    * Eval/measurement knob: skip the fast triviality stage and run the full
    * review directly. Used by the offline eval runner to quantify what the
@@ -229,7 +231,10 @@ export async function runReview(params: {
    */
   skipFastStage?: boolean;
 }): Promise<ClassifierResult> {
-  const projection = projectToolCall(params.toolName, params.input, params.io.cwd, params.config);
+  const config = params.rulesOverride
+    ? { ...params.config, classifier: { ...params.config.classifier, rules: params.rulesOverride } }
+    : params.config;
+  const projection = projectToolCall(params.toolName, params.input, params.io.cwd, config);
   const guidance = params.sessionGuidance ?? [];
   const budget: RetryBudget = { attempts: 0, maxAttempts: 5 };
   const usage: ClassifierTokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -238,8 +243,8 @@ export async function runReview(params: {
       model: params.model,
       io: params.io,
       systemPrompt: FAST_SYSTEM_PROMPT,
-      text: buildFastReviewText(projection, params.config, guidance),
-      timeoutMs: params.config.classifier.timeoutMs,
+      text: buildFastReviewText(projection, config, guidance),
+      timeoutMs: config.classifier.timeoutMs,
       budget,
     });
     usage.input += fastResponse.usage?.input ?? 0;
@@ -256,8 +261,8 @@ export async function runReview(params: {
     model: params.model,
     io: params.io,
     systemPrompt: FULL_SYSTEM_PROMPT,
-    text: buildFullReviewText(params.io.recentUserMessages(), projection, params.config, guidance),
-    timeoutMs: params.config.classifier.timeoutMs,
+    text: buildFullReviewText(params.io.recentUserMessages(), projection, config, guidance),
+    timeoutMs: config.classifier.timeoutMs,
     budget,
   });
   usage.input += fullResponse.usage?.input ?? 0;
@@ -274,6 +279,8 @@ export async function reviewToolCall(params: {
   state: ClassifierState;
   toolName: string;
   input: unknown;
+  /** Replaces the config's classifier rules for this review (read-only mode passes READONLY_CLASSIFIER_RULES). */
+  rulesOverride?: ResolvedClassifierConfig["rules"];
   completeFn?: CompleteFn;
 }): Promise<ClassifierResult> {
   const model = resolveClassifierModel(params.ctx, params.config, params.state);
@@ -286,6 +293,7 @@ export async function reviewToolCall(params: {
     toolName: params.toolName,
     input: params.input,
     sessionGuidance: params.state.sessionGuidance,
+    rulesOverride: params.rulesOverride,
   });
 }
 

@@ -22,6 +22,7 @@ const SUBCOMMANDS: Array<{ value: string; description: string }> = [
   { value: "on", description: "Enable the guard" },
   { value: "off", description: "Disable for the next agent turn, then re-enable" },
   { value: "off session", description: "Disable until the session ends (unguarded!)" },
+  { value: "readonly", description: "Toggle read-only mode: write/edit blocked, bash restricted" },
   { value: "model", description: "Choose the classifier model (auto|current|off|provider/model)" },
   { value: "smoke", description: "Run sandbox and classifier smoke tests" },
   { value: "critique", description: "Critique the classifier rules with a model" },
@@ -55,6 +56,12 @@ export function createGuardCommand(deps: GuardCommandDeps) {
   async function disableSession(ctx: ExtensionContext): Promise<void> {
     await deps.disableGuard(ctx, "session");
     show(ctx, "Pi Guard disabled for this session; bash and file-tool policy checks are unguarded.", "warning");
+  }
+
+  function toggleReadOnly(ctx: ExtensionContext): void {
+    state.readOnly = !state.readOnly;
+    if (state.readOnly) show(ctx, "Guard read-only mode on: write/edit are blocked and bash is restricted to read-only commands.");
+    else show(ctx, "Guard read-only mode off.");
   }
 
   /** TUI: toggle the live popup. RPC: toggle a live widget. Headless: print to stdout. Never posted to the agent. */
@@ -104,7 +111,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     }
   }
 
-  type PanelAction = "on" | "off-turn" | "off-session" | "model" | "statusline" | "smoke" | "critique" | "status" | "policy";
+  type PanelAction = "on" | "off-turn" | "off-session" | "readonly" | "model" | "statusline" | "smoke" | "critique" | "status" | "policy";
 
   async function openPanel(ctx: ExtensionContext): Promise<void> {
     const items: SelectItem<PanelAction>[] = [];
@@ -117,6 +124,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
       );
     }
     items.push(
+      { value: "readonly", label: `Read-only mode: ${state.readOnly ? "on" : "off"}`, searchText: "readonly read only ro toggle mode", description: "Block write/edit and restrict bash to read-only commands" },
       { value: "model", label: "Classifier model…", searchText: "model classifier auto choose select", description: "Pick auto, the current model, a specific model, or turn review off" },
       { value: "statusline", label: "Statusline visibility…", searchText: "statusline status line visibility always never auto hide show", description: "Show the guard statusline always, never, or only when notable" },
       { value: "smoke", label: "Run smoke tests", searchText: "smoke test verify sandbox classifier", description: "Verify sandboxed execution and classifier decisions end to end" },
@@ -137,6 +145,8 @@ export function createGuardCommand(deps: GuardCommandDeps) {
         if (ok) return disableSession(ctx);
         return;
       }
+      case "readonly":
+        return toggleReadOnly(ctx);
       case "model":
         return runModelCommand("", ctx, state);
       case "statusline":
@@ -175,11 +185,12 @@ export function createGuardCommand(deps: GuardCommandDeps) {
       if (rest.toLowerCase() === "session") return disableSession(ctx);
       if (!rest) return disableTurn(ctx);
     }
+    if ((sub === "readonly" || sub === "ro") && !rest) return toggleReadOnly(ctx);
     if (sub === "model") return runModelCommand(rest, ctx, state);
     if (sub === "smoke" && !rest) return deps.runGuardSmoke(ctx);
     if (sub === "critique") return deps.runCritique(rest, ctx);
 
-    show(ctx, "Usage: /guard [status|policy|on|off|off session|model …|smoke|critique …]", "warning");
+    show(ctx, "Usage: /guard [status|policy|on|off|off session|readonly|model …|smoke|critique …]", "warning");
   }
 
   function getArgumentCompletions(argumentPrefix: string) {

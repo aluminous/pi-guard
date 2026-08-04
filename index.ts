@@ -196,8 +196,15 @@ export default function (pi: ExtensionAPI) {
   const guardCommand = createGuardCommand({ state, enableGuard, disableGuard, runGuardSmoke, runCritique });
 
   pi.registerCommand("guard", {
-    description: "Pi Guard control panel; or: status|on|off|off session|model|smoke|critique",
+    description: "Pi Guard control panel; or: status|on|off|off session|readonly|model|smoke|critique",
     getArgumentCompletions: guardCommand.getArgumentCompletions,
     handler: guardCommand.handler,
+  });
+
+  // No built-in binding uses ctrl+alt+r; conflicts with other extensions are
+  // reported by pi's extension runner as shortcut diagnostics.
+  pi.registerShortcut("ctrl+alt+r", {
+    description: "Toggle guard read-only mode",
+    handler: (ctx) => guardCommand.handler("readonly", ctx),
   });
 }
