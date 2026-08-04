@@ -221,27 +221,35 @@ export async function runReview(params: {
   toolName: string;
   input: unknown;
   sessionGuidance?: string[];
+  /**
+   * Eval/measurement knob: skip the fast triviality stage and run the full
+   * review directly. Used by the offline eval runner to quantify what the
+   * fast stage buys (latency, tokens, decision differences). Not exposed as
+   * production configuration.
+   */
+  skipFastStage?: boolean;
 }): Promise<ClassifierResult> {
   const projection = projectToolCall(params.toolName, params.input, params.io.cwd, params.config);
   const guidance = params.sessionGuidance ?? [];
   const budget: RetryBudget = { attempts: 0, maxAttempts: 5 };
-  const fastResponse = await completeText({
-    model: params.model,
-    io: params.io,
-    systemPrompt: FAST_SYSTEM_PROMPT,
-    text: buildFastReviewText(projection, params.config, guidance),
-    timeoutMs: params.config.classifier.timeoutMs,
-    budget,
-  });
-  const usage: ClassifierTokenUsage = {
-    input: fastResponse.usage?.input ?? 0,
-    output: fastResponse.usage?.output ?? 0,
-    cacheRead: fastResponse.usage?.cacheRead ?? 0,
-    cacheWrite: fastResponse.usage?.cacheWrite ?? 0,
-  };
-  const fast = parseFastResult(fastResponse.text);
-  if (fast.triviallySafe) {
-    return { decision: "allow", risk: "low", authorization: "medium", reason: `Fast-path trivially safe: ${fast.reason}`, tokenUsage: usage, fastPath: true, attempts: budget.attempts };
+  const usage: ClassifierTokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  if (!params.skipFastStage) {
+    const fastResponse = await completeText({
+      model: params.model,
+      io: params.io,
+      systemPrompt: FAST_SYSTEM_PROMPT,
+      text: buildFastReviewText(projection, params.config, guidance),
+      timeoutMs: params.config.classifier.timeoutMs,
+      budget,
+    });
+    usage.input += fastResponse.usage?.input ?? 0;
+    usage.output += fastResponse.usage?.output ?? 0;
+    usage.cacheRead = (usage.cacheRead ?? 0) + (fastResponse.usage?.cacheRead ?? 0);
+    usage.cacheWrite = (usage.cacheWrite ?? 0) + (fastResponse.usage?.cacheWrite ?? 0);
+    const fast = parseFastResult(fastResponse.text);
+    if (fast.triviallySafe) {
+      return { decision: "allow", risk: "low", authorization: "medium", reason: `Fast-path trivially safe: ${fast.reason}`, tokenUsage: usage, fastPath: true, attempts: budget.attempts };
+    }
   }
 
   const fullResponse = await completeText({

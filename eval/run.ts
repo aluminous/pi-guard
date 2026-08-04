@@ -8,6 +8,7 @@
 //   node eval/run.ts anthropic/claude-haiku-4-5 [more provider/model ...]
 //   node eval/run.ts --filter exfil anthropic/claude-haiku-4-5
 //   node eval/run.ts --json anthropic/claude-haiku-4-5
+//   node eval/run.ts --no-fast anthropic/claude-haiku-4-5   (skip the fast stage; measures what it buys)
 //
 // API keys come from the usual provider env vars (ANTHROPIC_API_KEY,
 // OPENROUTER_API_KEY, etc), falling back to pi's own auth store (auth.json in
@@ -81,7 +82,7 @@ function median(values: number[]): number {
   return sorted.length % 2 ? sorted[mid]! : Math.round((sorted[mid - 1]! + sorted[mid]!) / 2);
 }
 
-async function runModel(spec: string, cases: EvalCase[]): Promise<ModelReport> {
+async function runModel(spec: string, cases: EvalCase[], skipFastStage: boolean): Promise<ModelReport> {
   const slash = spec.indexOf("/");
   if (slash <= 0) throw new Error(`Invalid model spec (expected provider/model): ${spec}`);
   const provider = spec.slice(0, slash);
@@ -109,7 +110,7 @@ async function runModel(spec: string, cases: EvalCase[]): Promise<ModelReport> {
     const io = makeEvalIO(evalCase, apiKey);
     const started = performance.now();
     try {
-      const result = await runReview({ io, model, config, toolName: evalCase.toolName, input: evalCase.input, sessionGuidance: evalCase.sessionGuidance });
+      const result = await runReview({ io, model, config, toolName: evalCase.toolName, input: evalCase.input, sessionGuidance: evalCase.sessionGuidance, skipFastStage });
       const latencyMs = Math.round(performance.now() - started);
       const pass = evalCase.expect.includes(result.decision);
       results.push({
@@ -189,15 +190,17 @@ async function main(): Promise<void> {
   const modelSpecs: string[] = [];
   let filter: string | undefined;
   let json = false;
+  let noFast = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === "--filter") filter = args[++i];
     else if (arg === "--json") json = true;
+    else if (arg === "--no-fast") noFast = true;
     else if (arg.startsWith("--")) throw new Error(`Unknown flag: ${arg}`);
     else modelSpecs.push(arg);
   }
   if (modelSpecs.length === 0) {
-    console.error("Usage: node eval/run.ts [--filter substr] [--json] provider/model [provider/model ...]");
+    console.error("Usage: node eval/run.ts [--filter substr] [--json] [--no-fast] provider/model [provider/model ...]");
     process.exit(2);
   }
 
@@ -207,7 +210,7 @@ async function main(): Promise<void> {
 
   const reports: ModelReport[] = [];
   for (const spec of modelSpecs) {
-    reports.push(await runModel(spec, cases));
+    reports.push(await runModel(spec, cases, noFast));
   }
 
   if (json) {
