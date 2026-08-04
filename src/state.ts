@@ -68,6 +68,8 @@ export interface RuntimeState {
   recent: GuardEvent[];
   /** provider/id specs with configured auth, cached at session start for argument completions (which get no ctx). */
   availableModelSpecs: string[];
+  /** Child identities (session file/transcript) already warned about running without guard acknowledgement. */
+  subagentAckWarned: Set<string>;
   /** Writes a custom entry to pi's session log (pi.appendEntry). Undefined in tests without session wiring. */
   appendEntry?: (customType: string, data: unknown) => void;
 }
@@ -110,6 +112,7 @@ export function createRuntimeState(): RuntimeState {
     stats: createGuardStats(),
     recent: [],
     availableModelSpecs: [],
+    subagentAckWarned: new Set(),
   };
 }
 
@@ -126,6 +129,7 @@ export function resetSessionState(state: RuntimeState): void {
   state.classifier = {};
   state.approvals = { read: [], write: [] };
   state.stats = createGuardStats();
+  state.subagentAckWarned = new Set();
 }
 
 /** Resets the per-turn counters. A "turn" spans from one user message to the next, not each agent loop iteration. */

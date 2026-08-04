@@ -11,6 +11,7 @@ import { interceptToolCall } from "./src/interceptor.ts";
 import { compileFilesystemPolicy, summarizeDegradedPatterns } from "./src/policy.ts";
 import { createRuntimeState, resetSessionState, resetTurnStats } from "./src/state.ts";
 import { registerGuardMessageRenderer, updateGuardStatus } from "./src/status.ts";
+import { acknowledgeGuardInSubagentChild, warnUnacknowledgedSubagents } from "./src/subagents-interop.ts";
 import { createGuardedBashOps } from "./src/tools/bash.ts";
 import { formatError } from "./src/util.ts";
 
@@ -99,6 +100,12 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
+  // pi-subagents interop: warn when a finished subagent child never acknowledged
+  // the guard on its event bus — that child ran with no guard (see subagents-interop.ts).
+  pi.on("tool_result", (event, ctx) => {
+    warnUnacknowledgedSubagents(event, ctx, state);
+  });
+
   // turn_start/turn_end fire on every agent-loop iteration; per-turn stats span a whole user prompt, so reset on agent_start.
   pi.on("agent_start", (_event, ctx) => {
     resetTurnStats(state);
@@ -149,6 +156,8 @@ export default function (pi: ExtensionAPI) {
       try {
         await enableGuard(ctx);
         ctx.ui.notify(`Guard initialized with ${state.backend?.name ?? config.backend} backend.`, "info");
+        // In a pi-subagents child, prove to the parent that the guard is enforcing here.
+        acknowledgeGuardInSubagentChild(pi, state);
       } catch (error) {
         state.initialized = false;
         state.lastError = formatError(error);

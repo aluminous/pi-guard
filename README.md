@@ -333,6 +333,26 @@ extension-UI requests to the parent's UI — that works with unmodified
 pi-guard. A guard-to-guard approval side channel was considered and deferred
 (see [docs/history/FEEDBACK_PLAN.md](docs/history/FEEDBACK_PLAN.md)).
 
+### pi-subagents interop
+
+The [`pi-subagents`](https://github.com/nicobailon/pi-subagents) extension
+(not affiliated; also distinct from the npm `pi-guard` package it recommends
+for bash policy) spawns children that inherit your installed extensions by
+default, so each child runs its own guard instance. Pi Guard participates in
+its acknowledgement channel both ways:
+
+- **As a child**, when the guard is enforcing it emits
+  `subagent:acknowledge-extension` (id `pi-extension-guard`) so the run
+  status records that the child was guarded.
+- **As the parent**, it inspects `subagent`/`subagent_wait` results and warns
+  once per finished child that never acknowledged — that child ran
+  unguarded. Common causes: the agent profile declares `extensions:`
+  frontmatter, `subagents.defaultExtensions` is set, a capability ceiling
+  passes `--no-extensions`, the agent is an external-CLI runner, or the
+  guard was loaded via `pi -ne -e` and is not in ambient settings.
+
+Both channels are best-effort observability, never enforcement.
+
 ## Decision telemetry
 
 Every guard decision — classifier reviews, deterministic policy blocks, path
