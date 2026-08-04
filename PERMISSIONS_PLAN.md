@@ -265,3 +265,36 @@ Open questions to settle in discussion:
    non-sandboxed case, or stay pure containment?
 5. Where does read-only mode land — a preset (disposition matrix), rather
    than a bespoke mode?
+
+---
+
+## Discussion notes (2026-08-05): taxonomy mechanics settled
+
+Three resolutions from maintainer discussion of Architecture B:
+
+1. **Decision authority moves entirely to the disposition table.** The
+   classifier (or a deterministic tag) names what an action *is*; settings
+   decide what happens. The classifier never emits allow/ask/deny. Vestige
+   of today's authorization-upgrade logic: the classifier MAY emit
+   *authorization evidence* ("user said 'push this branch'"), which only
+   ever decorates the ask prompt (making confirmation one keystroke) and
+   never bypasses it — keeping the fabricated-consent attack surface closed
+   while recovering most of the friction savings.
+2. **Multi-label classification with severity-max resolution.** Actions
+   span capabilities (`curl -o f URL` = network-fetch + modify-project;
+   chain segments map separately via the shell parser). The classifier
+   emits a small set; the strictest disposition wins (deny > ask > allow).
+   Severity-max is injection-resistant: extra benign labels cannot dilute a
+   strict one. The ask dialog lists all matched capabilities.
+3. **User-defined capabilities are first-class — they are the successor to
+   custom prose rules.** Two tiers plus a valve: a small stable core
+   taxonomy (mechanism tags, presets); user capabilities as
+   name + short prose definition + disposition ("prod-deploy: anything
+   touching the k8s prod context → deny"), managed by the existing
+   named-merge machinery, proposable from session-guidance comments; and an
+   implicit **`unclassified` capability with its own disposition
+   (default ask)** as the completeness valve. The taxonomy does not need to
+   anticipate every task: commands are unbounded but intents are few, and
+   an unanticipated intent resolving to "ask" is the correct outcome by
+   construction. Edge-case disease in user definitions is a lint concern
+   (/guard critique), not an architectural one.
