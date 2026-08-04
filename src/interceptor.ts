@@ -3,6 +3,7 @@ import { getPackageDir, type ExtensionContext } from "@earendil-works/pi-coding-
 import { askGuardApproval } from "./approvals.ts";
 import { addSessionGuidance, classifierEnabled, isClassifierModelUnavailable, projectToolCall, resolveClassifierModel, reviewToolCall } from "./classifier.ts";
 import { READONLY_CLASSIFIER_RULES } from "./classifier-rules.ts";
+import { isCommandAllowlisted } from "./command-allowlist.ts";
 import type { ResolvedGuardConfig } from "./config.ts";
 import { describeAction, GUARDED_TOOLS, type GuardedToolSpec } from "./guarded-tools.ts";
 import { decidePathAccess, isClassifierExemptRead, normalizeUserPath, type AccessKind } from "./policy.ts";
@@ -150,20 +151,37 @@ function isExemptReadCall(spec: GuardedToolSpec, input: Record<string, unknown>,
 }
 
 /**
+ * Stage 2 for bash: deterministic classifier exemption for allowlisted
+ * commands. Unlike the read exemption this applies only while the sandbox is
+ * actually enforcing (filesystem restrictions on, backend initialized, and it
+ * is Seatbelt): "grep *" is only safe because Seatbelt bounds what grep can
+ * read and write. Without that containment an allowlisted head could still
+ * reach credentials (grep over ~/.ssh), so review stays on.
+ */
+function isExemptCommandCall(toolName: string, input: Record<string, unknown>, state: RuntimeState, config: ResolvedGuardConfig): boolean {
+  if (toolName !== "bash") return false;
+  if (!config.filesystem.enabled || !state.initialized || state.backend?.name !== "seatbelt") return false;
+  return typeof input.command === "string" && isCommandAllowlisted(input.command, config.commands.allow);
+}
+
+/**
  * Session read-only mode (/guard readonly): write and edit are blocked
  * deterministically; bash must be classifier-reviewed (under
  * READONLY_CLASSIFIER_RULES) and is blocked outright when the classifier is
  * disabled — the sandbox still permits writes inside the configured roots, so
  * letting bash run unreviewed would silently break the read-only promise.
+ * Exception: deterministically allowlisted commands (grep/ls/git status …)
+ * need no review — they are read-only by construction and sandbox-bounded —
+ * so read-only mode stays usable even without a classifier.
  */
-function enforceReadOnlyMode(toolName: string, state: RuntimeState, config: ResolvedGuardConfig, spec: GuardedToolSpec): ToolCallBlock | undefined {
+function enforceReadOnlyMode(toolName: string, input: Record<string, unknown>, state: RuntimeState, config: ResolvedGuardConfig, spec: GuardedToolSpec): ToolCallBlock | undefined {
   const block = (reason: string): ToolCallBlock => {
     recordPolicyBlock(state, toolName, reason);
     appendGuardTelemetry(state, { kind: "block", tool: toolName, reason });
     return { block: true, reason: `${reason}. Do not work around the guard; ask the user to toggle read-only mode off (/guard readonly) if changes are wanted.` };
   };
   if (spec.access.includes("write")) return block(`${toolName} blocked: guard is in read-only mode`);
-  if (toolName === "bash" && !classifierEnabled(config, state.classifier)) {
+  if (toolName === "bash" && !classifierEnabled(config, state.classifier) && !isExemptCommandCall(toolName, input, state, config)) {
     return block("bash blocked: guard is in read-only mode and the classifier is off, so commands cannot be reviewed for writes");
   }
   return undefined;
@@ -183,7 +201,7 @@ export async function interceptToolCall(
   if (!spec) return;
 
   if (state.readOnly) {
-    const denied = enforceReadOnlyMode(event.toolName, state, config, spec);
+    const denied = enforceReadOnlyMode(event.toolName, input, state, config, spec);
     if (denied) return denied;
   }
 
@@ -192,7 +210,7 @@ export async function interceptToolCall(
   if (path.outcome === "block") return path.block;
 
   if (!classifierEnabled(config, state.classifier)) return;
-  if (isExemptReadCall(spec, input, ctx.cwd, config, path.allowedReadPath)) {
+  if (isExemptReadCall(spec, input, ctx.cwd, config, path.allowedReadPath) || isExemptCommandCall(event.toolName, input, state, config)) {
     recordClassifierSkip(state);
     return;
   }

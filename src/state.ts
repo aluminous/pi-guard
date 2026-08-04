@@ -21,7 +21,7 @@ export interface GuardStats {
   ruleHits: number;
   classifierHits: number;
   classifierDenials: number;
-  /** Reads exempted from classifier review by deterministic path trust. */
+  /** Reads and allowlisted commands exempted from classifier review deterministically. */
   classifierSkips: number;
   classifierInputTokens: number;
   classifierOutputTokens: number;
@@ -185,7 +185,7 @@ export function recordClassifierResult(state: RuntimeState, toolName: string, re
   pushRecent(state, { at: Date.now(), toolName, decision: result.decision, risk: result.risk, reason: result.reason });
 }
 
-/** A read skipped classifier review because its path is deterministically trusted. */
+/** A read or allowlisted command skipped classifier review deterministically. */
 export function recordClassifierSkip(state: RuntimeState): void {
   state.stats.classifierSkips++;
 }

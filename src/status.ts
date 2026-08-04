@@ -171,7 +171,7 @@ export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConf
     "",
     "## Decisions this session",
     `  Reviewed: ${state.stats.reviewed}  Allowed: ${state.stats.allowed}  Denied: ${state.stats.denied}  Asked: ${state.stats.asked}`,
-    `  Policy blocks: ${state.stats.blocked}  Exempt reads: ${state.stats.classifierSkips}  Errors: ${state.stats.errors}`,
+    `  Policy blocks: ${state.stats.blocked}  Exempt (reads/commands): ${state.stats.classifierSkips}  Errors: ${state.stats.errors}`,
     `  Tokens: ${formatTokensWithCache(state.stats)}`,
     "",
     "## Session approvals",

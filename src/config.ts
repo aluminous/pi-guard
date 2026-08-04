@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_CLASSIFIER_RULES } from "./classifier-rules.ts";
+import { DEFAULT_COMMAND_ALLOWLIST } from "./command-allowlist.ts";
 
 export type GuardBackendName = "seatbelt" | "none" | "container";
 
@@ -62,6 +63,9 @@ export interface GuardConfig {
     allowedDomains?: string[];
     deniedDomains?: string[];
   };
+  commands?: {
+    allow?: string[];
+  };
   classifier?: ClassifierConfig;
   seatbelt?: Record<string, unknown>;
   container?: Record<string, unknown>;
@@ -86,6 +90,9 @@ export interface ResolvedGuardConfig {
     enabled: boolean;
     allowedDomains: string[];
     deniedDomains: string[];
+  };
+  commands: {
+    allow: string[];
   };
   classifier: ResolvedClassifierConfig;
   seatbelt: Record<string, unknown>;
@@ -221,6 +228,9 @@ export const DEFAULT_CONFIG: ResolvedGuardConfig = {
     allowedDomains: defaultAllowedNetworkDomains(),
     deniedDomains: ["*"],
   },
+  commands: {
+    allow: [...DEFAULT_COMMAND_ALLOWLIST],
+  },
   classifier: {
     enabled: false,
     model: "auto",
@@ -303,6 +313,7 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
     filesystem: { ...base.filesystem },
     environment: { ...base.environment },
     network: { ...base.network },
+    commands: { ...base.commands },
     classifier: { ...base.classifier },
     seatbelt: { ...base.seatbelt },
     container: { ...base.container },
@@ -336,6 +347,10 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
     if (typeof override.network.enabled === "boolean") next.network.enabled = override.network.enabled;
     next.network.allowedDomains = asStringArray(override.network.allowedDomains, `${source}.network.allowedDomains`, diagnostics) ?? next.network.allowedDomains;
     next.network.deniedDomains = asStringArray(override.network.deniedDomains, `${source}.network.deniedDomains`, diagnostics) ?? next.network.deniedDomains;
+  }
+
+  if (isObject(override.commands)) {
+    next.commands.allow = asStringArray(override.commands.allow, `${source}.commands.allow`, diagnostics) ?? next.commands.allow;
   }
 
   if (isObject(override.classifier)) {

@@ -197,6 +197,34 @@ Profiles that define a complete rule set from scratch (like the
 `classifier-*-only` examples) set `"replace": true` inside `rules`, which
 restores wholesale replacement for the lists they provide.
 
+### Command allowlist
+
+`commands.allow` lists command templates that skip classifier review
+deterministically. A rule is words plus an optional trailing `*`: `"pwd"`
+matches exactly that command with no arguments, `"git status *"` matches
+`git status` with any arguments. Heads compare verbatim (`/usr/bin/grep`
+does not match `"grep *"`). The defaults cover modest read-only commands
+like `grep`, `rg`, `ls`, `cat`, and `git status`/`log`/`diff`.
+
+Commands are parsed with a minimal shell grammar, and a chain (`&&`, `||`,
+`;`, `|`, newlines) is exempt only when *every* command in it matches a rule:
+`grep a || grep b` passes `"grep *"`, `grep a; rm x` does not. Quoting is
+respected (a `;` inside quotes is data). Redirects, expansions (`$VAR`,
+`$(…)`, backticks), subshells, background `&`, and anything outside the
+grammar (heredocs, process substitution) fall through to normal review.
+
+The exemption applies only while the sandbox is actually enforcing
+(filesystem restrictions on with the Seatbelt backend initialized): `grep`
+is only safe when Seatbelt bounds what it can read.
+
+```json
+{
+  "commands": {
+    "allow": ["grep *", "git status *", "make lint"]
+  }
+}
+```
+
 The default classifier model is `"auto"`: Pi Guard picks the best available
 model from a known-good list (see `src/classifier-models.ts`), preferring
 subscription providers (openai-codex, github-copilot) over per-token providers
@@ -248,7 +276,7 @@ enabled and use an empty allowlist:
 - When filesystem restrictions are enabled, reads are allowed by default except for configured sensitive paths, and writes are limited to configured roots.
 - Environment variables are scrubbed before guarded commands are spawned: `environment.unset` patterns are removed first, then `environment.allow` (when non-empty) whitelists the rest. The default allow list passes CA-certificate variables (`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `AWS_CA_BUNDLE`, `JAVA_TOOL_OPTIONS`, and friends) so a private CA reaches sandboxed tooling; to make that work, the default unset list names explicit AWS credential variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, …) instead of a broad `AWS_*` glob, with the generic `*_TOKEN`/`*_SECRET`/`*_KEY` globs as the backstop for unknown secrets.
 - If enabled, the classifier reviews `bash`, `read`, `write`, and `edit` calls after deterministic policy checks and before execution.
-- Trusted reads skip the classifier entirely: a `read` whose canonical path is inside the session working directory or matches an explicit `allowRead` entry — and does not match `denyRead` — is deterministically exempt (0 tokens, 0 latency; counted as "Exempt reads" in the status report). The allow/deny lists are consulted for this routing even when `filesystem.enabled` is `false`, which only disables *blocking*. Writes and edits always keep classifier review: their content is the risk, no matter how trusted the path.
+- Trusted reads skip the classifier entirely: a `read` whose canonical path is inside the session working directory or matches an explicit `allowRead` entry — and does not match `denyRead` — is deterministically exempt (0 tokens, 0 latency; counted as "Exempt (reads/commands)" in the status report, together with allowlisted commands). The allow/deny lists are consulted for this routing even when `filesystem.enabled` is `false`, which only disables *blocking*. Writes and edits always keep classifier review: their content is the risk, no matter how trusted the path.
 - Classifier timeouts/network failures are retried with bounded exponential backoff up to five attempts and surfaced to the user. If no usable classifier model is available, or fail-closed review still fails after retries, Pi Guard stops the current turn for user intervention without exiting Pi.
 
 ## Approval prompts and session guidance

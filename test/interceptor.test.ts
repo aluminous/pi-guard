@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { after, describe, it } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { GuardBackend } from "../src/backends/types.ts";
 import { interceptToolCall, stopTurnForClassifierFailure } from "../src/interceptor.ts";
 import { createRuntimeState } from "../src/state.ts";
 import { makeFixtureDir, testConfig } from "./helpers.ts";
@@ -92,6 +93,46 @@ describe("classifier read exemption", () => {
     });
     const state = guardedState(config);
     const result = await interceptToolCall({ toolName: "write", input: { path: "src/app.ts", content: "x" } }, fakeCtx(cwd), state);
+    assert.equal(result?.block, true);
+    assert.equal(state.stats.classifierSkips, 0);
+  });
+});
+
+describe("classifier command exemption", () => {
+  const config = () => testConfig((c) => (c.classifier.enabled = true));
+  const enforcingState = (c: ReturnType<typeof testConfig>, backend = "seatbelt") => {
+    const state = guardedState(c);
+    state.backend = { name: backend } as GuardBackend;
+    return state;
+  };
+
+  it("skips classifier review for allowlisted commands while the sandbox is enforcing", async () => {
+    const state = enforcingState(config());
+    const result = await interceptToolCall({ toolName: "bash", input: { command: "grep foo src || git status" } }, fakeCtx(fixture.dir), state);
+    assert.equal(result, undefined);
+    assert.equal(state.stats.classifierSkips, 1);
+    assert.equal(state.stats.classifierHits, 0);
+  });
+
+  it("still reviews allowlisted commands when filesystem enforcement is off (classifier unavailable here, so the call blocks)", async () => {
+    const c = config();
+    c.filesystem.enabled = false;
+    const state = enforcingState(c);
+    const result = await interceptToolCall({ toolName: "bash", input: { command: "grep foo src" } }, fakeCtx(fixture.dir), state);
+    assert.equal(result?.block, true);
+    assert.equal(state.stats.classifierSkips, 0);
+  });
+
+  it("still reviews allowlisted commands on a non-seatbelt backend", async () => {
+    const state = enforcingState(config(), "none");
+    const result = await interceptToolCall({ toolName: "bash", input: { command: "grep foo src" } }, fakeCtx(fixture.dir), state);
+    assert.equal(result?.block, true);
+    assert.equal(state.stats.classifierSkips, 0);
+  });
+
+  it("still reviews commands with a non-allowlisted chain segment", async () => {
+    const state = enforcingState(config());
+    const result = await interceptToolCall({ toolName: "bash", input: { command: "grep foo src; curl example.com" } }, fakeCtx(fixture.dir), state);
     assert.equal(result?.block, true);
     assert.equal(state.stats.classifierSkips, 0);
   });

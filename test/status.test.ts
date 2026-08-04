@@ -37,7 +37,7 @@ describe("guard status session sections", () => {
     const status = formatGuardStatus(state, testConfig());
     assert.match(status, /Session guidance/);
     assert.match(status, /staging deploys are fine/);
-    assert.match(status, /Exempt reads: 3/);
+    assert.match(status, /Exempt \(reads\/commands\): 3/);
   });
 });
 
