@@ -2,17 +2,16 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { GuardViewKind, RuntimeState } from "./state.ts";
 import { styleGuardLine } from "./status.ts";
-import { TextOverlayViewer } from "./tui/text-overlay.ts";
-
-type OverlayHandleSlice = { unfocus(): void };
+import { GuardReportPanel } from "./tui/report-panel.ts";
 
 /**
- * TUI presentation: a floating overlay popup over the chat. Never blocks the
- * agent; refreshes live from updateGuardStatus.
+ * TUI presentation: a bordered panel docked in the editor area, exactly like
+ * pi's model chooser (non-overlay custom UI). The agent keeps streaming above
+ * it and content refreshes live from updateGuardStatus; typing resumes when
+ * it closes.
  */
-function openOverlay(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, lines: () => string[]): void {
-  let viewer: TextOverlayViewer | undefined;
-  let handle: OverlayHandleSlice | undefined;
+function openPanel(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, lines: () => string[]): void {
+  let panel: GuardReportPanel | undefined;
   let doneFn: ((value: undefined) => void) | undefined;
   let closed = false;
   const close = () => {
@@ -20,36 +19,19 @@ function openOverlay(ctx: ExtensionContext, state: RuntimeState, kind: GuardView
     closed = true;
     doneFn?.(undefined);
   };
-  const entry = { kind, refresh: () => viewer?.refresh(), close };
+  const entry = { kind, refresh: () => panel?.refresh(), close };
   state.liveView = entry;
 
   ctx.ui
-    .custom<undefined>(
-      (tui, theme, keybindings, done) => {
-        doneFn = done;
-        if (closed) {
-          done(undefined);
-          return new Text("", 0, 0);
-        }
-        viewer = new TextOverlayViewer({
-          tui,
-          theme,
-          keybindings,
-          lines,
-          styleLine: styleGuardLine,
-          onPin: () => handle?.unfocus(),
-          done,
-        });
-        return viewer;
-      },
-      {
-        overlay: true,
-        overlayOptions: { anchor: "top-right", width: "55%", minWidth: 48, margin: 1 },
-        onHandle: (overlayHandle) => {
-          handle = overlayHandle;
-        },
-      },
-    )
+    .custom<undefined>((tui, theme, keybindings, done) => {
+      doneFn = done;
+      if (closed) {
+        done(undefined);
+        return new Text("", 0, 0);
+      }
+      panel = new GuardReportPanel({ tui, theme, keybindings, lines, styleLine: styleGuardLine, done });
+      return panel;
+    })
     .finally(() => {
       closed = true;
       if (state.liveView === entry) state.liveView = undefined;
@@ -107,7 +89,7 @@ function openWidget(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewK
  */
 export function showGuardView(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, lines: () => string[]): void {
   state.liveView?.close();
-  if (ctx.mode === "tui" && ctx.hasUI) return openOverlay(ctx, state, kind, lines);
+  if (ctx.mode === "tui" && ctx.hasUI) return openPanel(ctx, state, kind, lines);
   if (ctx.hasUI) return openWidget(ctx, state, kind, lines);
   console.error("Guard views require an interactive session (TUI or RPC).");
 }

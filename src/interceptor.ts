@@ -67,6 +67,7 @@ async function askPathApproval(params: {
   }
   const answer = await askGuardApproval(
     params.ctx,
+    params.state,
     "Guard path approval",
     `${params.toolName} wants ${params.kind} access outside the configured roots:\n\n${params.path}\n\nReason: ${params.reason}\n\nApprove this path for this session?`,
   );
@@ -216,7 +217,7 @@ async function runClassifierReview(
     if (result.decision === "ask" && ctx.hasUI) {
       // Action first: the classifier's reason alone can be too vague to approve on.
       const subject = describeAction(event.toolName, telemetry.projection.inputSummary);
-      const answer = await askGuardApproval(ctx, "Guard reviewer asks for approval", `${subject}\n\n${result.reason}\n\nAllow?`);
+      const answer = await askGuardApproval(ctx, state, "Guard reviewer asks for approval", `${subject}\n\n${result.reason}\n\nAllow?`);
       if (answer.comment) {
         // addSessionGuidance already prefixes the tool name; strip it from the shared subject.
         const guidanceSubject = subject.startsWith(`${event.toolName}: `) ? subject.slice(event.toolName.length + 2) : subject;

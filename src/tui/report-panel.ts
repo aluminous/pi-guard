@@ -1,53 +1,58 @@
+import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { Container, matchesKey, Text } from "@earendil-works/pi-tui";
 import type { Keybindings } from "./select-list.ts";
 
-/** Minimal structural slice of pi-tui's TUI needed by the viewer. */
-export interface OverlayTui {
+/** Minimal structural slice of pi-tui's TUI needed by the panel. */
+export interface PanelTui {
   terminal: { rows: number };
   requestRender(): void;
 }
 
-/** Structural theme slice: fg for chrome, bold for the line styler. */
-export interface OverlayTheme {
+/** Structural theme slice: fg for chrome and borders, bold for the line styler. */
+export interface PanelTheme {
   fg(name: string, text: string): string;
   bold(text: string): string;
 }
 
 const PAGE_STEP = 10;
 
-interface TextOverlayParams {
-  tui: OverlayTui;
-  theme: OverlayTheme;
+interface ReportPanelParams {
+  tui: PanelTui;
+  theme: PanelTheme;
   keybindings: Keybindings;
   /** Produces the current content lines; re-invoked on every refresh. */
   lines(): string[];
   /** Styles a single content line for display. */
-  styleLine(line: string, theme: OverlayTheme): string;
-  /** Pin request (Tab): the opener should unfocus the overlay so typing reaches the editor again. */
-  onPin(): void;
+  styleLine(line: string, theme: PanelTheme): string;
   done(value: undefined): void;
 }
 
 /**
- * Scrollable read-only text overlay used by the guard status and policy
- * popups. Stays open while the agent works; content refreshes live via
- * refresh() (called by updateGuardStatus and a 1s timer for age labels).
- * Esc closes, Tab pins (unfocuses so the editor gets input back), arrows and
+ * Bordered read-only report panel for the guard status and policy views,
+ * docked in the editor area like pi's model chooser (non-overlay custom UI):
+ * DynamicBorder rules top and bottom to match the native dialog style. The
+ * agent keeps streaming above it; content refreshes live via refresh()
+ * (updateGuardStatus plus a 1s timer for age labels). Esc closes; arrows and
  * page keys scroll.
  */
-export class TextOverlayViewer extends Container {
-  /** Focusable: set by the TUI when overlay focus changes. */
+export class GuardReportPanel extends Container {
+  /** Focusable: set by the TUI when focus changes. */
   focused = false;
 
-  private params: TextOverlayParams;
+  private params: ReportPanelParams;
   private body = new Container();
   private scroll = 0;
   private timer: ReturnType<typeof setInterval>;
 
-  constructor(params: TextOverlayParams) {
+  constructor(params: ReportPanelParams) {
     super();
     this.params = params;
+    // jiti caveat: pi's DynamicBorder default color reads a global theme that
+    // extensions may not share — always pass the explicit color function.
+    const border = () => new DynamicBorder((text) => params.theme.fg("border", text));
+    this.addChild(border());
     this.addChild(this.body);
+    this.addChild(border());
     this.timer = setInterval(() => this.refresh(), 1000);
     this.refresh();
   }
@@ -59,9 +64,6 @@ export class TextOverlayViewer extends Container {
   refresh(): void {
     const theme = this.params.theme;
     const lines = this.params.lines();
-    // Headroom accounts for the overlay's margin/anchor chrome; too little and
-    // the footer line renders off-screen on tall content (seen at 40 rows with
-    // the policy view during TUI integration testing).
     const maxVisible = Math.max(8, this.params.tui.terminal.rows - 12);
     const maxScroll = Math.max(0, lines.length - maxVisible);
     if (this.scroll > maxScroll) this.scroll = maxScroll;
@@ -71,7 +73,7 @@ export class TextOverlayViewer extends Container {
     }
     const footer: string[] = [];
     if (maxScroll > 0) footer.push(`${this.scroll + 1}-${Math.min(lines.length, this.scroll + maxVisible)}/${lines.length} · ↑↓ scroll`);
-    footer.push(this.focused ? "Esc closes · Tab pins" : "pinned · reopen the command to close");
+    footer.push("Esc closes");
     this.body.addChild(new Text(theme.fg("muted", footer.join(" · ")), 0, 0));
     this.params.tui.requestRender();
   }
@@ -94,11 +96,6 @@ export class TextOverlayViewer extends Container {
     }
     if (matchesKey(data, "pageDown")) {
       this.scroll += PAGE_STEP;
-      this.refresh();
-      return;
-    }
-    if (matchesKey(data, "tab")) {
-      this.params.onPin();
       this.refresh();
       return;
     }

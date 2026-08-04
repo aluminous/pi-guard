@@ -78,7 +78,7 @@ Flags:
 Commands — everything lives under `/guard`, with argument autocomplete:
 
 - `/guard`: open the control panel (searchable actions with a live status header; a plain select dialog over RPC).
-- `/guard status`: toggle the live status popup — an overlay that floats over the chat, keeps updating while the agent works (decisions, approvals, session guidance), and never blocks the agent. Esc closes it, Tab pins it so you can keep typing, arrows/page keys scroll. Over RPC it toggles a live widget.
+- `/guard status`: toggle the live status view — a bordered panel docked where the editor sits (like the model chooser), updating while the agent streams above it (decisions, approvals, session guidance). Esc closes it, arrows/page keys scroll. Over RPC it toggles a live widget.
 - `/guard policy`: show the resolved policy — filesystem/network/environment rules plus the classifier's allow, soft-deny, and hard-deny rule lists and environment assumptions. Same popup/widget behavior.
 - `/guard on`: enable Pi Guard.
 - `/guard off`: disable for the next agent turn, then re-enable automatically.
