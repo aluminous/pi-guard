@@ -298,3 +298,65 @@ Three resolutions from maintainer discussion of Architecture B:
    an unanticipated intent resolving to "ask" is the correct outcome by
    construction. Edge-case disease in user definitions is a lint concern
    (/guard critique), not an architectural one.
+
+### The `judge` disposition (2026-08-05)
+
+Maintainer proposal, adopted into the sketch: dispositions become
+**allow / ask / deny / judge**. `judge` escalates the action to a strong
+model for a thoughtful review; the cheap classifier stays a pure namer.
+The full pipeline:
+
+```
+deterministic tags ──▶ cheap classifier (names capabilities only)
+        │                         │
+        └────────► disposition table ◄────────┘
+              allow | ask | deny | judge
+                                    │
+                        strong-model judge (rare, slow, costly is fine)
+                        richer but still CURATED context; verdict
+                        allow / ask / deny, ask-preferred
+```
+
+Why this is the right home for the asymmetric staging idea: the eval
+remeasurement showed an always-on cheap prefix stage does not pay (12–15%
+hit rate, pure added latency). A **policy-gated** strong review does pay,
+because judge-classes are by construction the rare-and-consequential tail
+(external-effects, source-control-share, unclassified) — the strong model
+runs on a few percent of traffic, exactly where capability demonstrably
+matters (round-2 subtle cases).
+
+Design bounds for judge (it is the largest model-authority surface, so the
+bounds are the design):
+
+1. It holds decision authority **only for classes the user explicitly
+   delegated** via the table — `judge` is the user choosing "let a strong
+   model think about this class", parallel to `ask` = "bring me in".
+2. **Severity-max still binds it**: an action also matching a deny-class is
+   denied before the judge is consulted; the judge cannot override
+   deterministic denies.
+3. Its verdict is per-action, **never a standing approval**; ask-preferred
+   decision rules (deny reserved for confirmation-can't-fix cases).
+4. Its context is richer than the namer's but still curated projections,
+   never raw transcript: recent user messages (capped), session guidance,
+   deterministic environment facts (manifests, remotes, tracked-status),
+   the action projection, and recent guard decisions (a third force-push
+   after two denials is signal). Strong models are also the most
+   injection-resistant reviewers we measured, and this is where that
+   robustness belongs.
+5. Judged separately in evals: the decision-agreement benchmark becomes the
+   judge benchmark; the namer gets a classification benchmark.
+
+Natural defaults: `unclassified: judge` (a thoughtful look before
+bothering the human; the judge asks when unsure) — friction lower than
+unclassified:ask with safety preserved. Today's soft_deny prose migrates
+into judge-class definitions plus judge decision rules.
+
+### Session-scoped dispositions (2026-08-05)
+
+Maintainer requirement, adopted: dispositions carry scopes layered like
+config — default < preset < global < project < **session**. "Allow this
+class for this session" (/guard allow install-dependencies, or an approval
+comment that proposes it) is a session-scope row; read-only mode stops
+being a bespoke mode and becomes a session preset flipping modify-* /
+share-* rows to deny; today's session path-approvals become session-scope
+capability grants. One mechanism replaces three bespoke ones.
