@@ -199,4 +199,25 @@ describe("scrubEnvironment", () => {
     assert.equal(scrubbed.RANDOM_VAR, "not-allowed");
     assert.equal(scrubbed.GITHUB_TOKEN, undefined);
   });
+
+  it("keeps AWS_CA_BUNDLE while dropping AWS credential variables with the defaults", () => {
+    const caEnv = {
+      AWS_CA_BUNDLE: "/etc/ssl/private-ca.pem",
+      AWS_ACCESS_KEY_ID: "AKIA123",
+      AWS_SECRET_ACCESS_KEY: "aws-secret",
+      AWS_SESSION_TOKEN: "aws-session",
+    };
+    const scrubbed = scrubEnvironment(caEnv, testConfig());
+    assert.equal(scrubbed.AWS_CA_BUNDLE, "/etc/ssl/private-ca.pem");
+    assert.equal(scrubbed.AWS_ACCESS_KEY_ID, undefined);
+    assert.equal(scrubbed.AWS_SECRET_ACCESS_KEY, undefined);
+    assert.equal(scrubbed.AWS_SESSION_TOKEN, undefined);
+  });
+
+  it("passes CA-certificate variables through the default allow list", () => {
+    const caEnv = { JAVA_TOOL_OPTIONS: "-Djavax.net.ssl.trustStore=/etc/ssl/ca.jks", SSL_CERT_FILE: "/etc/ssl/ca.pem" };
+    const scrubbed = scrubEnvironment(caEnv, testConfig());
+    assert.equal(scrubbed.JAVA_TOOL_OPTIONS, "-Djavax.net.ssl.trustStore=/etc/ssl/ca.jks");
+    assert.equal(scrubbed.SSL_CERT_FILE, "/etc/ssl/ca.pem");
+  });
 });

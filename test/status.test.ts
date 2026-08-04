@@ -41,6 +41,45 @@ describe("guard status session sections", () => {
   });
 });
 
+describe("guard status token cache reporting", () => {
+  it("shows the hit rate when cache reads were reported", () => {
+    const state = createRuntimeState();
+    state.stats.classifierHits = 5;
+    state.stats.classifierInputTokens = 500;
+    state.stats.classifierCacheReadTokens = 400;
+    state.stats.classifierCacheWriteTokens = 100;
+    state.stats.classifierOutputTokens = 80;
+    const status = formatGuardStatus(state, testConfig());
+    assert.match(status, /Tokens: 1000 in \(40% cached\) \/ 80 out/);
+  });
+
+  it("labels writes without reads as cache warming", () => {
+    const state = createRuntimeState();
+    state.stats.classifierHits = 1;
+    state.stats.classifierInputTokens = 200;
+    state.stats.classifierCacheWriteTokens = 800;
+    state.stats.classifierOutputTokens = 40;
+    const status = formatGuardStatus(state, testConfig());
+    assert.match(status, /Tokens: 1000 in \(0% cached, cache warming\) \/ 40 out/);
+  });
+
+  it("does not claim 0% cached when the provider reported no cache activity", () => {
+    const state = createRuntimeState();
+    state.stats.classifierHits = 4;
+    state.stats.classifierInputTokens = 1200;
+    state.stats.classifierOutputTokens = 90;
+    const status = formatGuardStatus(state, testConfig());
+    assert.match(status, /Tokens: 1200 in \(cache activity not reported\) \/ 90 out/);
+    assert.doesNotMatch(status, /% cached/);
+  });
+
+  it("omits the cache parenthetical before any review has happened", () => {
+    const status = formatGuardStatus(createRuntimeState(), testConfig());
+    assert.match(status, /Tokens: 0 in \/ 0 out/);
+    assert.doesNotMatch(status, /cached|cache warming|cache activity/);
+  });
+});
+
 describe("formatGuardPolicy", () => {
   it("includes deterministic policy and every classifier rule list", () => {
     const config = testConfig();

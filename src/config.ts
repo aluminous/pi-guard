@@ -200,8 +200,21 @@ export const DEFAULT_CONFIG: ResolvedGuardConfig = {
     denyWrite: [".pi", ".env", ".env.*", "*.pem", "*.key", "~/.ssh", "~/.aws", "~/.azure", "~/.gnupg", "~/.kube", "~/.docker", "~/.netrc"],
   },
   environment: {
-    allow: ["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "CI", "TERM", "SHELL", "LANG", "LC_*"],
-    unset: ["AWS_*", "GITHUB_TOKEN", "GH_TOKEN", "NPM_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "*_TOKEN", "*_SECRET", "*_KEY"],
+    allow: [
+      "PATH", "HOME", "TMPDIR", "TEMP", "TMP", "CI", "TERM", "SHELL", "LANG", "LC_*",
+      // CA-certificate configuration, so a private CA reaches curl/python/node/aws/git/npm/cargo/deno
+      // tooling inside the sandbox (JAVA_TOOL_OPTIONS is how java picks up a custom trust store).
+      "SSL_CERT_FILE", "SSL_CERT_DIR", "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
+      "AWS_CA_BUNDLE", "PIP_CERT", "GIT_SSL_CAINFO", "GIT_SSL_CAPATH", "NPM_CONFIG_CAFILE",
+      "CARGO_HTTP_CAINFO", "DENO_CERT", "JAVA_TOOL_OPTIONS",
+    ],
+    unset: [
+      // Explicit AWS credential vars rather than a broad AWS_* glob, so AWS_CA_BUNDLE in the
+      // allow list is not scrubbed (unset is applied before allow). Tradeoff: future unknown
+      // AWS_* secrets are no longer auto-unset; the *_TOKEN/*_SECRET/*_KEY globs are the backstop.
+      "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN", "AWS_WEB_IDENTITY_TOKEN_FILE",
+      "GITHUB_TOKEN", "GH_TOKEN", "NPM_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "*_TOKEN", "*_SECRET", "*_KEY",
+    ],
   },
   network: {
     enabled: true,

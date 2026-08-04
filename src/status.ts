@@ -31,10 +31,25 @@ function formatCompactTokens(tokens: number): string {
   return String(tokens);
 }
 
-/** "12.3k in (61% cached) / 800 out" — hit rate over total prompt tokens (input is normalized to exclude cache activity). */
+/**
+ * "12.3k in (61% cached) / 800 out" — hit rate over total prompt tokens
+ * (input is normalized to exclude cache activity). Providers that never
+ * report cache fields normalize to 0, which is indistinguishable from a real
+ * 0% hit rate — so a plain zero only reads "0% cached" while the cache is
+ * demonstrably warming (writes but no reads yet); with reviews done and no
+ * cache activity at all it reads "cache activity not reported", and before
+ * any review the parenthetical is omitted.
+ */
 function formatTokensWithCache(stats: GuardStats): string {
   const totalPrompt = stats.classifierInputTokens + stats.classifierCacheReadTokens + stats.classifierCacheWriteTokens;
-  const cachePart = totalPrompt > 0 ? ` (${Math.round((stats.classifierCacheReadTokens / totalPrompt) * 100)}% cached)` : "";
+  const cachePart =
+    stats.classifierCacheReadTokens > 0
+      ? ` (${Math.round((stats.classifierCacheReadTokens / totalPrompt) * 100)}% cached)`
+      : stats.classifierCacheWriteTokens > 0
+        ? " (0% cached, cache warming)"
+        : stats.classifierHits > 0
+          ? " (cache activity not reported)"
+          : "";
   return `${totalPrompt} in${cachePart} / ${stats.classifierOutputTokens} out`;
 }
 
