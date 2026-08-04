@@ -360,3 +360,33 @@ comment that proposes it) is a session-scope row; read-only mode stops
 being a bespoke mode and becomes a session preset flipping modify-* /
 share-* rows to deny; today's session path-approvals become session-scope
 capability grants. One mechanism replaces three bespoke ones.
+
+### Maintainer disposition calibration (2026-08-05)
+
+The "ask me every time" list, verbatim intent:
+
+| class of action | disposition |
+|---|---|
+| anything with impact beyond this machine — pushing, posting comments, modifying k8s resources (EXCEPT local clusters) | **ask** |
+| broad reads (project and system) | **allow** |
+| reading possible secrets | **judge** |
+| committing and deleting local files | **judge**, expected to vary by session |
+
+Taxonomy consequences adopted into the sketch:
+
+1. **The machine boundary, not tool identity, defines the ask tier** —
+   rename/define `external-effects` as `off-machine-effects`: "any effect
+   beyond this machine". kubectl against kind/minikube/docker-desktop
+   contexts is local (judge at most); the same command against a remote
+   context is off-machine (ask). Mappers need the context distinction
+   (deterministic: kubeconfig current-context is readable), which is a
+   concrete example of the environment-facts enrichment paying off.
+2. **`credentials` defaults to judge, not deny** — reading a test-fixture
+   key is fine, an exfil-adjacent read is not; that distinction IS a
+   judgment call, and flat-deny was over-strict.
+3. **`local-destructive` (deleting/overwriting local state, and local
+   commits) is its own class, default judge** — explicitly expected to be
+   re-scoped per session (the session-disposition mechanism is not a
+   nicety; it is how this class is meant to be used).
+4. Broad reads defaulting allow confirms the read-exemption direction and
+   keeps the read classes out of the friction budget entirely.
