@@ -318,3 +318,34 @@ standing degradation for anything that would use custom TUI, and the
 architecture makes the divide explicit: three seam modules (live-view,
 approvals, select-list) own every mode branch; feature code never inspects
 ctx.mode. Documented in README "UI architecture".
+
+## 10–14. August 4 feedback batch ✅ (fanned out to worktree subagents)
+
+- **10. CA-certificate env vars**: 13 CA vars whitelisted by default. Kept
+  matching simple per maintainer direction — no precedence changes; the
+  conflicting AWS_* unset glob was replaced with explicit credential vars
+  (backstopped by *_TOKEN/*_SECRET/*_KEY).
+- **11. Cache stats honesty**: "0% cached" was ambiguous; the report now
+  distinguishes real hit rates, cache warming, and "cache activity not
+  reported". Investigation verdict: cache_control markers ARE sent for
+  openrouter/anthropic models (caching likely works server-side); the zero
+  is pi-ai never sending OpenRouter's usage {include: true} opt-in —
+  second upstream pi-ai item alongside excludeFromContext.
+- **12. Deterministic command allowlist**: full minimal shell parser
+  (tokenizer + recursive descent → AndOrChain/Pipeline/SimpleCommand AST,
+  quote/escape/expansion aware, hard parse failures outside the grammar)
+  with a conservative decision layer: every chain segment must match a
+  rule template, literal argv only, no redirects/expansions/background.
+  Exemption gated on Seatbelt actually enforcing — "grep *" is only safe
+  because the sandbox bounds what grep reaches. Config: commands.allow.
+- **13. Read-only mode**: /guard readonly (alias ro, ctrl+alt+r, panel
+  entry, RO statusline marker). Writes/edits deterministically blocked;
+  bash reviewed under READONLY_CLASSIFIER_RULES (default-deny allowlist);
+  fail-closed for bash when the classifier is off or erroring — with the
+  integration-time composition that deterministically allowlisted commands
+  still pass (read-only by construction, sandbox-bounded), keeping the
+  mode usable without a classifier.
+- **14. Approval dialog**: two options where the highlighted row is the
+  text box — typing composes the comment inline, Enter decides, Esc denies;
+  comment travels when switching Allow/Deny. Wraps pi-tui Input for
+  editing/IME. RPC degradation unchanged.

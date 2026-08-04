@@ -7,6 +7,7 @@ import path from "node:path";
 import { after, describe, it } from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { GuardBackend } from "../src/backends/types.ts";
 import { READONLY_CLASSIFIER_RULES } from "../src/classifier-rules.ts";
 import { reviewToolCall, type CompleteFn } from "../src/classifier.ts";
 import { createGuardCommand } from "../src/commands/guard.ts";
@@ -105,6 +106,18 @@ describe("read-only mode interception", () => {
     assert.match(result.reason, /read-only mode/);
     assert.match(result.reason, /classifier/);
     assert.equal(state.stats.blocked, 1);
+  });
+
+  it("still allows deterministically allowlisted commands with the classifier off while the sandbox enforces", async () => {
+    const state = readOnlyState(testConfig((c) => {
+      c.classifier.enabled = false;
+    }));
+    state.backend = { name: "seatbelt" } as GuardBackend;
+    const allowed = await interceptToolCall({ toolName: "bash", input: { command: "grep foo src" } }, fakeCtx(cwd), state);
+    assert.equal(allowed, undefined);
+    const blocked = await interceptToolCall({ toolName: "bash", input: { command: "curl example.com" } }, fakeCtx(cwd), state);
+    assert.equal(blocked?.block, true);
+    assert.match(blocked.reason, /read-only mode/);
   });
 
   it("sends bash to review when the classifier is on, failing closed when it is unavailable", async () => {
