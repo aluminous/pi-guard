@@ -234,8 +234,11 @@ export function formatGuardPolicy(state: RuntimeState, config: ResolvedGuardConf
     "## Filesystem",
     `  Restrictions: ${config.filesystem.enabled ? "enabled" : "disabled (lists still route classifier exemptions)"}`,
     `  Read mode: ${config.filesystem.allowRead.length === 0 ? "blacklist (all paths except deny read)" : "whitelist"}`,
-    `  Allow read: ${formatArray(effective?.filesystem.allowRead ?? config.filesystem.allowRead)}`,
-    `  Allow write: ${formatArray(effective?.filesystem.allowWrite ?? config.filesystem.allowWrite)}`,
+    ...(config.filesystem.allowRead.length > 0
+      ? ["  Allow read:", ...bulletList(effective?.filesystem.allowRead ?? config.filesystem.allowRead, Number.POSITIVE_INFINITY)]
+      : ["  Allow read: (all)"]),
+    "  Allow write:",
+    ...bulletList(effective?.filesystem.allowWrite ?? config.filesystem.allowWrite, Number.POSITIVE_INFINITY),
     "  Deny read:",
     ...bulletList(effective?.filesystem.denyRead ?? config.filesystem.denyRead, Number.POSITIVE_INFINITY),
     "  Deny write:",
