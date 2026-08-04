@@ -1,4 +1,4 @@
-import { Container, Input, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Input, Spacer, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import type { Keybindings, Theme } from "./select-list.ts";
 
 export interface GuardApprovalAnswer {
@@ -10,29 +10,57 @@ export interface GuardApprovalAnswer {
 interface ApprovalOption {
   label: string;
   approved: boolean;
-  withComment: boolean;
-  description: string;
 }
 
 export const APPROVAL_OPTIONS: ApprovalOption[] = [
-  { label: "Allow", approved: true, withComment: false, description: "Run this call" },
-  { label: "Allow with comment…", approved: true, withComment: true, description: "Run it and tell the guard why, for the rest of the session" },
-  { label: "Deny", approved: false, withComment: false, description: "Block this call" },
-  { label: "Deny with comment…", approved: false, withComment: true, description: "Block it and tell the guard (and the agent) why" },
+  { label: "Allow", approved: true },
+  { label: "Deny", approved: false },
 ];
 
 /**
- * Four-way approval dialog for guard prompts: Allow / Allow with comment /
- * Deny / Deny with comment. Comments become session guidance for the
- * classifier. Escape denies without comment (matching the previous
- * confirm-dialog semantics); escape while typing a comment returns to the
- * options instead.
+ * Renders the highlighted option with the shared comment inline, so the row
+ * doubles as a text box: "→ Allow — staging is fine█". Wraps pi-tui's Input
+ * for editing, horizontal scrolling, and IME cursor positioning, but strips
+ * its "> " prompt so the label and the comment stay on one line.
+ */
+class InlineCommentRow implements Component {
+  private label: string;
+  private input: Input;
+  private theme: Theme;
+
+  constructor(label: string, input: Input, theme: Theme) {
+    this.label = label;
+    this.input = input;
+    this.theme = theme;
+  }
+
+  invalidate(): void {}
+
+  render(width: number): string[] {
+    const separator = this.input.getValue() ? this.theme.fg("muted", " — ") : " ";
+    const prefix = `${this.theme.fg("accent", "→ ")}${this.theme.fg("accent", this.label)}${separator}`;
+    const available = width - visibleWidth(prefix);
+    if (available <= 0) return [prefix];
+    // Input renders one line as "> text…" padded to the width it is given;
+    // grant it the remaining columns plus its two-column prompt, then strip
+    // the prompt. The cursor (and IME marker, when focused) come along.
+    const line = this.input.render(available + 2)[0] ?? "> ";
+    return [prefix + line.slice(2)];
+  }
+}
+
+/**
+ * Two-way approval dialog for guard prompts: Allow / Deny, with a shared
+ * inline comment. Typing while either option is highlighted edits a comment
+ * rendered directly on that row; arrowing between the options keeps the
+ * typed text. Enter resolves the highlighted option (attaching the trimmed
+ * comment when non-empty, as classifier session guidance); Escape denies
+ * without comment, matching the previous confirm-dialog semantics.
  */
 export class GuardApprovalDialog extends Container {
   private commentInput = new Input();
   private dynamic = new Container();
   private selectedIndex = 0;
-  private enteringComment = false;
   private _focused = false;
   private theme: Theme;
   private keybindings: Keybindings;
@@ -44,7 +72,7 @@ export class GuardApprovalDialog extends Container {
 
   set focused(value: boolean) {
     this._focused = value;
-    this.commentInput.focused = value && this.enteringComment;
+    this.commentInput.focused = value;
   }
 
   constructor(params: { title: string; message: string; theme: Theme; keybindings: Keybindings; done: (answer: GuardApprovalAnswer) => void }) {
@@ -56,64 +84,35 @@ export class GuardApprovalDialog extends Container {
     this.addChild(new Text(params.message, 0, 0));
     this.addChild(new Spacer(1));
     this.addChild(this.dynamic);
-    this.commentInput.onSubmit = () => this.submitComment();
+    this.addChild(new Spacer(1));
+    this.addChild(new Text(params.theme.fg("muted", "Enter decides · type to attach a comment · Esc denies"), 0, 0));
+    // Safety net: raw Enter reaching the Input (via its own keybindings)
+    // decides too, instead of vanishing.
+    this.commentInput.onSubmit = () => this.decide();
     this.update();
   }
 
-  private submitComment(): void {
+  private decide(): void {
     const option = APPROVAL_OPTIONS[this.selectedIndex];
     if (!option) return;
     const comment = this.commentInput.getValue().trim();
     this.done(comment ? { approved: option.approved, comment } : { approved: option.approved });
   }
 
-  private choose(): void {
-    const option = APPROVAL_OPTIONS[this.selectedIndex];
-    if (!option) return;
-    if (!option.withComment) {
-      this.done({ approved: option.approved });
-      return;
-    }
-    this.enteringComment = true;
-    this.commentInput.focused = this._focused;
-    this.update();
-  }
-
   private update(): void {
-    const theme = this.theme;
     this.dynamic.clear();
-    if (this.enteringComment) {
-      const option = APPROVAL_OPTIONS[this.selectedIndex];
-      this.dynamic.addChild(new Text(`${option?.approved ? "Allowing" : "Denying"} with a comment for the guard:`, 0, 0));
-      this.dynamic.addChild(this.commentInput);
-      this.dynamic.addChild(new Spacer(1));
-      this.dynamic.addChild(new Text(theme.fg("muted", "Enter submits. Escape goes back."), 0, 0));
-      return;
-    }
     for (let i = 0; i < APPROVAL_OPTIONS.length; i++) {
       const option = APPROVAL_OPTIONS[i];
       if (!option) continue;
-      const selected = i === this.selectedIndex;
-      const prefix = selected ? theme.fg("accent", "→ ") : "  ";
-      const label = selected ? theme.fg("accent", option.label) : option.label;
-      this.dynamic.addChild(new Text(`${prefix}${label}`, 0, 0));
+      if (i === this.selectedIndex) {
+        this.dynamic.addChild(new InlineCommentRow(option.label, this.commentInput, this.theme));
+      } else {
+        this.dynamic.addChild(new Text(`  ${option.label}`, 0, 0));
+      }
     }
-    const current = APPROVAL_OPTIONS[this.selectedIndex];
-    this.dynamic.addChild(new Spacer(1));
-    this.dynamic.addChild(new Text(theme.fg("muted", `  ${current?.description ?? ""}. Enter selects. Escape denies.`), 0, 0));
   }
 
   handleInput(keyData: string): void {
-    if (this.enteringComment) {
-      if (this.keybindings.matches(keyData, "tui.select.cancel")) {
-        this.enteringComment = false;
-        this.commentInput.focused = false;
-        this.update();
-        return;
-      }
-      this.commentInput.handleInput(keyData);
-      return;
-    }
     if (this.keybindings.matches(keyData, "tui.select.up")) {
       this.selectedIndex = this.selectedIndex === 0 ? APPROVAL_OPTIONS.length - 1 : this.selectedIndex - 1;
       this.update();
@@ -125,11 +124,15 @@ export class GuardApprovalDialog extends Container {
       return;
     }
     if (this.keybindings.matches(keyData, "tui.select.confirm")) {
-      this.choose();
+      this.decide();
       return;
     }
     if (this.keybindings.matches(keyData, "tui.select.cancel")) {
       this.done({ approved: false });
+      return;
     }
+    // Everything else edits the shared inline comment: printable characters,
+    // backspace, cursor movement, paste.
+    this.commentInput.handleInput(keyData);
   }
 }

@@ -31,13 +31,12 @@ function openDialog(): { dialog: GuardApprovalDialog; answers: GuardApprovalAnsw
 }
 
 describe("GuardApprovalDialog", () => {
-  it("selects plain allow and deny options", () => {
+  it("resolves plain allow and deny without a comment", () => {
     const allow = openDialog();
     allow.dialog.handleInput("<enter>");
     assert.deepEqual(allow.answers, [{ approved: true }]);
 
     const deny = openDialog();
-    deny.dialog.handleInput("<down>");
     deny.dialog.handleInput("<down>");
     deny.dialog.handleInput("<enter>");
     assert.deepEqual(deny.answers, [{ approved: false }]);
@@ -49,32 +48,49 @@ describe("GuardApprovalDialog", () => {
     assert.deepEqual(answers, [{ approved: false }]);
   });
 
-  it("collects a comment for allow-with-comment", () => {
+  it("typed text becomes the comment for the highlighted option", () => {
     const { dialog, answers } = openDialog();
-    dialog.handleInput("<down>");
-    dialog.handleInput("<enter>");
+    for (const ch of "staging is fine") dialog.handleInput(ch);
     assert.equal(answers.length, 0);
-    for (const ch of "ok today") dialog.handleInput(ch);
-    dialog.handleInput("\r");
-    assert.deepEqual(answers, [{ approved: true, comment: "ok today" }]);
+    dialog.handleInput("<enter>");
+    assert.deepEqual(answers, [{ approved: true, comment: "staging is fine" }]);
   });
 
-  it("escape during comment entry returns to the options instead of resolving", () => {
-    const { dialog, answers } = openDialog();
-    dialog.handleInput("<down>");
-    dialog.handleInput("<enter>");
-    dialog.handleInput("<esc>");
-    assert.equal(answers.length, 0);
-    dialog.handleInput("<esc>");
-    assert.deepEqual(answers, [{ approved: false }]);
+  it("renders the comment inline on the highlighted option row", () => {
+    const { dialog } = openDialog();
+    for (const ch of "ok") dialog.handleInput(ch);
+    const lines = dialog.render(80);
+    assert.equal(lines.some((line) => line.includes("→ Allow — ok")), true);
   });
 
-  it("submits an empty comment as no comment", () => {
+  it("arrowing between options keeps the shared comment", () => {
     const { dialog, answers } = openDialog();
+    for (const ch of "not today") dialog.handleInput(ch);
+    dialog.handleInput("<down>");
+    dialog.handleInput("<up>");
     dialog.handleInput("<down>");
     dialog.handleInput("<enter>");
-    dialog.handleInput("\r");
-    assert.deepEqual(answers, [{ approved: true }]);
+    assert.deepEqual(answers, [{ approved: false, comment: "not today" }]);
+  });
+
+  it("omits empty and whitespace-only comments", () => {
+    const empty = openDialog();
+    empty.dialog.handleInput("<enter>");
+    assert.deepEqual(empty.answers, [{ approved: true }]);
+
+    const whitespace = openDialog();
+    for (const ch of "   ") whitespace.dialog.handleInput(ch);
+    whitespace.dialog.handleInput("<enter>");
+    assert.deepEqual(whitespace.answers, [{ approved: true }]);
+  });
+
+  it("backspace edits the inline comment", () => {
+    const { dialog, answers } = openDialog();
+    for (const ch of "okay") dialog.handleInput(ch);
+    dialog.handleInput("\x7f");
+    dialog.handleInput("\x7f");
+    dialog.handleInput("<enter>");
+    assert.deepEqual(answers, [{ approved: true, comment: "ok" }]);
   });
 });
 
