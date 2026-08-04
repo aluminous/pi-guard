@@ -132,6 +132,18 @@ authorization is present)"**. The disposition table then decides
 deterministically. A command spanning capabilities takes the most severe
 disposition.
 
+**Fast paths survive — and get better.** This does NOT mean every action
+hits the classifier. The deterministic layers keep their cache role; what
+changes is what they cache: a capability label instead of a bare verdict.
+`grep *` tagged `read-project` resolves capability *and* disposition (via
+the table) with zero LLM calls — exactly today's allowlist speed. In-cwd
+reads map to `read-project` deterministically — exactly today's read
+exemption. The classifier is consulted only for actions no deterministic
+mapper can label, same escalation structure as now. The improvement:
+flipping a disposition row automatically retunes the fast path too (set
+`read-project: ask` and the exemptions respect it), where today a
+disposition change means editing mechanism lists by hand.
+
 **UX story**: `/guard` panel shows the table; changing "no pushes without
 asking" is flipping one row (or saying it once in an approval comment —
 guidance can *suggest* a row change). Attribution is uniform and humane:
@@ -208,6 +220,15 @@ are real machinery; the sandbox still needs its own path/network config
 (containment ≠ policy), so "one artifact" is aspirational; and the cache
 regeneration loop needs eval infrastructure run routinely, which is not yet
 habit. Worth revisiting once telemetry + benign evals are routine.
+
+**Maintainer note (2026-08-05): viable with user review.** If `/guard
+compile` *proposes* the derived rules as a reviewable diff — like a PR the
+user approves before it takes effect — the generation-trust objection
+mostly dissolves: the human is the drift gate, and the agreement eval
+becomes a pre-review check rather than the sole safeguard. This also
+composes with B rather than competing: compile can generate capability
+*mappings* (templates → capability tags) from the prose definitions, with
+the user reviewing the mapping diff.
 
 ---
 
