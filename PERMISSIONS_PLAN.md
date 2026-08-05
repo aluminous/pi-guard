@@ -1,5 +1,11 @@
 # Permission System Audit & Redesign Proposals — August 2026
 
+> **Naming note.** This document was written while the project was called
+> pi-guard; it has since been renamed to **Pi Rail** (`/rail`, `rail.json`,
+> `--no-rail`). Every "guard" below is left as written — it is a record of the
+> discussion as it happened, and rewriting it would misquote it. Read "guard"
+> as "rail" throughout.
+
 Status: discussion draft. Nothing here is implemented; Stage 0 items are
 candidates regardless of which architecture wins.
 

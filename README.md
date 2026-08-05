@@ -1,5 +1,12 @@
 # Pi Rail Extension
 
+> **Formerly pi-guard.** The project was renamed to Pi Rail to avoid a clash
+> with an unrelated `pi-guard` package. The slash command is `/rail`, the
+> config file is `rail.json`, and the flag is `--no-rail`. An existing
+> `guard.json` is still loaded (with a one-line advisory asking you to rename
+> it) and is still written back to, so nothing breaks before you get to it —
+> see [Configuration](#configuration).
+
 Defense-in-depth command and file-tool guardrails for Pi. Today Pi Rail uses macOS Seatbelt for contained shell execution, deterministic path policy for Pi file tools, environment scrubbing, and an optional LLM reviewer that names actions against a small capability taxonomy which your own [disposition table](#capability-mode) then decides on. The extension is structured around a backend interface so a container backend can be added later.
 
 ## Relationship to pi-sandbox
@@ -31,26 +38,26 @@ and security limitations before installing third-party extensions.
 Install Pi Rail directly from GitHub:
 
 ```bash
-pi install git:github.com/aluminous/pi-guard
+pi install git:github.com/aluminous/pi-rail
 ```
 
 To try it for one run without adding it to your settings:
 
 ```bash
-pi -ne -e git:github.com/aluminous/pi-guard
+pi -ne -e git:github.com/aluminous/pi-rail
 ```
 
 To remove it later:
 
 ```bash
-pi remove git:github.com/aluminous/pi-guard
+pi remove git:github.com/aluminous/pi-rail
 ```
 
 For local development, clone the repository and install dependencies:
 
 ```bash
-git clone https://github.com/aluminous/pi-guard.git
-cd pi-guard
+git clone https://github.com/aluminous/pi-rail.git
+cd pi-rail
 npm install
 pi -ne -e .
 ```
@@ -73,36 +80,36 @@ pi -ne -e .
 
 Flags:
 
-- `--no-guard`: explicitly disable Pi Rail and run bash unguarded.
+- `--no-rail`: explicitly disable Pi Rail and run bash without the rail.
 
-Commands — everything lives under `/guard`, with argument autocomplete:
+Commands — everything lives under `/rail`, with argument autocomplete:
 
-- `/guard`: open the control panel (searchable actions with a live status header; a plain select dialog over RPC).
-- `/guard status`: toggle the live status view — a bordered panel docked where the editor sits (like the model chooser), updating while the agent streams above it (decisions, approvals, session guidance). Esc closes it, arrows/page keys scroll. Over RPC it toggles a live widget.
-- `/guard policy`: open the **capability policy page** — a two-tab panel whose first tab is the editable capability table with live per-class stats (see [Dispositions](#dispositions)). Over RPC it degrades to select dialogs; invoking the tab you are already on closes it.
-- `/guard policy rules`: open the same page on its **rules** tab — the resolved mechanism policy (filesystem, network, environment scrubbing, and the command allowlist, provenance-annotated). **Tab** cycles between the two tabs; invoking the other tab while the panel is open switches rather than closing. Outside the TUI this stays a standalone live widget, as before.
-- `/guard set <class> [allow|judge|ask|deny]`: set one class for this session from the command line (completions offer class ids — including custom ones — then dispositions). Without a disposition it prints the current effective value and where it came from.
-- `/guard guide <text>`: add classifier guidance for this session without waiting to be asked (see [Session guidance](#session-guidance)). Bare `/guard guide` prompts for the text; `/guard guide clear` drops every entry.
-- `/guard on`: enable Pi Rail.
-- `/guard off`: disable for the next agent turn, then re-enable automatically.
-- `/guard off session`: disable until the session ends.
-- `/guard readonly` (or `ro`, or ctrl+alt+r): toggle session read-only mode — `write`/`edit` are blocked, `bash` must be reviewed (and is blocked outright if the classifier is off), and a session disposition preset denies the writing capability classes.
-- `/guard model`: choose the namer model interactively.
-- `/guard model auto|current|off|provider/model-id`: set the namer model directly and save it globally. `auto` (the default) picks the best available known-good model, preferring subscription providers.
-- `/guard model status`: print reviewer status, resolved model, and available models.
-- `/guard smoke`: run the command-containment and namer smoke tests.
-- `/guard critique [provider/model-id]`: critique the capability class definitions, the disposition table, and the content screen with Pi's current model or a specific one.
+- `/rail`: open the control panel (searchable actions with a live status header; a plain select dialog over RPC).
+- `/rail status`: toggle the live status view — a bordered panel docked where the editor sits (like the model chooser), updating while the agent streams above it (decisions, approvals, session guidance). Esc closes it, arrows/page keys scroll. Over RPC it toggles a live widget.
+- `/rail policy`: open the **capability policy page** — a two-tab panel whose first tab is the editable capability table with live per-class stats (see [Dispositions](#dispositions)). Over RPC it degrades to select dialogs; invoking the tab you are already on closes it.
+- `/rail policy rules`: open the same page on its **rules** tab — the resolved mechanism policy (filesystem, network, environment scrubbing, and the command allowlist, provenance-annotated). **Tab** cycles between the two tabs; invoking the other tab while the panel is open switches rather than closing. Outside the TUI this stays a standalone live widget, as before.
+- `/rail set <class> [allow|judge|ask|deny]`: set one class for this session from the command line (completions offer class ids — including custom ones — then dispositions). Without a disposition it prints the current effective value and where it came from.
+- `/rail guide <text>`: add classifier guidance for this session without waiting to be asked (see [Session guidance](#session-guidance)). Bare `/rail guide` prompts for the text; `/rail guide clear` drops every entry.
+- `/rail on`: enable Pi Rail.
+- `/rail off`: disable for the next agent turn, then re-enable automatically.
+- `/rail off session`: disable until the session ends.
+- `/rail readonly` (or `ro`, or ctrl+alt+r): toggle session read-only mode — `write`/`edit` are blocked, `bash` must be reviewed (and is blocked outright if the classifier is off), and a session disposition preset denies the writing capability classes.
+- `/rail model`: choose the namer model interactively.
+- `/rail model auto|current|off|provider/model-id`: set the namer model directly and save it globally. `auto` (the default) picks the best available known-good model, preferring subscription providers.
+- `/rail model status`: print reviewer status, resolved model, and available models.
+- `/rail smoke`: run the command-containment and namer smoke tests.
+- `/rail critique [provider/model-id]`: critique the capability class definitions, the disposition table, and the content screen with Pi's current model or a specific one.
 
 Rail reports are **never placed into the conversation**: pi delivers custom
 messages to the LLM as user messages, and a status or policy report is a map
-of the guard's rules, approvals, and session guidance — exactly what a
-compromised agent would want to read. All guard output goes through
+of the rail's rules, approvals, and session guidance — exactly what a
+compromised agent would want to read. All rail output goes through
 user-only channels (popups, widgets, notifications); the agent only ever
 sees the block reason attached to a denied tool call. Rail commands are
 user-facing: in headless modes (json/print) there is no one to invoke or see
 them, so views are a stderr error and pickers resolve as cancelled.
 
-Statusline legend — the guard statusline is deliberately terse:
+Statusline legend — the rail statusline is deliberately terse:
 
 ```
 Rail: seatbelt, 26 domains, auto (openai-codex/gpt-5.4-mini) R2(+1) C4 D1 ↑12k ↓800
@@ -114,11 +121,11 @@ reviewer input/output tokens this session. The counters turn yellow when there a
 errors.
 
 The top-level `statusLine` config field controls when the statusline is shown
-(also settable from the `/guard` panel, which saves it globally):
+(also settable from the `/rail` panel, which saves it globally):
 
 - `"always"` (default): always visible.
 - `"never"`: never shown.
-- `"auto"`: shown only when something needs attention — the guard is disabled
+- `"auto"`: shown only when something needs attention — the rail is disabled
   or erroring, or a call was denied or blocked since your last message.
 
 ## Configuration
@@ -126,12 +133,27 @@ The top-level `statusLine` config field controls when the statusline is shown
 Config is merged in this order:
 
 1. Built-in defaults.
-2. `~/.pi/agent/extensions/guard.json`
-3. `<cwd>/.pi/guard.json` when the project is trusted.
+2. `~/.pi/agent/extensions/rail.json`
+3. `<cwd>/.pi/rail.json` when the project is trusted.
 
-`/guard model` persists reviewer-model choices by updating the global extension config at `~/.pi/agent/extensions/guard.json`. It does not write extension-specific fields into Pi's main `settings.json`. A trusted project config can still override the global settings, including individual `dispositions` rows.
+`/rail model` persists reviewer-model choices by updating the global extension config at `~/.pi/agent/extensions/rail.json`. It does not write extension-specific fields into Pi's main `settings.json`. A trusted project config can still override the global settings, including individual `dispositions` rows.
 
-Example `.pi/guard.json`:
+### Migrating from `guard.json`
+
+Both layers were called `guard.json` before the rename, and both still accept
+that name:
+
+- If only `guard.json` is present, it is loaded exactly as before and one
+  advisory asks you to rename it to `rail.json`.
+- If both are present, `rail.json` wins and the advisory says the `guard.json`
+  was ignored — merge anything you still want out of it, then delete it.
+- Persistent writes (Ctrl+S on the policy page, `/rail model`, statusline
+  visibility) go back to whichever file was loaded, so saving from a session
+  running on `guard.json` will not scatter your settings across two files.
+
+Renaming the file is the whole migration; its contents are unchanged.
+
+Example `.pi/rail.json`:
 
 ```json
 {
@@ -188,7 +210,7 @@ their defaults rather than becoming empty.
 ## Capability mode
 
 The whole decision policy is one table of **capability dispositions**. Every
-guarded action is *named* with one or more of twelve capability classes, and
+intercepted action is *named* with one or more of twelve capability classes, and
 the table says what happens to each class — nothing else decides.
 
 | class | default | class | default |
@@ -218,7 +240,7 @@ resets the others.
 
 ### Dispositions
 
-`/guard policy` opens the table as an interactive page (docked panel, agent
+`/rail policy` opens the table as an interactive page (docked panel, agent
 still streaming above it): one row per class with its disposition and this
 session's stats — `off-machine-effects  ask  3 hits · 1 allowed · 1 asked · 1
 denied`. The highlighted row's definition shows underneath.
@@ -238,14 +260,14 @@ Every edit applies **immediately, for this session** — that is the point of
 the page: `local-destructive` and friends are meant to be re-scoped per
 session, and closing the page does not undo anything. Rows that differ from
 the persisted value are coloured; **Ctrl+S** persists them to
-`~/.pi/agent/extensions/guard.json` and the colouring clears. Stats update
+`~/.pi/agent/extensions/rail.json` and the colouring clears. Stats update
 live while the agent works.
 
 In read-only mode a banner names the active preset and its rows render as
 `allow → deny*`: the preset tightens the effective value, cycling still edits
 the row underneath it. Over RPC the page degrades to select dialogs (pick a
 class, then a disposition, "Edit definition…", or "Delete class"; "Add new
-class…" and "Save persistently" close the list), and `/guard set <class>
+class…" and "Save persistently" close the list), and `/rail set <class>
 <disposition>` does the same thing in one line.
 
 ### Custom capability classes
@@ -308,17 +330,17 @@ vocabulary you can edit.
 
 ### Session guidance
 
-Answering a guard prompt with a comment records it as session guidance, which
-is injected into every later namer and judge call. `/guard guide <text>` adds
+Answering a rail prompt with a comment records it as session guidance, which
+is injected into every later namer and judge call. `/rail guide <text>` adds
 an entry directly, without waiting to be asked:
 
 ```
-/guard guide the deploy script in this repo is expected to push to staging
+/rail guide the deploy script in this repo is expected to push to staging
 ```
 
 Entries share one ring with approval comments, capped at 12 (oldest drop out);
 the confirmation reports the position, `Guidance added for this session
-(3/12).` `/guard guide clear` empties it, and `/guard status` lists what is
+(3/12).` `/rail guide clear` empties it, and `/rail status` lists what is
 currently in force. Guidance is session-scoped and never persisted.
 
 ### How an action gets named
@@ -350,7 +372,7 @@ deterministic mappers ──▶ content screen ──▶ namer (one cheap call)
   throw, unknown class ids are dropped, an empty set becomes `unclassified`.
 - **The judge** runs only for classes you set to `judge`. It sees more than
   the namer — recent user messages, session guidance, the action, and the
-  guard's last few decisions — and decides for that one action only, never as
+  rail's last few decisions — and decides for that one action only, never as
   a standing approval. Deny is reserved for what confirmation cannot fix;
   everything else unclear is an ask. `classifier.judgeModel` defaults to
   `"current"` (the session's own model). A judge failure degrades to asking
@@ -371,7 +393,7 @@ The prose rule tiers (`classifier.rules` with `allow`/`soft_deny`/`hard_deny`/
 `environment`) have been **removed**. A config that still sets the key loads
 fine and emits one diagnostic saying it is ignored; the lists are no longer
 parsed, merged, or displayed. Their successor is the disposition table plus the
-class definitions in `src/capabilities.ts` — edit both from `/guard policy`.
+class definitions in `src/capabilities.ts` — edit both from `/rail policy`.
 
 ### Command allowlist
 
@@ -466,8 +488,8 @@ enabled and use an empty allowlist:
 - User `!` and `!!` bash commands are routed through Pi Rail.
 - When filesystem restrictions are enabled, built-in `read`, `write`, and `edit` tool calls are checked by deterministic path policy because Seatbelt only contains subprocesses.
 - When filesystem restrictions are enabled, reads are allowed by default except for configured sensitive paths, and writes are limited to configured roots.
-- Environment variables are scrubbed before guarded commands are spawned: `environment.unset` patterns are removed first, then `environment.allow` (when non-empty) whitelists the rest. The default allow list passes CA-certificate variables (`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `AWS_CA_BUNDLE`, `JAVA_TOOL_OPTIONS`, and friends) so a private CA reaches sandboxed tooling; to make that work, the default unset list names explicit AWS credential variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, …) instead of a broad `AWS_*` glob, with the generic `*_TOKEN`/`*_SECRET`/`*_KEY` globs as the backstop for unknown secrets.
-- Every guarded `bash`, `read`, `write`, and `edit` call is named with capability classes after deterministic policy checks and before execution; the disposition table then decides.
+- Environment variables are scrubbed before sandboxed commands are spawned: `environment.unset` patterns are removed first, then `environment.allow` (when non-empty) whitelists the rest. The default allow list passes CA-certificate variables (`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `AWS_CA_BUNDLE`, `JAVA_TOOL_OPTIONS`, and friends) so a private CA reaches sandboxed tooling; to make that work, the default unset list names explicit AWS credential variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, …) instead of a broad `AWS_*` glob, with the generic `*_TOKEN`/`*_SECRET`/`*_KEY` globs as the backstop for unknown secrets.
+- Every intercepted `bash`, `read`, `write`, and `edit` call is named with capability classes after deterministic policy checks and before execution; the disposition table then decides.
 - Trusted reads never reach a model: a `read` whose canonical path is inside the session working directory or matches an explicit `allowRead` entry — and does not match `denyRead` — is labelled deterministically (0 tokens, 0 latency; counted as "Exempt (no model consulted)" in the status report, together with allowlisted commands and screen-clean writes). The allow/deny lists are consulted for this routing even when `filesystem.enabled` is `false`, which only disables *blocking*.
 - A `read` matching `denyRead` is **not** hard-blocked any more: it is labelled `credentials`, which defaults to `judge`. Reading a test-fixture key and reading toward exfiltration are different actions, and telling them apart is a judgment call. `denyWrite` matches stay hard blocks — writes to secret and config paths are containment, not policy.
 - Writes and edits are never exempted by path alone: their content goes through the deterministic content screen, and anything it trips on goes to the namer.
@@ -475,7 +497,7 @@ enabled and use an empty allowlist:
 
 ## Approval prompts and session guidance
 
-When the guard needs a human decision — a class set to `ask`, a judge verdict
+When the rail needs a human decision — a class set to `ask`, a judge verdict
 of `ask`, or a path outside the configured roots — the prompt offers four
 choices: **Allow**, **Allow with comment**, **Deny**, and **Deny with
 comment**. The prompt names the capabilities that were matched and the row
@@ -495,24 +517,24 @@ authorization process.
 
 ## Headless sessions and subagents
 
-`ctx.hasUI` tells the guard whether anyone can answer a prompt:
+`ctx.hasUI` tells the rail whether anyone can answer a prompt:
 
 - **TUI** — prompts are interactive dialogs.
 - **RPC mode** (`pi --mode rpc`) — prompts become `extension_ui_request`
   events on stdout; the driving client answers them over the protocol, so
   approvals work if the client implements that sub-protocol (see pi's
-  `docs/rpc.md` and `examples/rpc-extension-ui.ts`). Every guard interface
+  `docs/rpc.md` and `examples/rpc-extension-ui.ts`). Every rail interface
   degrades to protocol dialogs there: approval prompts become select+input,
-  and the `/guard` control panel, reviewer model picker, and statusline
+  and the `/rail` control panel, reviewer model picker, and statusline
   chooser become plain select dialogs (search and live headers are TUI-only).
-  `/guard status` and `/guard policy rules` toggle live *widgets*
-  (fire-and-forget `setWidget` requests keyed `guard-status`/`guard-policy`,
-  refreshed on every guard event) — user-visible in any client that renders
+  `/rail status` and `/rail policy rules` toggle live *widgets*
+  (fire-and-forget `setWidget` requests keyed `rail-status`/`rail-policy`,
+  refreshed on every rail event) — user-visible in any client that renders
   widgets, and never part of agent context. The two-tab policy page is
-  TUI-only, so `/guard policy rules` stays a standalone widget here while
-  `/guard policy` (the table) degrades to select dialogs, class editing
+  TUI-only, so `/rail policy rules` stays a standalone widget here while
+  `/rail policy` (the table) degrades to select dialogs, class editing
   included. Smoke and critique results arrive the same
-  way, keyed `guard-report`.
+  way, keyed `rail-report`.
 - **json / print modes** — truly headless: there is no one to ask. Ask
   decisions and out-of-roots path approvals become blocks whose reason states
   exactly that ("headless session with no user to ask"), so the agent — or a
@@ -523,7 +545,7 @@ Subagents spawned as `pi --mode json` subprocesses are therefore headless,
 and the denial reason is the propagation channel that exists today. To
 propagate the *question* instead, run subagents in RPC mode and forward the
 extension-UI requests to the parent's UI — that works with unmodified
-pi-guard. A guard-to-guard approval side channel was considered and deferred
+pi-rail. A rail-to-rail approval side channel was considered and deferred
 (see [docs/history/FEEDBACK_PLAN.md](docs/history/FEEDBACK_PLAN.md)).
 
 ### pi-subagents interop
@@ -531,29 +553,33 @@ pi-guard. A guard-to-guard approval side channel was considered and deferred
 The [`pi-subagents`](https://github.com/nicobailon/pi-subagents) extension
 (not affiliated; also distinct from the npm `pi-guard` package it recommends
 for bash policy) spawns children that inherit your installed extensions by
-default, so each child runs its own guard instance. Pi Rail participates in
+default, so each child runs its own rail instance. Pi Rail participates in
 its acknowledgement channel both ways:
 
-- **As a child**, when the guard is enforcing it emits
-  `subagent:acknowledge-extension` (id `pi-extension-guard`) so the run
-  status records that the child was guarded.
+- **As a child**, when the rail is enforcing it emits
+  `subagent:acknowledge-extension` (id `pi-rail`) so the run status records
+  that the child was on the rail. The pre-rename id `pi-extension-guard` is
+  still accepted parent-side, so a new parent does not mistake an older child
+  for one that ran without the rail.
 - **As the parent**, it inspects `subagent`/`subagent_wait` results and warns
   once per finished child that never acknowledged — that child ran
-  unguarded. Common causes: the agent profile declares `extensions:`
+  without the rail. Common causes: the agent profile declares `extensions:`
   frontmatter, `subagents.defaultExtensions` is set, a capability ceiling
   passes `--no-extensions`, the agent is an external-CLI runner, or the
-  guard was loaded via `pi -ne -e` and is not in ambient settings.
+  rail was loaded via `pi -ne -e` and is not in ambient settings.
 
 Both channels are best-effort observability, never enforcement.
 
 ## Decision telemetry
 
-Every guard decision — capability reviews, deterministic policy blocks, path
+Every rail decision — capability reviews, deterministic policy blocks, path
 approvals, and reviewer errors — is recorded as a `custom` entry
-(`customType: "guard"`) in pi's own session log, next to the tool call it
+(`customType: "rail"`) in pi's own session log, next to the tool call it
 judged. Entries do not participate in LLM context and are written
 best-effort: telemetry never blocks or breaks a tool call, and ephemeral
-sessions simply skip persistence.
+sessions simply skip persistence. Sessions recorded before the rename carry
+`customType: "guard"`; the analysis tooling reads both, so an existing corpus
+stays usable.
 
 `classifier.telemetry` controls verbosity:
 
@@ -569,7 +595,7 @@ Note that session files can be shared (`pi share` uploads the whole file), so
 records stay minimal by default even though the session already contains the
 full tool call inputs.
 
-`npm run telemetry` (`eval/session-stats.ts`) aggregates guard entries across
+`npm run telemetry` (`eval/session-stats.ts`) aggregates rail entries across
 all local sessions: decision rates, capability label frequencies, judge and
 screen-trip rates, retry rate, latency p50/p95/max, token cost, models used,
 path approvals, and errors.
@@ -661,4 +687,4 @@ The `@earendil-works/*` packages are declared as peer dependencies because Pi
 provides them at runtime. Pinned development copies are installed only for
 local typechecking and tests.
 
-The same filesystem config is enforced by two engines: `src/policy.ts` for Pi's file tools and the Seatbelt profile for bash. Both consume `compileFilesystemPolicy` (in `src/policy.ts`), which resolves each pattern once and reports the ones a Seatbelt profile cannot express — glob patterns (`.env.*`, `*.pem`) and bare names (`.env`), which reach the sandbox as literal resolved paths — in its `degraded` list. Degraded patterns surface as a session-start warning and in `/guard status`. `test/policy-seatbelt-agreement.test.ts` pins down that both engines deny the same sensitive locations and that every unexpressible pattern is declared degraded; extend it when adding deny patterns.
+The same filesystem config is enforced by two engines: `src/policy.ts` for Pi's file tools and the Seatbelt profile for bash. Both consume `compileFilesystemPolicy` (in `src/policy.ts`), which resolves each pattern once and reports the ones a Seatbelt profile cannot express — glob patterns (`.env.*`, `*.pem`) and bare names (`.env`), which reach the sandbox as literal resolved paths — in its `degraded` list. Degraded patterns surface as a session-start warning and in `/rail status`. `test/policy-seatbelt-agreement.test.ts` pins down that both engines deny the same sensitive locations and that every unexpressible pattern is declared degraded; extend it when adding deny patterns.

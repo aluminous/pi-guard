@@ -28,7 +28,7 @@ export const RAIL_ACK_ID = "pi-rail";
  * The id acknowledged with before the pi-guard → pi-rail rename. Never emitted
  * again, but still accepted parent-side: a new parent will meet children that
  * loaded an older install, and reading their ack as "no rail" would fire a
- * false unguarded-child warning.
+ * false "ran without the rail" warning.
  */
 export const LEGACY_RAIL_ACK_ID = "pi-extension-guard";
 

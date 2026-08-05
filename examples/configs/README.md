@@ -1,7 +1,7 @@
 # Example configurations
 
-Copy one of these files to `~/.pi/agent/extensions/guard.json` for a global
-profile or to `.pi/guard.json` in a trusted project.
+Copy one of these files to `~/.pi/agent/extensions/rail.json` for a global
+profile or to `.pi/rail.json` in a trusted project.
 
 Configuration is layered over Pi Rail's defaults. Omitted fields retain their
 default values; arrays are replaced wholesale when present.
