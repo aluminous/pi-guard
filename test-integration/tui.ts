@@ -100,7 +100,7 @@ async function closeOverlay(name: string, marker: string): Promise<void> {
   await waitFor((pane) => !pane.includes(marker), `${name} overlay to close`, UI_TIMEOUT_MS);
 }
 
-test("pi TUI: guard startup, status/disposition/policy views, no [guard] conversation reports", async (t) => {
+test("pi TUI: guard startup, status/policy page and its tabs, no [guard] conversation reports", async (t) => {
   const tmuxPath = which("tmux");
   const piPath = which("pi");
   if (tmuxPath === undefined || piPath === undefined) {
@@ -151,14 +151,14 @@ test("pi TUI: guard startup, status/disposition/policy views, no [guard] convers
     // disposition, and the session stats column.
     await submitCommand("/guard policy");
     await waitFor(
-      (pane) => pane.includes("Capability dispositions") && /read-project\s+allow/.test(pane) && /off-machine-effects\s+ask/.test(pane),
+      (pane) => pane.includes("Capability policy") && /read-project\s+allow/.test(pane) && /off-machine-effects\s+ask/.test(pane),
       "disposition page with its rows",
       UI_TIMEOUT_MS,
     );
     // Right cycles the highlighted row (allow → judge) at session scope.
     tmux("send-keys", "-t", TARGET, "Right");
     await waitFor((pane) => /read-project\s+judge/.test(pane), "cycled disposition on the highlighted row", UI_TIMEOUT_MS);
-    await closeOverlay("disposition page", "Capability dispositions");
+    await closeOverlay("disposition page", "Capability policy");
 
     // Read-only mode is a session preset: the page banners it and shows the
     // tightened effective value next to the row the user still edits.
@@ -169,13 +169,21 @@ test("pi TUI: guard startup, status/disposition/policy views, no [guard] convers
       "read-only banner and preset-tightened row",
       UI_TIMEOUT_MS,
     );
-    await closeOverlay("disposition page", "Capability dispositions");
+    await closeOverlay("disposition page", "Capability policy");
     await submitCommand("/guard readonly");
 
-    // The mechanism report lives one level down now. No footer assertion here:
-    // the rules view is tall enough to clip the footer at 40 rows.
+    // The mechanism report is the page's second tab now. Tab cycles to it from
+    // the table; no footer assertion here, since the rules view is tall enough
+    // to clip the footer at 40 rows.
+    await submitCommand("/guard policy");
+    await waitFor((pane) => pane.includes("Capability policy"), "policy page before tabbing", UI_TIMEOUT_MS);
+    tmux("send-keys", "-t", TARGET, "Tab");
+    await waitFor((pane) => pane.includes("Pi Guard Policy Rules"), "rules tab content after Tab", UI_TIMEOUT_MS);
+    await closeOverlay("policy rules tab", "Pi Guard Policy Rules");
+
+    // /guard policy rules opens the same page directly on that tab.
     await submitCommand("/guard policy rules");
-    await waitFor((pane) => pane.includes("Pi Guard Policy Rules"), "policy rules overlay title", UI_TIMEOUT_MS);
+    await waitFor((pane) => pane.includes("Pi Guard Policy Rules"), "policy rules tab title", UI_TIMEOUT_MS);
     await closeOverlay("policy rules", "Pi Guard Policy Rules");
 
     // Nothing above should have posted a [guard] report into the conversation.

@@ -79,9 +79,10 @@ Commands — everything lives under `/guard`, with argument autocomplete:
 
 - `/guard`: open the control panel (searchable actions with a live status header; a plain select dialog over RPC).
 - `/guard status`: toggle the live status view — a bordered panel docked where the editor sits (like the model chooser), updating while the agent streams above it (decisions, approvals, session guidance). Esc closes it, arrows/page keys scroll. Over RPC it toggles a live widget.
-- `/guard policy`: open the **disposition settings page** — the editable capability table with live per-class stats (see [Dispositions](#dispositions)). Over RPC it degrades to select dialogs; toggling the same command closes it.
-- `/guard policy rules`: show the resolved mechanism policy — filesystem/network/environment rules and the legacy classifier rule lists, provenance-annotated. Same popup/widget behavior as `/guard status`.
-- `/guard set <class> [allow|judge|ask|deny]`: set one class for this session from the command line (completions offer class ids, then dispositions). Without a disposition it prints the current effective value and where it came from.
+- `/guard policy`: open the **capability policy page** — a two-tab panel whose first tab is the editable capability table with live per-class stats (see [Dispositions](#dispositions)). Over RPC it degrades to select dialogs; invoking the tab you are already on closes it.
+- `/guard policy rules`: open the same page on its **rules** tab — the resolved mechanism policy (filesystem/network/environment rules and the legacy classifier rule lists, provenance-annotated). **Tab** cycles between the two tabs; invoking the other tab while the panel is open switches rather than closing. Outside the TUI this stays a standalone live widget, as before.
+- `/guard set <class> [allow|judge|ask|deny]`: set one class for this session from the command line (completions offer class ids — including custom ones — then dispositions). Without a disposition it prints the current effective value and where it came from.
+- `/guard guide <text>`: add classifier guidance for this session without waiting to be asked (see [Session guidance](#session-guidance)). Bare `/guard guide` prompts for the text; `/guard guide clear` drops every entry.
 - `/guard on`: enable Pi Guard.
 - `/guard off`: disable for the next agent turn, then re-enable automatically.
 - `/guard off session`: disable until the session ends.
@@ -226,6 +227,10 @@ denied`. The highlighted row's definition shows underneath.
 |---|---|
 | ↑ / ↓ | move the highlight |
 | ← / → / Enter | cycle the row: allow → judge → ask → deny |
+| `a` | add a custom class (also Enter on the trailing `＋ Add class…` row) |
+| `e` | edit the highlighted class's definition |
+| `d` | delete the highlighted class (custom classes only) |
+| Tab | switch between the **dispositions** and **rules** tabs |
 | Ctrl+S | save every session change to the global config |
 | Esc | close (session changes stay in effect) |
 
@@ -239,9 +244,82 @@ live while the agent works.
 In read-only mode a banner names the active preset and its rows render as
 `allow → deny*`: the preset tightens the effective value, cycling still edits
 the row underneath it. Over RPC the page degrades to select dialogs (pick a
-class, pick a disposition, repeat; "Save persistently" is the Ctrl+S
-equivalent), and `/guard set <class> <disposition>` does the same thing in one
-line.
+class, then a disposition, "Edit definition…", or "Delete class"; "Add new
+class…" and "Save persistently" close the list), and `/guard set <class>
+<disposition>` does the same thing in one line.
+
+### Custom capability classes
+
+The taxonomy is editable. You can add classes of your own, rewrite what any
+class means to the namer, and delete classes you added — the twelve built-ins
+can be **edited but not deleted**, since deterministic mappers and the
+read-only preset name them directly. Set a built-in to `deny`, or rewrite its
+definition, instead.
+
+On the page: `a` opens the add form (id, then definition), `e` edits the
+highlighted class's definition, `d` removes a custom class. Inside a form,
+**Tab** moves between fields, **Enter** or **Ctrl+S** commits, **Esc**
+cancels; validation errors keep you in the form with your text intact.
+
+Like disposition edits, class changes take effect **immediately at session
+scope** — the namer sees a new class on the very next action — and stay
+session-local until **Ctrl+S** writes them to the global config. Rows added
+this session are tagged `(new)`, edited ones `(edited)`; deleted ones simply
+disappear. The save message counts what moved: `Dispositions saved: 2 rows · 1
+class added · 1 edited · 1 removed.`
+
+New classes default to **ask**: a newly named intent is exactly the case for
+bringing you in, and it is the one default that cannot silently widen what the
+agent may do.
+
+Persisted classes live under `capabilities` in the config, merged **by id**
+across layers so a project config adding one class keeps the global ones:
+
+```jsonc
+{
+  "capabilities": {
+    // Custom classes join the namer's vocabulary.
+    "classes": [
+      {
+        "id": "touches-customer-data",           // kebab-case, cannot shadow a built-in
+        "name": "Touches customer data",         // optional; defaults to the id
+        "definition": "Reading or writing rows in the production customer database, including via ORM scripts and migration tooling. Reading fixture or seed data in the repo is read-project instead.",
+        "disposition": "deny"                    // optional; defaults to "ask"
+      }
+    ],
+    // Rewrite what a built-in means to the namer, keyed by built-in class id.
+    "definitions": {
+      "run-dev-tools": "Running this project's own tooling: pnpm scripts, vitest, tsc, biome. Anything invoking terraform or kubectl is off-machine-effects instead."
+    }
+  },
+  "dispositions": {
+    "touches-customer-data": "deny"              // custom ids are valid rows
+  }
+}
+```
+
+`definition` is prompt text the namer reads verbatim, so write it as a decision
+boundary ("X, but Y is class Z instead") rather than a description. An invalid
+entry is skipped with a diagnostic and the rest of the config still loads.
+
+Editing the taxonomy changes the payload prefix the namer sees, which
+invalidates the provider's prompt cache once — the accepted cost of a
+vocabulary you can edit.
+
+### Session guidance
+
+Answering a guard prompt with a comment records it as session guidance, which
+is injected into every later namer and judge call. `/guard guide <text>` adds
+an entry directly, without waiting to be asked:
+
+```
+/guard guide the deploy script in this repo is expected to push to staging
+```
+
+Entries share one ring with approval comments, capped at 12 (oldest drop out);
+the confirmation reports the position, `Guidance added for this session
+(3/12).` `/guard guide clear` empties it, and `/guard status` lists what is
+currently in force. Guidance is session-scoped and never persisted.
 
 ### How an action gets named
 
@@ -435,8 +513,10 @@ authorization process.
   `/guard status` and `/guard policy rules` toggle live *widgets*
   (fire-and-forget `setWidget` requests keyed `guard-status`/`guard-policy`,
   refreshed on every guard event) — user-visible in any client that renders
-  widgets, and never part of agent context. `/guard policy` (the disposition
-  page) degrades to select dialogs. Smoke and critique results arrive the same
+  widgets, and never part of agent context. The two-tab policy page is
+  TUI-only, so `/guard policy rules` stays a standalone widget here while
+  `/guard policy` (the table) degrades to select dialogs, class editing
+  included. Smoke and critique results arrive the same
   way, keyed `guard-report`.
 - **json / print modes** — truly headless: there is no one to ask. Ask
   decisions and out-of-roots path approvals become blocks whose reason states
@@ -549,9 +629,12 @@ Three seam modules own every run-mode branch; feature code never inspects
   callers already treat as cancel.
 
 The disposition page follows the same rule: `src/dispositions.ts` holds the
-row model (values, provenance, stats, save) with no UI in it, and the two
-surfaces — `src/tui/disposition-page.ts` and the RPC select loop in
-`src/commands/dispositions.ts` — render it.
+row model (values, provenance, stats, class add/edit/delete, save) with no UI
+in it, and the two surfaces — `src/tui/disposition-page.ts` and the RPC select
+loop in `src/commands/dispositions.ts` — render it. The class vocabulary
+itself lives one level down in `src/capabilities.ts`: `capabilityRegistry()`
+folds built-ins, config classes, and session edits into the ordered list that
+both the table and the namer payload read.
 
 Transient signals (`notify`, `setStatus`) work in TUI and RPC and no-op
 headless. New UI belongs in one of these seams — extend them rather than
