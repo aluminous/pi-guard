@@ -390,3 +390,98 @@ Taxonomy consequences adopted into the sketch:
    nicety; it is how this class is meant to be used).
 4. Broad reads defaulting allow confirms the read-exemption direction and
    keeps the read classes out of the friction budget entirely.
+
+### Adopted (2026-08-05): network-fetch is a class
+
+`network-fetch` joins the core taxonomy, default **judge**. Outbound
+sensitive data is never network-fetch (that is credentials /
+off-machine-effects by classification, regardless of domain). The domain
+allowlist remains sandbox enforcement input; promoting it to a
+deterministic trusted-fetch mapper (trusted domain → allow without review)
+is a later refinement — v1 labeling of fetches comes from the classifier,
+so network policy finally exists even with the sandbox off.
+
+### Adopted (2026-08-05): the disposition settings page replaces /guard policy
+
+The interactive page becomes THE policy surface (mechanism/rule view stays
+reachable as `/guard policy rules` — Stage 0's provenance annotations live
+there). Spec:
+
+- One row per class: name · disposition · session hit stats (hits, allows,
+  denies; asks when present). Left/right (or Enter) cycles
+  allow / ask / deny / judge on the highlighted row.
+- Every toggle takes effect immediately at **session scope**. Rows whose
+  effective disposition differs from the persisted value are highlighted in
+  a distinct color. **Ctrl+S persists** the current table globally
+  (persistent-settings pattern); highlights clear on save.
+- Stats refresh live (liveView refresh hook). Esc closes. Docked panel like
+  the other guard views; select-dialog degradation over RPC.
+- Adding/editing/defining classes in-page: explicitly deferred.
+
+Bootstrap defaults (maintainer calibration): read-project, read-system,
+run-dev-tools, modify-project, install-dependencies → **allow**;
+off-machine-effects → **ask**; credentials, local-destructive,
+persistence, network-fetch, unclassified → **judge**.
+
+v1 enforcement semantics (leapfrogs Stage 1's observe-first caution at
+maintainer direction; telemetry records label vs legacy decisions for
+audit): deterministic mappers (read exemption → read-project, command
+allowlist tags, path denies → credentials) resolve via the table directly;
+classifier emits a label set alongside its decision and the table resolves
+by severity-max over labels, with the classifier's own decision used only
+when no label is emitted. `judge` is a documented placeholder for full
+classifier review until the strong-model judge exists. `ask` uses the
+existing approval dialog; approval comments keep feeding session guidance.
+
+### Adopted (2026-08-05): dogfood the final semantics on the experimental branch
+
+No hybrid, no advisory mode — on `stage-0-attribution` the table and
+taxonomy actually decide, for real telemetry. Final decision path:
+
+- **Classifier becomes a single-stage namer** (the two-stage fast/full
+  split dies, per the remeasurement): it emits a label set + optional
+  authorization evidence, never a decision. Cache-friendly payload
+  discipline retained; class definitions replace prose rule tiers in the
+  prompt. Legacy classifier.rules config parses but is inert in capability
+  mode (diagnostic notes it).
+- **Deterministic mappers label without LLM**: read exemption →
+  read-project; allowlist templates carry capability tags; trusted-path
+  denials → credentials.
+- **Writes/edits get a deterministic content screen, not an unconditional
+  LLM pass** (revised 2026-08-05 after maintainer pushback — edits are 24%
+  of classifier traffic and burst-edit latency is real harm). Clean
+  content → deterministic modify-project/modify-system label → table, zero
+  LLM. The screen escalates to the namer when content or target is
+  lexically/structurally interesting: authorization/review/approval
+  lexicon and agent-directive phrasing; persistence surfaces by path
+  (manifest script blocks, git hooks, shell profiles, cron/launchd);
+  manifest diffs that add lifecycle scripts (structural JSON check);
+  credential-looking content (key material, long secrets, base64 blobs).
+  The namer then labels content-level risks (planting → persistence,
+  secrets → credentials) and severity-max resolves. Honest limits: a
+  paraphrasing adversary can evade a lexicon — accepted per the north star
+  (not an adversarial boundary; sandbox and deny-paths still bound blast
+  radius). Regression criterion: every round-2 subtle-* eval case MUST
+  trip the screen; the screen's trip rate is telemetry so over/under-
+  triggering is measurable. Users wanting always-review keep it: set
+  modify-project to judge for the session.
+- **Table resolves by severity-max** over labels: deny > ask > judge >
+  allow. Empty label set → unclassified.
+- **The judge is real, not a placeholder**: a thoughtful review with
+  curated richer context (recent user messages, session guidance, action
+  projection, recent guard decisions), ask-preferred decision rules,
+  per-action verdicts, model = `classifier.judgeModel` (default
+  "current" — the session model is typically the strong one).
+- **Core taxonomy grows modify-system** (writes outside the project),
+  default ask — out-of-roots writes need a class; 12 core classes total.
+- **Read-only mode becomes a session preset** flipping modify/destructive/
+  share rows to deny, keeping its deterministic write/edit block and its
+  fail-closed bash behavior when the namer is unavailable.
+- Classifier disabled = capability mode limited to deterministic mappers,
+  as today. Eval harness adapts to the new pipeline (same expected
+  decision sets; judge runs with the eval model) rather than being
+  abandoned.
+- Verification: /guard test (Stage 0) is the dogfood vehicle — it
+  exercises namer → table → judge without agent turns; manual tmux pass
+  over the settings page (toggle, highlight, Ctrl+S, live stats) and the
+  decision paths on implementation.
