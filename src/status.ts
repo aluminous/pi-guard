@@ -55,6 +55,19 @@ function formatTokensWithCache(stats: RailStats): string {
   return `${totalPrompt} in${cachePart} / ${stats.classifierOutputTokens} out`;
 }
 
+/**
+ * "5 (timeout 3 · server error 2)" — the count alone never said whether a
+ * session hit one provider incident or five different problems. Busiest kind
+ * first; the parenthetical disappears when there is nothing to break down.
+ */
+function formatErrorCounts(stats: RailStats): string {
+  const kinds = Object.entries(stats.errorsByKind)
+    .filter(([, count]) => count > 0)
+    .sort(([aKind, aCount], [bKind, bCount]) => bCount - aCount || aKind.localeCompare(bKind))
+    .map(([kind, count]) => `${kind} ${count}`);
+  return kinds.length > 0 ? `${stats.errors} (${kinds.join(" · ")})` : String(stats.errors);
+}
+
 function bulletList(items: string[], max = 3): string[] {
   if (items.length === 0) return ["  (none)"];
   const shown = items.slice(0, max).map((item) => `  • ${item}`);
@@ -188,7 +201,7 @@ export function formatRailStatus(state: RuntimeState, config: ResolvedRailConfig
     "",
     "## Decisions this session",
     `  Reviewed: ${state.stats.reviewed}  Allowed: ${state.stats.allowed}  Denied: ${state.stats.denied}  Asked: ${state.stats.asked}`,
-    `  Policy blocks: ${state.stats.blocked}  Exempt (no model consulted): ${state.stats.classifierSkips}  Errors: ${state.stats.errors}`,
+    `  Policy blocks: ${state.stats.blocked}  Exempt (no model consulted): ${state.stats.classifierSkips}  Errors: ${formatErrorCounts(state.stats)}`,
     `  Tokens: ${formatTokensWithCache(state.stats)}`,
     "",
     "## Capabilities seen this session",

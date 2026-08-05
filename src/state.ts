@@ -21,6 +21,8 @@ export interface RailStats {
   asked: number;
   blocked: number;
   errors: number;
+  /** Classifier failures bucketed by cause ("timeout", "server error", "connection", …); only kinds actually seen appear. */
+  errorsByKind: Record<string, number>;
   ruleHits: number;
   classifierHits: number;
   classifierDenials: number;
@@ -98,6 +100,7 @@ export function createRailStats(): RailStats {
     asked: 0,
     blocked: 0,
     errors: 0,
+    errorsByKind: {},
     ruleHits: 0,
     classifierHits: 0,
     classifierDenials: 0,
@@ -248,7 +251,13 @@ export function recordClassifierSkip(state: RuntimeState): void {
   state.stats.classifierSkips++;
 }
 
-export function recordClassifierError(state: RuntimeState, toolName: string, reason: string): void {
+/**
+ * One classifier failure — namer or judge. `kind` is the coarse cause bucket
+ * from classifyClassifierFailure, so a session can say whether its five errors
+ * were one provider incident or five different problems.
+ */
+export function recordClassifierError(state: RuntimeState, toolName: string, reason: string, kind: string): void {
   state.stats.errors++;
+  state.stats.errorsByKind[kind] = (state.stats.errorsByKind[kind] ?? 0) + 1;
   pushRecent(state, { at: Date.now(), toolName, decision: "error", reason });
 }

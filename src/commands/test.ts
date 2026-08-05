@@ -6,6 +6,7 @@
 // helpers the interceptor consults, so verdicts cannot drift.
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { capabilityName, resolveCapabilities, type CapabilityId, type CapabilityResolution } from "../capabilities.ts";
+import { describeClassifierFailure } from "../classifier-protocol.ts";
 import { classifierEnabled, judgeToolCall, nameToolCall, resolveClassifierModel, resolveJudgeModel, type CompleteFn, type NamerResult } from "../classifier.ts";
 import { allowlistCapabilities, explainCommandAllowlist } from "../command-allowlist.ts";
 import { configSourceLabel, loadConfig, type ResolvedRailConfig } from "../config.ts";
@@ -15,7 +16,7 @@ import { exemptReadCallReason } from "../interceptor.ts";
 import { showRailView } from "../live-view.ts";
 import { decidePathAccess, denyReadMatch, type AccessKind } from "../policy.ts";
 import { syncCapabilityPreset, type RuntimeState } from "../state.ts";
-import { formatError } from "../util.ts";
+
 
 export interface RailTestDeps {
   state: RuntimeState;
@@ -79,7 +80,7 @@ export function createRailTest(deps: RailTestDeps) {
       return {
         failed: true,
         lines: [
-          `  namer: naming failed — ${formatError(error)}`,
+          `  namer: naming failed — ${describeClassifierFailure(error)}`,
           `  a real call would ${config.classifier.failClosed ? "stop the turn (fail closed)" : "fail open and proceed"}`,
         ],
       };
@@ -130,7 +131,7 @@ export function createRailTest(deps: RailTestDeps) {
       };
     } catch (error) {
       return {
-        lines: [...lines, `  judge: review failed — ${formatError(error)}`, "  a real call would fall back to asking the user"],
+        lines: [...lines, `  judge: review failed — ${describeClassifierFailure(error)}`, "  a real call would fall back to asking the user"],
         verdict: "would ask the user (judge unavailable)",
       };
     }

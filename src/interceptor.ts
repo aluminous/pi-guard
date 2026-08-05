@@ -27,6 +27,7 @@ import {
   type JudgeResult,
   type NamerResult,
 } from "./classifier.ts";
+import { classifierFailureContext, classifyClassifierFailure, describeClassifierFailure } from "./classifier-protocol.ts";
 import { allowlistCapabilities, explainCommandAllowlist } from "./command-allowlist.ts";
 import { configSourceLabel, type ResolvedRailConfig } from "./config.ts";
 import { screenToolCall, type ContentScreenVerdict } from "./content-screen.ts";
@@ -46,7 +47,7 @@ import {
   syncCapabilityPreset,
   type RuntimeState,
 } from "./state.ts";
-import { formatError, textPrefix } from "./util.ts";
+import { textPrefix } from "./util.ts";
 
 export interface ToolCallBlock {
   block: true;
@@ -449,11 +450,24 @@ function handleNamerFailure(
   model: string | undefined,
   latencyMs: number,
 ): ToolCallBlock | undefined {
-  const reason = formatError(error);
+  // "timeout after 15000ms on openrouter/anthropic/claude-haiku-4.5 after 5
+  // attempts: …" — every terminal surface says which failure, how many calls it
+  // cost, and which model, because "Rail classifier failed closed: fetch
+  // failed" is exactly the report nobody can act on.
+  const reason = describeClassifierFailure(error, { model });
+  const failure = classifyClassifierFailure(error);
   state.classifier.lastError = reason;
-  recordClassifierError(state, event.toolName, reason);
+  recordClassifierError(state, event.toolName, reason, failure.category);
   addTraceStage(trace, "namer", "error", `naming failed: ${reason}`);
-  appendRailTelemetry(state, { kind: "error", tool: event.toolName, reason, latencyMs, model });
+  appendRailTelemetry(state, {
+    kind: "error",
+    tool: event.toolName,
+    reason,
+    failureKind: failure.category,
+    attempts: classifierFailureContext(error)?.attempts,
+    latencyMs,
+    model: classifierFailureContext(error)?.model ?? model,
+  });
   if (isClassifierModelUnavailable(error)) {
     ctx.ui.notify(`Rail classifier unavailable: ${reason}. Stopping this turn for user intervention.`, "error");
     ctx.abort();
@@ -686,10 +700,24 @@ async function runJudgeStage(
       fallbackReason: "",
     };
   } catch (error) {
-    const reason = formatError(error);
+    // Same enrichment and the same by-kind counters as a namer failure: the
+    // judge runs on the same completeText machinery, so a provider incident
+    // that shows up here is the same incident, and used to be invisible to
+    // stats.errors entirely.
+    const reason = describeClassifierFailure(error, { model });
+    const failure = classifyClassifierFailure(error);
     state.classifier.lastError = reason;
+    recordClassifierError(state, event.toolName, `judge: ${reason}`, failure.category);
     addTraceStage(trace, "judge", "error", `judge failed: ${reason} — falling back to ask`);
-    appendRailTelemetry(state, { kind: "error", tool: event.toolName, reason: `judge: ${reason}`, latencyMs: Math.round(performance.now() - startedAt), model });
+    appendRailTelemetry(state, {
+      kind: "error",
+      tool: event.toolName,
+      reason: `judge: ${reason}`,
+      failureKind: failure.category,
+      attempts: classifierFailureContext(error)?.attempts,
+      latencyMs: Math.round(performance.now() - startedAt),
+      model: classifierFailureContext(error)?.model ?? model,
+    });
     return { disposition: "ask", fallbackReason: `the escalation reviewer could not run (${reason})` };
   }
 }

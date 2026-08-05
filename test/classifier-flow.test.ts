@@ -159,8 +159,8 @@ describe("retry behavior", () => {
     const result = await name(io);
     assert.deepEqual(result.labels, ["read-project"]);
     assert.equal(calls.length, 3);
-    assert.ok(notifications[0]?.includes("(server error (503))"), notifications[0]);
-    assert.ok(notifications[1]?.includes("(server error)"), notifications[1]);
+    assert.ok(notifications[0]?.includes("(server error (503))"), notifications[0] ?? "no notification");
+    assert.ok(notifications[1]?.includes("(server error)"), notifications[1] ?? "no notification");
   });
 
   it("tags a terminal failure with the attempts it burned and the model it called", async () => {

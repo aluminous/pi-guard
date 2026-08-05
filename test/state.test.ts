@@ -69,11 +69,24 @@ describe("decision recording", () => {
     assert.equal(state.stats.allowed, 1);
   });
 
-  it("records classifier errors", () => {
+  it("records classifier errors and buckets them by kind", () => {
     const state = createRuntimeState();
-    recordClassifierError(state, "bash", "boom");
+    recordClassifierError(state, "bash", "boom", "timeout");
     assert.equal(state.stats.errors, 1);
     assert.equal(state.recent[0]?.decision, "error");
+    assert.deepEqual(state.stats.errorsByKind, { timeout: 1 });
+  });
+
+  it("accumulates per-kind error counts and clears them on session reset", () => {
+    const state = createRuntimeState();
+    recordClassifierError(state, "bash", "a", "timeout");
+    recordClassifierError(state, "bash", "b", "server error");
+    recordClassifierError(state, "write", "c", "timeout");
+    assert.equal(state.stats.errors, 3);
+    assert.deepEqual(state.stats.errorsByKind, { timeout: 2, "server error": 1 });
+    resetSessionState(state);
+    assert.equal(state.stats.errors, 0);
+    assert.deepEqual(state.stats.errorsByKind, {});
   });
 
   it("caps recent events at 8", () => {

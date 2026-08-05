@@ -1,11 +1,12 @@
 import type { BashOperations, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resolveCapabilities } from "../capabilities.ts";
+import { describeClassifierFailure } from "../classifier-protocol.ts";
 import { nameToolCall } from "../classifier.ts";
 import { loadConfig } from "../config.ts";
 import { screenToolCall } from "../content-screen.ts";
 import { showRailView } from "../live-view.ts";
 import type { RuntimeState } from "../state.ts";
-import { formatError } from "../util.ts";
+
 
 export function createRailSmoke(deps: {
   state: RuntimeState;
@@ -58,7 +59,7 @@ export function createRailSmoke(deps: {
             detail: `screen ${screen.applies ? (screen.tripped ? "tripped" : "clean") : "n/a"}${named.authorizationEvidence ? ` · evidence "${named.authorizationEvidence}"` : ""}`,
           });
         } catch (error) {
-          rows.push({ name: item.name, disposition: "ERROR", labels: "-", detail: formatError(error) });
+          rows.push({ name: item.name, disposition: "ERROR", labels: "-", detail: describeClassifierFailure(error) });
         }
       }
     } finally {

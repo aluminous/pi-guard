@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import { CONFIG_DIR_NAME, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { recordCapabilityOutcome, recordScreenVerdict } from "../src/capabilities.ts";
 import { globalRailConfigPath, mergeConfig } from "../src/config.ts";
-import { createRuntimeState, recordCapabilityDecision, resetTurnStats } from "../src/state.ts";
+import { createRuntimeState, recordCapabilityDecision, recordClassifierError, resetTurnStats } from "../src/state.ts";
 import { formatRailPolicy, formatRailStatus, statusLineVisible } from "../src/status.ts";
 import { showRailView, toggleRailView } from "../src/live-view.ts";
 import { testConfig } from "./helpers.ts";
@@ -41,6 +41,30 @@ describe("rail status session sections", () => {
     assert.match(status, /Session guidance/);
     assert.match(status, /staging deploys are fine/);
     assert.match(status, /Exempt \(no model consulted\): 3/);
+  });
+
+  it("breaks the error count down by cause, busiest first", () => {
+    const state = createRuntimeState();
+    recordClassifierError(state, "bash", "a", "timeout");
+    recordClassifierError(state, "bash", "b", "server error");
+    recordClassifierError(state, "write", "c", "timeout");
+    recordClassifierError(state, "bash", "d", "server error");
+    recordClassifierError(state, "bash", "e", "timeout");
+    const status = formatRailStatus(state, testConfig());
+    assert.match(status, /Errors: 5 \(timeout 3 · server error 2\)/);
+  });
+
+  it("omits the breakdown when nothing has failed", () => {
+    const status = formatRailStatus(createRuntimeState(), testConfig());
+    assert.match(status, /Errors: 0$/m);
+  });
+
+  it("does not truncate the enriched last error", () => {
+    const state = createRuntimeState();
+    const lastError = "timeout after 15000ms on openrouter/anthropic/claude-haiku-4.5 after 5 attempts: fetch failed ← read ECONNRESET [errno -54]";
+    state.classifier.lastError = lastError;
+    const status = formatRailStatus(state, testConfig());
+    assert.ok(status.includes(`Last error: ${lastError}`), status);
   });
 
   it("summarizes per-class capability stats for classes seen this session", () => {

@@ -91,6 +91,15 @@ export interface RailApprovalTelemetry extends RailTelemetryBase {
 export interface RailErrorTelemetry extends RailTelemetryBase {
   kind: "error";
   reason: string;
+  /**
+   * The cause bucket: "timeout", "server error", "connection", "unavailable",
+   * "invalid response", … Named `failureKind` because `kind` is already the
+   * record discriminant. Corpus analysis groups on this; `reason` carries the
+   * specific status/code and the attempts burned.
+   */
+  failureKind: string;
+  /** Model calls burned before giving up. */
+  attempts?: number;
   latencyMs: number;
   model?: string;
 }
