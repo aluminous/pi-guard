@@ -2,6 +2,7 @@ import { capabilityDefinitionsForPrompt, type CapabilityClass, type CapabilityId
 import type { ResolvedRailConfig } from "./config.ts";
 import { INTERCEPTED_TOOLS } from "./intercepted-tools.ts";
 import { summarizePolicy } from "./policy.ts";
+import { errorChain, formatError, type ErrorChainNode } from "./util.ts";
 
 /** What a review can end up doing to a call once the table (and possibly the judge) has spoken. */
 export type RailDecision = "allow" | "deny" | "ask";
@@ -48,14 +49,52 @@ export class ClassifierModelUnavailableError extends Error {
 }
 
 export class ClassifierRetryableError extends Error {
-  constructor(message: string) {
+  /** The per-attempt budget that expired, so the failure kind can name it. */
+  readonly timeoutMs?: number;
+
+  constructor(message: string, timeoutMs?: number) {
     super(message);
     this.name = "ClassifierRetryableError";
+    this.timeoutMs = timeoutMs;
   }
 }
 
 export function isClassifierModelUnavailable(error: unknown): boolean {
   return error instanceof ClassifierModelUnavailableError;
+}
+
+/**
+ * How many attempts a failed classifier call burned, and against which model.
+ * Attached to the error itself rather than threaded through return types: the
+ * retry budget lives inside completeText, but the surfaces that report a
+ * failure (the block reason, the notification, lastError, telemetry) are three
+ * call frames away and each one wants the same three facts. A symbol keeps it
+ * off enumeration, so nothing serializes or logs it by accident.
+ */
+export interface ClassifierAttemptContext {
+  attempts: number;
+  maxAttempts: number;
+  /** provider/id of the model that was called. */
+  model?: string;
+}
+
+const FAILURE_CONTEXT = Symbol.for("pi-rail.classifier-failure-context");
+
+export function tagClassifierFailure<T>(error: T, context: ClassifierAttemptContext): T {
+  if (error !== null && typeof error === "object") {
+    try {
+      Object.defineProperty(error, FAILURE_CONTEXT, { value: context, configurable: true, enumerable: false });
+    } catch {
+      // A frozen error still carries its message; the attempt count is a nicety.
+    }
+  }
+  return error;
+}
+
+export function classifierFailureContext(error: unknown): ClassifierAttemptContext | undefined {
+  if (error === null || typeof error !== "object") return undefined;
+  const value = (error as Record<symbol, unknown>)[FAILURE_CONTEXT];
+  return value !== null && typeof value === "object" ? (value as ClassifierAttemptContext) : undefined;
 }
 
 export const NAMER_SYSTEM_PROMPT = `You are the capability namer for a local coding agent's guard.
@@ -199,54 +238,218 @@ export function parseJudgeResult(text: string): JudgeResult {
   return { decision, reason: reason.trim() };
 }
 
+/**
+ * The coarse bucket a classifier failure falls in: the key of
+ * RailStats.errorsByKind and of the telemetry `failureKind`, so a session that
+ * burned five reviews can say whether it was one provider incident or five
+ * different problems.
+ */
+export type ClassifierFailureCategory =
+  | "timeout"
+  | "rate limit"
+  | "server error"
+  | "dns"
+  | "connection"
+  | "network"
+  | "unavailable"
+  | "invalid response"
+  | "aborted"
+  | "error";
+
+export interface ClassifierFailure {
+  category: ClassifierFailureCategory;
+  /** The category plus what makes it actionable: "server error (503)", "connection: ECONNRESET", "timeout after 15000ms". */
+  kind: string;
+  /** The transport code found anywhere in the cause chain, when there is one. */
+  code?: string;
+  /** The HTTP status, from a provider error field or the message text. */
+  status?: number;
+}
+
+/** Transport codes worth naming, and the bucket each belongs to. */
+const TRANSPORT_CODES: Record<string, ClassifierFailureCategory> = {
+  ETIMEDOUT: "timeout",
+  ESOCKETTIMEDOUT: "timeout",
+  UND_ERR_CONNECT_TIMEOUT: "timeout",
+  UND_ERR_HEADERS_TIMEOUT: "timeout",
+  UND_ERR_BODY_TIMEOUT: "timeout",
+  ENOTFOUND: "dns",
+  EAI_AGAIN: "dns",
+  ECONNRESET: "connection",
+  ECONNREFUSED: "connection",
+  ECONNABORTED: "connection",
+  EHOSTUNREACH: "connection",
+  ENETUNREACH: "connection",
+  ENETDOWN: "connection",
+  EPIPE: "connection",
+  EPROTO: "connection",
+  UND_ERR_SOCKET: "connection",
+};
+
+/** 5xx phrasings that arrive without a parsable status code. */
+const SERVER_ERROR_PHRASES = [
+  "internal server error",
+  "bad gateway",
+  "service unavailable",
+  "gateway timeout",
+  "overloaded",
+  "server_error",
+  "upstream error",
+  "upstream connect error",
+];
+
+/**
+ * A bare 3-digit 4xx/5xx in the message. Bounded on both sides so the numbers
+ * that surround a transport failure do not read as statuses: "after 15000ms"
+ * and "in 500ms" are durations, and ":443" in "connect ETIMEDOUT 1.2.3.4:443"
+ * is a port — reading that one as a client error cost the retry that a connect
+ * timeout most needs.
+ */
+const STATUS_IN_TEXT = /(?:^|[^\w.:])([45]\d{2})(?![\w.])/;
+
+function statusFromText(text: string): number | undefined {
+  const match = STATUS_IN_TEXT.exec(text);
+  return match?.[1] ? Number(match[1]) : undefined;
+}
+
+/** The auth/model failures no retry can fix, named specifically enough to act on. */
+function unavailableKind(text: string, status: number | undefined): string | undefined {
+  if (text.includes("no api key")) return "no api key";
+  if (text.includes("invalid api key") || text.includes("unauthorized") || status === 401) return "auth rejected";
+  if (
+    text.includes("model not found")
+    || text.includes("invalid model")
+    || text.includes("unknown model")
+    || text.includes("model does not exist")
+    || text.includes("does not have access to model")
+    || text.includes("model is not supported")
+  ) {
+    return "model not found";
+  }
+  return undefined;
+}
+
+function transportCode(chain: ErrorChainNode[], text: string): string | undefined {
+  const fromField = chain.find((node) => node.code && TRANSPORT_CODES[node.code.toUpperCase()])?.code;
+  if (fromField) return fromField.toUpperCase();
+  return Object.keys(TRANSPORT_CODES).find((code) => text.includes(code.toLowerCase()));
+}
+
+function timeoutKind(timeoutMs: number | undefined, code: string | undefined): string {
+  if (timeoutMs !== undefined) return `timeout after ${timeoutMs}ms`;
+  return code ? `timeout: ${code}` : "timeout";
+}
+
+/**
+ * One classification for every consumer: the retry decision, the per-attempt
+ * notification, the terminal message, and the by-kind stats. Reads the whole
+ * cause chain, because node's fetch puts the only useful word (ECONNRESET,
+ * ENOTFOUND) two levels below "fetch failed".
+ */
+export function classifyClassifierFailure(error: unknown): ClassifierFailure {
+  const chain = errorChain(error);
+  const text = chain.map((node) => `${node.name} ${node.message}`).join(" ").toLowerCase();
+  // A `status` field is authoritative; a number scraped out of prose is not, so
+  // it ranks below the transport code rather than above it.
+  const fieldStatus = chain.find((node) => node.status !== undefined)?.status;
+  const textStatus = statusFromText(text);
+  const status = fieldStatus ?? textStatus;
+  const code = transportCode(chain, text);
+  const reportedCode = code ?? chain.find((node) => node.code)?.code;
+
+  if (error instanceof ClassifierRetryableError) {
+    return { category: "timeout", kind: timeoutKind(error.timeoutMs, code), code: reportedCode, status };
+  }
+  if (error instanceof ClassifierModelUnavailableError) {
+    return { category: "unavailable", kind: unavailableKind(text, status) ?? "model unavailable", code: reportedCode, status };
+  }
+  const unavailable = unavailableKind(text, status);
+  if (unavailable) return { category: "unavailable", kind: unavailable, code: reportedCode, status };
+
+  const failure = (category: ClassifierFailureCategory, kind: string): ClassifierFailure => ({ category, kind, code: reportedCode, status });
+
+  const byStatus = (value: number): ClassifierFailure | undefined => {
+    if (value >= 500) return failure("server error", `server error (${value})`);
+    if (value === 429) return failure("rate limit", "rate limit");
+    if (value === 408) return failure("timeout", timeoutKind(undefined, code));
+    if (value >= 400) return failure("error", `client error (${value})`);
+    return undefined;
+  };
+  if (fieldStatus !== undefined) {
+    const resolved = byStatus(fieldStatus);
+    if (resolved) return resolved;
+  }
+  const byCode = code ? TRANSPORT_CODES[code] : undefined;
+  if (byCode === "timeout") return failure("timeout", timeoutKind(undefined, code));
+  if (byCode === "dns") return failure("dns", `dns: ${code}`);
+  if (byCode === "connection") return failure("connection", `connection: ${code}`);
+  if (textStatus !== undefined) {
+    const resolved = byStatus(textStatus);
+    if (resolved) return resolved;
+  }
+
+  if (text.includes("timed out") || text.includes("timeout")) return failure("timeout", "timeout");
+  if (text.includes("rate limit") || text.includes("too many requests")) return failure("rate limit", "rate limit");
+  if (SERVER_ERROR_PHRASES.some((phrase) => text.includes(phrase))) return failure("server error", "server error");
+  if (text.includes("getaddrinfo") || text.includes("dns")) return failure("dns", "dns/network");
+  if (text.includes("socket") || text.includes("connection")) return failure("connection", "connection/network");
+  if (text.includes("network") || text.includes("fetch failed") || text.includes("temporarily unavailable")) return failure("network", "network");
+
+  if (
+    text.includes("did not return json")
+    || text.includes("json is not an object")
+    || text.includes("invalid namer")
+    || text.includes("invalid judge")
+    || text.includes("is not valid json")
+    || text.includes("unexpected token")
+    || text.includes("unexpected end of json")
+  ) {
+    return failure("invalid response", "invalid response");
+  }
+  if (text.includes("review aborted") || chain.some((node) => node.name === "AbortError")) return failure("aborted", "aborted");
+  return failure("error", "error");
+}
+
+/** The kind shown in retry and failure messages. */
 export function retryFailureKind(error: unknown): string {
-  if (error instanceof ClassifierRetryableError) return "timeout";
-  if (!(error instanceof Error)) return "retryable error";
-  const message = error.message.toLowerCase();
-  const name = error.name.toLowerCase();
-  if (name.includes("timeout") || message.includes("timed out") || message.includes("timeout") || message.includes("etimedout")) return "timeout";
-  if (message.includes("429") || message.includes("rate limit")) return "rate limit";
-  if (message.includes("enotfound") || message.includes("eai_again")) return "dns/network";
-  if (message.includes("econnreset") || message.includes("econnrefused") || message.includes("socket") || message.includes("connection")) return "connection/network";
-  if (name.includes("network") || message.includes("network") || message.includes("fetch failed") || message.includes("temporarily unavailable")) return "network";
-  return "retryable error";
+  return classifyClassifierFailure(error).kind;
+}
+
+/**
+ * The one-line failure summary every terminal surface uses:
+ * "timeout after 15000ms on openrouter/anthropic/claude-haiku-4.5 after 5 attempts: <detail>".
+ */
+export function describeClassifierFailure(error: unknown, fallback?: { model?: string }): string {
+  const context = classifierFailureContext(error);
+  const model = context?.model ?? fallback?.model;
+  const attempts = context?.attempts;
+  const head = [
+    retryFailureKind(error),
+    model ? `on ${model}` : undefined,
+    attempts ? `after ${attempts} attempt${attempts === 1 ? "" : "s"}` : undefined,
+  ].filter((part): part is string => part !== undefined);
+  return `${head.join(" ")}: ${formatError(error)}`;
 }
 
 export function isModelUnavailableError(error: unknown): boolean {
-  if (error instanceof ClassifierModelUnavailableError) return true;
-  if (!(error instanceof Error)) return false;
-  const message = error.message.toLowerCase();
-  return message.includes("no api key")
-    || message.includes("invalid api key")
-    || message.includes("unauthorized")
-    || message.includes("401")
-    || message.includes("model not found")
-    || message.includes("invalid model")
-    || message.includes("unknown model")
-    || message.includes("model does not exist")
-    || message.includes("does not have access to model")
-    || message.includes("model is not supported");
+  return classifyClassifierFailure(error).category === "unavailable";
 }
 
+const RETRYABLE_CATEGORIES: ReadonlySet<ClassifierFailureCategory> = new Set<ClassifierFailureCategory>([
+  "timeout",
+  "rate limit",
+  "server error",
+  "dns",
+  "connection",
+  "network",
+]);
+
+/**
+ * Retry the failures a second attempt can actually fix. 5xx and "overloaded"
+ * belong here: they are the provider-incident failures the loop exists for, and
+ * before this they fell through to a single attempt and a stopped turn. 4xx
+ * other than 429/408 stay terminal — a malformed request repeats identically.
+ */
 export function isRetryableClassifierError(error: unknown): boolean {
-  if (error instanceof ClassifierRetryableError) return true;
-  if (!(error instanceof Error)) return false;
-  const message = error.message.toLowerCase();
-  const name = error.name.toLowerCase();
-  return name.includes("timeout")
-    || name.includes("network")
-    || message.includes("timed out")
-    || message.includes("timeout")
-    || message.includes("network")
-    || message.includes("fetch failed")
-    || message.includes("socket")
-    || message.includes("connection")
-    || message.includes("econnreset")
-    || message.includes("econnrefused")
-    || message.includes("etimedout")
-    || message.includes("enotfound")
-    || message.includes("eai_again")
-    || message.includes("429")
-    || message.includes("rate limit")
-    || message.includes("temporarily unavailable");
+  return RETRYABLE_CATEGORIES.has(classifyClassifierFailure(error).category);
 }

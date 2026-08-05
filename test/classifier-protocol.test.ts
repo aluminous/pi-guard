@@ -1,15 +1,21 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  ClassifierModelUnavailableError,
+  ClassifierRetryableError,
   JUDGE_SYSTEM_PROMPT,
   NAMER_SYSTEM_PROMPT,
   buildJudgeText,
   buildNamerText,
+  classifyClassifierFailure,
+  describeClassifierFailure,
   isModelUnavailableError,
   isRetryableClassifierError,
   parseJudgeResult,
   parseNamerResult,
   projectToolCall,
+  retryFailureKind,
+  tagClassifierFailure,
 } from "../src/classifier-protocol.ts";
 import { capabilityRegistry, capabilityRegistryIds } from "../src/capabilities.ts";
 import { testConfig } from "./helpers.ts";
@@ -119,6 +125,106 @@ describe("error classification", () => {
     assert.equal(isModelUnavailableError(new Error("401 Unauthorized")), true);
     assert.equal(isModelUnavailableError(new Error("model not found: foo/bar")), true);
     assert.equal(isModelUnavailableError(new Error("ECONNRESET")), false);
+  });
+
+  it("retries provider 5xx, which is the incident the loop exists for", () => {
+    for (const message of ["503 Service Unavailable", "502 Bad Gateway", "500 internal server error", "529 overloaded_error", "Overloaded"]) {
+      assert.equal(isRetryableClassifierError(new Error(message)), true, message);
+    }
+    assert.equal(isRetryableClassifierError(Object.assign(new Error("upstream rejected"), { status: 503 })), true);
+  });
+
+  it("does not retry 4xx other than 429/408", () => {
+    assert.equal(isRetryableClassifierError(new Error("400 invalid request body")), false);
+    assert.equal(isRetryableClassifierError(new Error("401 Unauthorized")), false);
+    assert.equal(isRetryableClassifierError(new Error("404 no such route")), false);
+    assert.equal(isRetryableClassifierError(new Error("429 slow down")), true);
+    assert.equal(isRetryableClassifierError(new Error("408 request timeout")), true);
+  });
+
+  it("finds the cause-buried code that the outer message hides", () => {
+    const buried = (message: string, code: string) =>
+      new TypeError("fetch failed", { cause: Object.assign(new Error(message), { code }) });
+    assert.equal(isRetryableClassifierError(buried("read ECONNRESET", "ECONNRESET")), true);
+    assert.equal(retryFailureKind(buried("read ECONNRESET", "ECONNRESET")), "connection: ECONNRESET");
+    assert.equal(retryFailureKind(buried("getaddrinfo ENOTFOUND api.test", "ENOTFOUND")), "dns: ENOTFOUND");
+    assert.equal(retryFailureKind(buried("connect ETIMEDOUT 1.2.3.4:443", "ETIMEDOUT")), "timeout: ETIMEDOUT");
+  });
+
+  it("does not mistake a port or a duration for an HTTP status", () => {
+    const connect = new TypeError("fetch failed", { cause: Object.assign(new Error("connect ETIMEDOUT 1.2.3.4:443"), { code: "ETIMEDOUT" }) });
+    assert.equal(classifyClassifierFailure(connect).category, "timeout");
+    assert.equal(classifyClassifierFailure(new Error("reviewer timed out after 15000ms")).category, "timeout");
+  });
+});
+
+describe("retryFailureKind", () => {
+  it("names the HTTP status on a server error", () => {
+    assert.equal(retryFailureKind(new Error("503 Service Unavailable")), "server error (503)");
+    assert.equal(retryFailureKind(new Error("502 Bad Gateway")), "server error (502)");
+    assert.equal(retryFailureKind(new Error("529 overloaded_error")), "server error (529)");
+    assert.equal(retryFailureKind(Object.assign(new Error("upstream rejected"), { status: 500 })), "server error (500)");
+    assert.equal(retryFailureKind(new Error("Overloaded")), "server error", "no status to name");
+  });
+
+  it("names the timeout budget when the rail's own deadline expired", () => {
+    assert.equal(retryFailureKind(new ClassifierRetryableError("reviewer timed out after 15000ms", 15000)), "timeout after 15000ms");
+    assert.equal(retryFailureKind(new Error("request timed out")), "timeout");
+  });
+
+  it("keeps the vague names only when nothing more specific is knowable", () => {
+    assert.equal(retryFailureKind(new Error("socket hang up")), "connection/network");
+    assert.equal(retryFailureKind(new Error("getaddrinfo failed")), "dns/network");
+    assert.equal(retryFailureKind(new Error("429 slow down")), "rate limit");
+  });
+
+  it("names non-transport failures for what they are", () => {
+    assert.equal(retryFailureKind(new Error("reviewer did not return JSON")), "invalid response");
+    assert.equal(retryFailureKind(new Error("400 invalid request body")), "client error (400)");
+    assert.equal(retryFailureKind(new Error("401 Unauthorized")), "auth rejected");
+    assert.equal(retryFailureKind(new ClassifierModelUnavailableError("No API key for openrouter")), "no api key");
+    assert.equal(retryFailureKind(new Error("classifier review aborted")), "aborted");
+  });
+
+  it("buckets kinds for the by-kind counters", () => {
+    assert.equal(classifyClassifierFailure(new Error("503 Service Unavailable")).category, "server error");
+    assert.equal(classifyClassifierFailure(new Error("504 Gateway Timeout")).category, "server error");
+    assert.equal(classifyClassifierFailure(new ClassifierRetryableError("reviewer timed out after 15000ms", 15000)).category, "timeout");
+    assert.equal(classifyClassifierFailure(new Error("boom")).category, "error");
+  });
+});
+
+describe("describeClassifierFailure", () => {
+  it("reads kind, model, attempts, then the enriched detail", () => {
+    const error = tagClassifierFailure(new ClassifierRetryableError("reviewer timed out after 15000ms", 15000), {
+      attempts: 5,
+      maxAttempts: 5,
+      model: "openrouter/anthropic/claude-haiku-4.5",
+    });
+    assert.equal(
+      describeClassifierFailure(error),
+      "timeout after 15000ms on openrouter/anthropic/claude-haiku-4.5 after 5 attempts: reviewer timed out after 15000ms",
+    );
+  });
+
+  it("carries the cause chain into the detail", () => {
+    const error = tagClassifierFailure(new TypeError("fetch failed", { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) }), {
+      attempts: 3,
+      maxAttempts: 5,
+      model: "test/fake",
+    });
+    assert.equal(describeClassifierFailure(error), "connection: ECONNRESET on test/fake after 3 attempts: fetch failed ← read ECONNRESET");
+  });
+
+  it("falls back to the caller's model and omits attempts it never learned", () => {
+    assert.equal(describeClassifierFailure(new Error("boom"), { model: "test/fake" }), "error on test/fake: boom");
+    assert.equal(describeClassifierFailure(new Error("boom")), "error: boom");
+  });
+
+  it("survives a frozen error without losing the message", () => {
+    const frozen = Object.freeze(new Error("503 Service Unavailable"));
+    tagClassifierFailure(frozen, { attempts: 2, maxAttempts: 5, model: "test/fake" });
+    assert.equal(describeClassifierFailure(frozen), "server error (503): 503 Service Unavailable");
   });
 });
 
