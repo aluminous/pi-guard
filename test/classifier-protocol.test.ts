@@ -11,7 +11,15 @@ import {
   parseNamerResult,
   projectToolCall,
 } from "../src/classifier-protocol.ts";
+import { capabilityRegistry, capabilityRegistryIds } from "../src/capabilities.ts";
 import { testConfig } from "./helpers.ts";
+
+/** The stock taxonomy: no config classes, no session edits. */
+const REGISTRY = capabilityRegistry(undefined, undefined);
+const BUILTIN_IDS = capabilityRegistryIds(REGISTRY);
+
+/** parseNamerResult against the stock registry; custom-vocabulary cases pass their own id set. */
+const parseStock = (text: string) => parseNamerResult(text, BUILTIN_IDS);
 
 describe("namer system prompt", () => {
   it("keeps the namer out of the decision business", () => {
@@ -41,33 +49,33 @@ describe("judge system prompt", () => {
 
 describe("parseNamerResult", () => {
   it("parses labels and optional authorization evidence", () => {
-    const result = parseNamerResult('{"labels":["network-fetch","modify-project"],"authorizationEvidence":"download the schema"}');
+    const result = parseStock('{"labels":["network-fetch","modify-project"],"authorizationEvidence":"download the schema"}');
     assert.deepEqual(result.labels, ["network-fetch", "modify-project"]);
     assert.equal(result.authorizationEvidence, "download the schema");
   });
 
   it("extracts JSON embedded in prose or code fences", () => {
-    assert.deepEqual(parseNamerResult('Here you go:\n```json\n{"labels":["read-project"]}\n```').labels, ["read-project"]);
+    assert.deepEqual(parseStock('Here you go:\n```json\n{"labels":["read-project"]}\n```').labels, ["read-project"]);
   });
 
   it("drops unknown class ids rather than failing the protocol", () => {
-    assert.deepEqual(parseNamerResult('{"labels":["read-project","prod-deploy"]}').labels, ["read-project"]);
+    assert.deepEqual(parseStock('{"labels":["read-project","prod-deploy"]}').labels, ["read-project"]);
   });
 
   it("falls back to unclassified when nothing valid is left", () => {
-    assert.deepEqual(parseNamerResult('{"labels":[]}').labels, ["unclassified"]);
-    assert.deepEqual(parseNamerResult('{"labels":["nonsense"]}').labels, ["unclassified"]);
+    assert.deepEqual(parseStock('{"labels":[]}').labels, ["unclassified"]);
+    assert.deepEqual(parseStock('{"labels":["nonsense"]}').labels, ["unclassified"]);
   });
 
   it("deduplicates repeated labels", () => {
-    assert.deepEqual(parseNamerResult('{"labels":["credentials","credentials"]}').labels, ["credentials"]);
+    assert.deepEqual(parseStock('{"labels":["credentials","credentials"]}').labels, ["credentials"]);
   });
 
   it("fails closed on schema violations", () => {
-    assert.throws(() => parseNamerResult('{"labels":"read-project"}'), /invalid namer labels/);
-    assert.throws(() => parseNamerResult('{"labels":[1,2]}'), /invalid namer labels/);
-    assert.throws(() => parseNamerResult('{"labels":["read-project"],"authorizationEvidence":42}'), /invalid namer authorizationEvidence/);
-    assert.throws(() => parseNamerResult("looks safe to me"), /did not return JSON/);
+    assert.throws(() => parseStock('{"labels":"read-project"}'), /invalid namer labels/);
+    assert.throws(() => parseStock('{"labels":[1,2]}'), /invalid namer labels/);
+    assert.throws(() => parseStock('{"labels":["read-project"],"authorizationEvidence":42}'), /invalid namer authorizationEvidence/);
+    assert.throws(() => parseStock("looks safe to me"), /did not return JSON/);
   });
 });
 
@@ -142,7 +150,7 @@ describe("projectToolCall", () => {
 describe("review payloads", () => {
   it("leads the namer payload with the static class definitions and ends with pendingAction", () => {
     const projection = projectToolCall("bash", { command: "ls" }, "/repo", testConfig());
-    const payload = JSON.parse(buildNamerText(["please run ls"], projection));
+    const payload = JSON.parse(buildNamerText(REGISTRY, ["please run ls"], projection));
     assert.deepEqual(Object.keys(payload), ["capabilityClasses", "activePolicy", "cwd", "recentUserMessages", "pendingAction"]);
     assert.equal(payload.capabilityClasses.length, 12);
     assert.deepEqual(payload.recentUserMessages, ["please run ls"]);
@@ -151,15 +159,16 @@ describe("review payloads", () => {
   it("injects session guidance only when present", () => {
     const projection = projectToolCall("bash", { command: "npm run deploy" }, "/repo", testConfig());
     const guidance = ["User allowed bash (npm run deploy) with comment: staging deploys are fine"];
-    const withGuidance = JSON.parse(buildNamerText([], projection, guidance));
+    const withGuidance = JSON.parse(buildNamerText(REGISTRY, [], projection, guidance));
     assert.deepEqual(withGuidance.userSessionGuidance, guidance);
-    assert.equal("userSessionGuidance" in JSON.parse(buildNamerText([], projection)), false);
+    assert.equal("userSessionGuidance" in JSON.parse(buildNamerText(REGISTRY, [], projection)), false);
   });
 
   it("gives the judge the guard's recent decisions and the namer's labels", () => {
     const projection = projectToolCall("bash", { command: "git push --force origin main" }, "/repo", testConfig());
     const payload = JSON.parse(
       buildJudgeText({
+        registry: REGISTRY,
         recentUserMessages: ["tidy up the history"],
         projection,
         recentGuardDecisions: ["deny bash (off-machine-effects): user denied a force push"],
@@ -176,8 +185,8 @@ describe("review payloads", () => {
   it("keeps the payload prefix byte-stable across calls so provider prompt caches can hit", () => {
     const config = testConfig();
     const guidance = ["User allowed bash (npm test) with comment: fine"];
-    const a = buildNamerText(["same turn message"], projectToolCall("bash", { command: "npm test" }, "/repo", config), guidance);
-    const b = buildNamerText(["same turn message"], projectToolCall("write", { path: "src/x.ts", content: "export {}" }, "/repo", config), guidance);
+    const a = buildNamerText(REGISTRY, ["same turn message"], projectToolCall("bash", { command: "npm test" }, "/repo", config), guidance);
+    const b = buildNamerText(REGISTRY, ["same turn message"], projectToolCall("write", { path: "src/x.ts", content: "export {}" }, "/repo", config), guidance);
     const divergence = a.indexOf('"pendingAction"');
     assert.ok(divergence > 0);
     assert.equal(a.slice(0, divergence), b.slice(0, divergence));

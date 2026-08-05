@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CAPABILITY_IDS, type CapabilityId, type Disposition } from "../src/capabilities.ts";
+import { BUILTIN_CAPABILITY_IDS, type CapabilityId, type Disposition } from "../src/capabilities.ts";
 import { createGuardCommand } from "../src/commands/guard.ts";
 import { setRowDisposition } from "../src/dispositions.ts";
 import { createRuntimeState, type RuntimeState } from "../src/state.ts";
@@ -31,7 +31,7 @@ function makeDispositionCommand() {
     disableGuard: async () => {},
     runGuardSmoke: async () => {},
     runCritique: async () => {},
-    persistDisposition: (id, disposition) => persisted.push([id, disposition]),
+    persistDisposition: { disposition: (id, disposition) => void persisted.push([id, disposition]) },
   });
   return { command, state, persisted };
 }
@@ -104,7 +104,7 @@ describe("guard argument completions", () => {
   it("lists all subcommands for an empty prefix", () => {
     const items = makeCommand().getArgumentCompletions("");
     assert.ok(items);
-    assert.deepEqual(items.map((i) => i.value), ["status", "policy", "policy rules", "set", "explain", "test", "test read", "test write", "why", "on", "off", "off session", "readonly", "model", "smoke", "critique"]);
+    assert.deepEqual(items.map((i) => i.value), ["status", "policy", "policy rules", "set", "guide", "guide clear", "explain", "test", "test read", "test write", "why", "on", "off", "off session", "readonly", "model", "smoke", "critique"]);
     assert.ok(items.every((i) => i.description));
   });
 
@@ -138,7 +138,7 @@ describe("guard argument completions", () => {
   it("completes set with class ids, then with dispositions", () => {
     const { command } = makeDispositionCommand();
     const classes = command.getArgumentCompletions("set ");
-    assert.deepEqual(classes?.map((item) => item.label), [...CAPABILITY_IDS]);
+    assert.deepEqual(classes?.map((item) => item.label), [...BUILTIN_CAPABILITY_IDS]);
     assert.deepEqual(classes?.[0]?.value, "set read-project");
     assert.match(classes?.[0]?.description ?? "", /currently allow/);
 
@@ -240,11 +240,11 @@ describe("/guard policy routing", () => {
 
     assert.equal(asked.length, 4);
     assert.match(asked[0]!.title, /Capability dispositions \(changes apply to this session\)/);
-    assert.equal(asked[0]!.labels.length, 13, "twelve classes plus Save persistently");
+    assert.equal(asked[0]!.labels.length, 14, "twelve classes plus Add new class and Save persistently");
     assert.match(asked[0]!.labels[0]!, /^read-project\s+allow$/);
     assert.equal(asked[0]!.labels.at(-1), "Save persistently");
     assert.match(asked[1]!.title, /off-machine-effects — currently ask/);
-    assert.deepEqual(asked[1]!.labels, ["allow", "judge", "ask (current)", "deny"]);
+    assert.deepEqual(asked[1]!.labels, ["allow", "judge", "ask (current)", "deny", "Edit definition…"], "built-ins are editable but not deletable");
     assert.match(asked[2]!.labels.find((label) => label.startsWith("off-machine-effects"))!, /off-machine-effects\s+deny\s+\(modified\)/);
 
     assert.deepEqual(persisted, [["off-machine-effects", "deny"]]);

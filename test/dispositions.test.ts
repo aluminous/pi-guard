@@ -3,17 +3,23 @@ import { describe, it } from "node:test";
 import { recordCapabilityHits, recordCapabilityOutcome, type CapabilityId, type Disposition } from "../src/capabilities.ts";
 import { globalGuardConfigPath, mergeConfig, type ResolvedGuardConfig } from "../src/config.ts";
 import {
+  addClass,
   cycleDisposition,
+  deleteClass,
   describeDispositionSource,
   dispositionRow,
   dispositionRows,
   dispositionSummary,
+  editClassDefinition,
+  hasUnsavedChanges,
   presetBanner,
   saveDispositions,
   setRowDisposition,
+  type DispositionPersistence,
 } from "../src/dispositions.ts";
+import type { PersistedCapabilityClass } from "../src/persistent-settings.ts";
 import { createRuntimeState, syncCapabilityPreset, type RuntimeState } from "../src/state.ts";
-import { DispositionPage } from "../src/tui/disposition-page.ts";
+import { DispositionPage, type DispositionTab } from "../src/tui/disposition-page.ts";
 import { testConfig } from "./helpers.ts";
 
 /** Tags every styled segment so assertions can see which colour a row segment got. */
@@ -40,22 +46,57 @@ const LEFT = "\x1b[D";
 const RIGHT = "\x1b[C";
 const CTRL_S = "\x13";
 
-function openPage(state: RuntimeState, config: ResolvedGuardConfig) {
+/**
+ * Persistence spy in the shape saveDispositions writes through. Disposition
+ * rows land in the array the caller owns; class writes are recorded separately
+ * so tests can assert on either without one drowning the other.
+ */
+function spyPersistence(rows: Array<[CapabilityId, Disposition | undefined]>) {
+  const classes: Array<[string, PersistedCapabilityClass | undefined]> = [];
+  const definitions: Array<[string, string | undefined]> = [];
+  const persistence: DispositionPersistence & {
+    classes: typeof classes;
+    definitions: typeof definitions;
+  } = {
+    disposition: (id, disposition) => void rows.push([id, disposition]),
+    capabilityClass: (id, entry) => void classes.push([id, entry]),
+    capabilityDefinition: (id, definition) => void definitions.push([id, definition]),
+    classes,
+    definitions,
+  };
+  return persistence;
+}
+
+function openPage(state: RuntimeState, config: ResolvedGuardConfig, initialTab?: DispositionTab) {
   const persisted: Array<[CapabilityId, Disposition | undefined]> = [];
   const closes: undefined[] = [];
+  const notes: Array<{ message: string; level?: string }> = [];
+  const policy = ["# Pi Guard Policy Rules", "## Filesystem", "  Allow write:", "  • /repo"];
   const page = new DispositionPage({
     tui,
     theme,
     keybindings,
+    initialTab,
     rows: () => dispositionRows(config, state),
     cycle: (id, step) => setRowDisposition(config, state, id, cycleDisposition(dispositionRow(config, state, id).value, step)),
-    save: () => void saveDispositions(config, state, (id, disposition) => persisted.push([id, disposition])),
+    save: () => void saveDispositions(config, state, spyPersistence(persisted)),
     banner: () => presetBanner(state),
+    policyLines: () => policy,
+    addClass: (input) => addClass(config, state, input),
+    editDefinition: (id, definition) => editClassDefinition(config, state, id, definition),
+    deleteClass: (id) => deleteClass(state, id),
+    notify: (message, level) => void notes.push({ message, level }),
     done: (value) => closes.push(value),
   });
   page.focused = true;
   const line = (id: string) => page.render(200).find((text) => text.includes(id)) ?? "";
-  return { page, persisted, closes, line };
+  const text = () => page.render(200).join("\n");
+  return { page, persisted, closes, line, notes, text };
+}
+
+/** Types a string into whichever form field is focused, one key at a time. */
+function type(page: DispositionPage, value: string): void {
+  for (const char of value) page.handleInput(char);
 }
 
 describe("disposition rows", () => {
@@ -139,7 +180,7 @@ describe("saveDispositions", () => {
     setRowDisposition(config, state, "modify-project", "ask");
     setRowDisposition(config, state, "credentials", "deny");
     const written: Array<[CapabilityId, Disposition | undefined]> = [];
-    const result = saveDispositions(config, state, (id, disposition) => written.push([id, disposition]));
+    const result = saveDispositions(config, state, spyPersistence(written));
 
     assert.deepEqual(written, [["modify-project", "ask"], ["credentials", "deny"]]);
     assert.deepEqual(result.saved, ["modify-project", "credentials"]);
@@ -156,7 +197,7 @@ describe("saveDispositions", () => {
     const config = mergeConfig(testConfig(), { dispositions: { "network-fetch": "allow" } }, "/repo/.pi/guard.json");
     const state = createRuntimeState();
     setRowDisposition(config, state, "network-fetch", "deny");
-    const result = saveDispositions(config, state, () => {});
+    const result = saveDispositions(config, state, spyPersistence([]));
     assert.deepEqual(result.saved, ["network-fetch"]);
     assert.deepEqual(result.shadowed, ["network-fetch"]);
   });
@@ -164,8 +205,8 @@ describe("saveDispositions", () => {
   it("is a no-op without session changes", () => {
     const config = testConfig();
     const state = createRuntimeState();
-    const written: CapabilityId[] = [];
-    const result = saveDispositions(config, state, (id) => written.push(id));
+    const written: Array<[CapabilityId, Disposition | undefined]> = [];
+    const result = saveDispositions(config, state, spyPersistence(written));
     assert.deepEqual(written, []);
     assert.deepEqual(result.saved, []);
   });
@@ -179,9 +220,10 @@ describe("DispositionPage", () => {
     const { page, line } = openPage(state, testConfig());
     const rendered = page.render(200);
     assert.equal(rendered.filter((text) => /(read-project|off-machine-effects|unclassified)/.test(text)).length, 3);
-    assert.match(line("off-machine-effects"), /off-machine-effects\s+ask\s+<muted>1 hit · 1 asked<\/muted>/);
+    assert.match(line("off-machine-effects"), /off-machine-effects\s+ask\s+<muted> 1 hit · 1 asked<\/muted>/);
     assert.match(line("install-dependencies"), /install-dependencies {2}allow/, "the widest class id still leaves a column gutter");
     assert.match(rendered.join("\n"), /↑↓ row · ←→\/Enter cycle/);
+    assert.match(rendered.join("\n"), /＋ Add class…/, "the add row closes the list");
     const definition = rendered.find((text) => text.includes("Reading, listing, or searching files")) ?? "";
     assert.match(definition, /session working directory\.<\/muted>/, "the highlighted row's short definition sits in the footer area");
     assert.doesNotMatch(definition, /credentials instead/, "definitions are prompt text; the footer shows the first sentence only");
@@ -196,7 +238,9 @@ describe("DispositionPage", () => {
     assert.doesNotMatch(line("read-project"), /→/);
     page.handleInput("<up>");
     page.handleInput("<up>");
-    assert.equal(page.selectedId(), "unclassified", "up from the first row wraps to the last");
+    assert.equal(page.selectedId(), undefined, "up from the first row wraps to the add row past the last class");
+    page.handleInput("<up>");
+    assert.equal(page.selectedId(), "unclassified", "and once more lands on the last class");
   });
 
   it("cycles the highlighted row and applies it at session scope immediately", () => {

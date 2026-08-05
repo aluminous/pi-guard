@@ -4,8 +4,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  CAPABILITY_CLASSES,
-  CAPABILITY_IDS,
+  BUILTIN_CAPABILITY_CLASSES,
+  BUILTIN_CAPABILITY_IDS,
+  capabilityRegistry,
   applyReadOnlyPreset,
   capabilityStats,
   clearSessionDisposition,
@@ -23,16 +24,16 @@ import { testConfig } from "./helpers.ts";
 
 describe("taxonomy", () => {
   it("has exactly twelve classes with unique ids and prose definitions", () => {
-    assert.equal(CAPABILITY_CLASSES.length, 12);
-    assert.equal(new Set(CAPABILITY_IDS).size, 12);
-    for (const entry of CAPABILITY_CLASSES) {
+    assert.equal(BUILTIN_CAPABILITY_CLASSES.length, 12);
+    assert.equal(new Set(BUILTIN_CAPABILITY_IDS).size, 12);
+    for (const entry of BUILTIN_CAPABILITY_CLASSES) {
       assert.ok(entry.definition.length > 80, `${entry.id} needs a real definition (it is prompt text)`);
       assert.ok(entry.name.trim().length > 0);
     }
   });
 
   it("keeps the maintainer's calibration: broad reads allow, machine boundary asks, secrets judge", () => {
-    const byId = Object.fromEntries(CAPABILITY_CLASSES.map((entry) => [entry.id, entry.default]));
+    const byId = Object.fromEntries(BUILTIN_CAPABILITY_CLASSES.map((entry) => [entry.id, entry.default]));
     assert.deepEqual(byId, {
       "read-project": "allow",
       "read-system": "allow",
@@ -50,14 +51,14 @@ describe("taxonomy", () => {
   });
 
   it("defines off-machine-effects by the machine boundary, with the local-cluster carve-out", () => {
-    const definition = CAPABILITY_CLASSES.find((entry) => entry.id === "off-machine-effects")!.definition;
+    const definition = BUILTIN_CAPABILITY_CLASSES.find((entry) => entry.id === "off-machine-effects")!.definition;
     assert.match(definition, /MACHINE BOUNDARY/);
     assert.match(definition, /minikube/);
     assert.match(definition, /NOT off-machine-effects/);
   });
 
   it("puts local commits in local-destructive", () => {
-    const definition = CAPABILITY_CLASSES.find((entry) => entry.id === "local-destructive")!.definition;
+    const definition = BUILTIN_CAPABILITY_CLASSES.find((entry) => entry.id === "local-destructive")!.definition;
     assert.match(definition, /local git commit/i);
   });
 });
@@ -147,6 +148,6 @@ describe("per-class stats", () => {
     assert.equal(capabilityStats(state, "persistence").outcomes["ask-denied"], 1);
     assert.equal(capabilityStats(state, "modify-project").screenTripped, 1);
     assert.equal(capabilityStats(state, "modify-project").screenClean, 1);
-    assert.deepEqual(usedCapabilityStats(state).map((entry) => entry.id), ["modify-project", "persistence"]);
+    assert.deepEqual(usedCapabilityStats(state, capabilityRegistry(undefined, state)).map((entry) => entry.id), ["modify-project", "persistence"]);
   });
 });
