@@ -163,6 +163,19 @@ test("pi TUI: guard startup, status/policy page and its tabs, no [guard] convers
     // Right cycles the highlighted row (allow → judge) at session scope.
     tmux("send-keys", "-t", TARGET, "Right");
     await waitFor((pane) => /read-project\s+judge/.test(pane), "cycled disposition on the highlighted row", UI_TIMEOUT_MS);
+    // "e" opens the definition editor: the whole paragraph is visible at once,
+    // wrapped chat-input style between its own rules — the old single-line
+    // Input only ever showed a sliver scrolled past the caret, so head and
+    // tail on screen together is the wrapping working. (At 140 columns the
+    // asserted phrases sit clear of the word-wrap points.)
+    tmux("send-keys", "-l", "-t", TARGET, "e");
+    await waitFor(
+      (pane) => pane.includes("Edit read-project") && pane.includes("Reading, listing, or searching") && pane.includes("is credentials instead."),
+      "edit form with the whole definition wrapped into view",
+      UI_TIMEOUT_MS,
+    );
+    tmux("send-keys", "-t", TARGET, "Escape");
+    await waitFor((pane) => !pane.includes("Edit read-project"), "edit form to close back to the list", UI_TIMEOUT_MS);
     await closeOverlay("disposition page", "Capability policy");
 
     // Read-only mode is a session preset: the page banners it and shows the
