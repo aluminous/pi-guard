@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { describe, it } from "node:test";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { globalGuardConfigPath, mergeConfig } from "../src/config.ts";
 import { createRuntimeState, resetTurnStats } from "../src/state.ts";
 import { formatGuardPolicy, formatGuardStatus, statusLineVisible } from "../src/status.ts";
 import { showGuardView, toggleGuardView } from "../src/live-view.ts";
@@ -99,6 +101,36 @@ describe("formatGuardPolicy", () => {
     });
     const policy = formatGuardPolicy(createRuntimeState(), config);
     assert.match(policy, /disabled \(lists still route classifier exemptions\)/);
+  });
+
+  it("annotates provenance: legend, per-entry sources, rule overrides, and deletions", () => {
+    const projectPath = path.join("/repo", CONFIG_DIR_NAME, "guard.json");
+    const afterGlobal = mergeConfig(testConfig(), { filesystem: { denyRead: ["/secret/global"] } }, globalGuardConfigPath());
+    const config = mergeConfig(
+      afterGlobal,
+      {
+        environment: { allow: ["PATH", "HOME"] },
+        classifier: {
+          rules: {
+            soft_deny: [
+              "Git Push to Default Branch:",
+              "Production Deploy: staging deploys are routine.",
+              "My Custom Rule: never touch the vendor directory.",
+            ],
+          },
+        },
+      },
+      projectPath,
+    );
+    const policy = formatGuardPolicy(createRuntimeState(), config);
+    assert.match(policy, /unmarked entries are built-in defaults/);
+    assert.match(policy, /• \/secret\/global \[global\]/);
+    assert.match(policy, /Allow: PATH, HOME \[project\]/);
+    assert.match(policy, /• Production Deploy: staging deploys are routine\. \[project overrides default\]/);
+    assert.match(policy, /• My Custom Rule: never touch the vendor directory\. \[project\]/);
+    assert.match(policy, /removed by config: Git Push to Default Branch \[project\]/);
+    assert.doesNotMatch(policy, /\[default\]/, "default entries stay unmarked");
+    assert.match(policy, /• Local Operations: [^\n[]+\n/, "untouched default rules carry no suffix");
   });
 });
 

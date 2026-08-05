@@ -71,6 +71,36 @@ export interface GuardConfig {
   container?: Record<string, unknown>;
 }
 
+export type ProvenanceListKey =
+  | "filesystem.allowRead"
+  | "filesystem.denyRead"
+  | "filesystem.allowWrite"
+  | "filesystem.denyWrite"
+  | "environment.allow"
+  | "environment.unset"
+  | "network.allowedDomains"
+  | "network.deniedDomains"
+  | "commands.allow";
+
+export type ClassifierRuleListKey = "allow" | "soft_deny" | "hard_deny" | "environment";
+
+export interface RuleProvenance {
+  /** "default" or the config file path that last set this rule. */
+  source: string;
+  /** For name-merged overrides: the source of the entry this one replaced. */
+  overrides?: string;
+}
+
+/** Where each effective config value came from ("default" or a config file path); last writer wins. */
+export interface ConfigProvenance {
+  /** Entry text → source, per wholesale-replaced list. */
+  lists: Record<ProvenanceListKey, Record<string, string>>;
+  /** Rule name (lowercased; full text for nameless rules) → provenance, per classifier rule list. */
+  rules: Record<ClassifierRuleListKey, Record<string, RuleProvenance>>;
+  /** Rules deleted by a "Name:" empty-body entry: original name → deleting source. */
+  deletedRules: Record<ClassifierRuleListKey, Record<string, string>>;
+}
+
 export interface ResolvedGuardConfig {
   enabled: boolean;
   backend: GuardBackendName;
@@ -99,6 +129,7 @@ export interface ResolvedGuardConfig {
   container: Record<string, unknown>;
   diagnostics: string[];
   sources: string[];
+  provenance: ConfigProvenance;
 }
 
 function defaultDenyReadPaths(): string[] {
@@ -195,7 +226,43 @@ function defaultAllowWritePaths(): string[] {
   ];
 }
 
-export const DEFAULT_CONFIG: ResolvedGuardConfig = {
+function listProvenance(entries: string[], source: string): Record<string, string> {
+  return Object.fromEntries(entries.map((entry) => [entry, source]));
+}
+
+/** Provenance map key for a classifier rule: its lowercased name, or the full text for nameless rules. */
+export function ruleProvenanceKey(rule: string): string {
+  return parseRuleName(rule)?.name.toLowerCase() ?? rule;
+}
+
+function ruleListProvenance(rules: string[], source: string): Record<string, RuleProvenance> {
+  return Object.fromEntries(rules.map((rule) => [ruleProvenanceKey(rule), { source }]));
+}
+
+function defaultProvenance(config: Omit<ResolvedGuardConfig, "provenance">): ConfigProvenance {
+  return {
+    lists: {
+      "filesystem.allowRead": listProvenance(config.filesystem.allowRead, "default"),
+      "filesystem.denyRead": listProvenance(config.filesystem.denyRead, "default"),
+      "filesystem.allowWrite": listProvenance(config.filesystem.allowWrite, "default"),
+      "filesystem.denyWrite": listProvenance(config.filesystem.denyWrite, "default"),
+      "environment.allow": listProvenance(config.environment.allow, "default"),
+      "environment.unset": listProvenance(config.environment.unset, "default"),
+      "network.allowedDomains": listProvenance(config.network.allowedDomains, "default"),
+      "network.deniedDomains": listProvenance(config.network.deniedDomains, "default"),
+      "commands.allow": listProvenance(config.commands.allow, "default"),
+    },
+    rules: {
+      allow: ruleListProvenance(config.classifier.rules.allow, "default"),
+      soft_deny: ruleListProvenance(config.classifier.rules.soft_deny, "default"),
+      hard_deny: ruleListProvenance(config.classifier.rules.hard_deny, "default"),
+      environment: ruleListProvenance(config.classifier.rules.environment, "default"),
+    },
+    deletedRules: { allow: {}, soft_deny: {}, hard_deny: {}, environment: {} },
+  };
+}
+
+const DEFAULTS_SANS_PROVENANCE: Omit<ResolvedGuardConfig, "provenance"> = {
   enabled: true,
   backend: "seatbelt",
   statusLine: "always",
@@ -245,6 +312,8 @@ export const DEFAULT_CONFIG: ResolvedGuardConfig = {
   sources: ["defaults"],
 };
 
+export const DEFAULT_CONFIG: ResolvedGuardConfig = { ...DEFAULTS_SANS_PROVENANCE, provenance: defaultProvenance(DEFAULTS_SANS_PROVENANCE) };
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
@@ -285,23 +354,40 @@ function parseRuleName(entry: string): { name: string; body: string } | undefine
  * the classifier prompt prefix stays stable), "Name:" with an empty body
  * deletes it, and new or nameless entries append.
  */
-function mergeRuleList(base: string[], incoming: string[], listName: string, diagnostics: string[]): string[] {
+interface RuleMergeEvent {
+  kind: "append" | "override" | "delete";
+  /** Provenance-map key (ruleProvenanceKey form). */
+  key: string;
+  /** Original-case rule name (or full text for nameless entries), for the deletions note. */
+  name: string;
+}
+
+function mergeRuleList(base: string[], incoming: string[], listName: string, diagnostics: string[], onEvent?: (event: RuleMergeEvent) => void): string[] {
   const result = [...base];
   const indexOfName = (name: string) => result.findIndex((rule) => parseRuleName(rule)?.name.toLowerCase() === name.toLowerCase());
   for (const entry of incoming) {
     const parsed = parseRuleName(entry);
     if (!parsed) {
       result.push(entry);
+      onEvent?.({ kind: "append", key: entry, name: entry });
       continue;
     }
     const at = indexOfName(parsed.name);
     if (!parsed.body) {
       if (at === -1) diagnostics.push(`${listName}: cannot delete unknown rule "${parsed.name}"`);
-      else result.splice(at, 1);
+      else {
+        result.splice(at, 1);
+        onEvent?.({ kind: "delete", key: parsed.name.toLowerCase(), name: parsed.name });
+      }
       continue;
     }
-    if (at === -1) result.push(entry);
-    else result[at] = entry;
+    if (at === -1) {
+      result.push(entry);
+      onEvent?.({ kind: "append", key: parsed.name.toLowerCase(), name: parsed.name });
+    } else {
+      result[at] = entry;
+      onEvent?.({ kind: "override", key: parsed.name.toLowerCase(), name: parsed.name });
+    }
   }
   return result;
 }
@@ -319,6 +405,14 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
     container: { ...base.container },
     diagnostics,
     sources: [...base.sources, source],
+    provenance: structuredClone(base.provenance),
+  };
+
+  /** Applies a wholesale list replacement and re-labels every entry's provenance with this source. */
+  const setList = (listKey: ProvenanceListKey, incoming: string[] | undefined, current: string[]): string[] => {
+    if (!incoming) return current;
+    next.provenance.lists[listKey] = listProvenance(incoming, source);
+    return incoming;
   };
 
   if (typeof override.enabled === "boolean") next.enabled = override.enabled;
@@ -332,25 +426,25 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
 
   if (isObject(override.filesystem)) {
     if (typeof override.filesystem.enabled === "boolean") next.filesystem.enabled = override.filesystem.enabled;
-    next.filesystem.allowRead = asStringArray(override.filesystem.allowRead, `${source}.filesystem.allowRead`, diagnostics) ?? next.filesystem.allowRead;
-    next.filesystem.denyRead = asStringArray(override.filesystem.denyRead, `${source}.filesystem.denyRead`, diagnostics) ?? next.filesystem.denyRead;
-    next.filesystem.allowWrite = asStringArray(override.filesystem.allowWrite, `${source}.filesystem.allowWrite`, diagnostics) ?? next.filesystem.allowWrite;
-    next.filesystem.denyWrite = asStringArray(override.filesystem.denyWrite, `${source}.filesystem.denyWrite`, diagnostics) ?? next.filesystem.denyWrite;
+    next.filesystem.allowRead = setList("filesystem.allowRead", asStringArray(override.filesystem.allowRead, `${source}.filesystem.allowRead`, diagnostics), next.filesystem.allowRead);
+    next.filesystem.denyRead = setList("filesystem.denyRead", asStringArray(override.filesystem.denyRead, `${source}.filesystem.denyRead`, diagnostics), next.filesystem.denyRead);
+    next.filesystem.allowWrite = setList("filesystem.allowWrite", asStringArray(override.filesystem.allowWrite, `${source}.filesystem.allowWrite`, diagnostics), next.filesystem.allowWrite);
+    next.filesystem.denyWrite = setList("filesystem.denyWrite", asStringArray(override.filesystem.denyWrite, `${source}.filesystem.denyWrite`, diagnostics), next.filesystem.denyWrite);
   }
 
   if (isObject(override.environment)) {
-    next.environment.allow = asStringArray(override.environment.allow, `${source}.environment.allow`, diagnostics) ?? next.environment.allow;
-    next.environment.unset = asStringArray(override.environment.unset, `${source}.environment.unset`, diagnostics) ?? next.environment.unset;
+    next.environment.allow = setList("environment.allow", asStringArray(override.environment.allow, `${source}.environment.allow`, diagnostics), next.environment.allow);
+    next.environment.unset = setList("environment.unset", asStringArray(override.environment.unset, `${source}.environment.unset`, diagnostics), next.environment.unset);
   }
 
   if (isObject(override.network)) {
     if (typeof override.network.enabled === "boolean") next.network.enabled = override.network.enabled;
-    next.network.allowedDomains = asStringArray(override.network.allowedDomains, `${source}.network.allowedDomains`, diagnostics) ?? next.network.allowedDomains;
-    next.network.deniedDomains = asStringArray(override.network.deniedDomains, `${source}.network.deniedDomains`, diagnostics) ?? next.network.deniedDomains;
+    next.network.allowedDomains = setList("network.allowedDomains", asStringArray(override.network.allowedDomains, `${source}.network.allowedDomains`, diagnostics), next.network.allowedDomains);
+    next.network.deniedDomains = setList("network.deniedDomains", asStringArray(override.network.deniedDomains, `${source}.network.deniedDomains`, diagnostics), next.network.deniedDomains);
   }
 
   if (isObject(override.commands)) {
-    next.commands.allow = asStringArray(override.commands.allow, `${source}.commands.allow`, diagnostics) ?? next.commands.allow;
+    next.commands.allow = setList("commands.allow", asStringArray(override.commands.allow, `${source}.commands.allow`, diagnostics), next.commands.allow);
   }
 
   if (isObject(override.classifier)) {
@@ -380,9 +474,24 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
       for (const list of lists) {
         const incoming = asStringArray(rulesOverride[list], `${source}.classifier.rules.${list}`, diagnostics);
         if (!incoming) continue;
-        next.classifier.rules[list] = replace
-          ? incoming
-          : mergeRuleList(next.classifier.rules[list], incoming, `${source}.classifier.rules.${list}`, diagnostics);
+        if (replace) {
+          next.classifier.rules[list] = incoming;
+          next.provenance.rules[list] = ruleListProvenance(incoming, source);
+          next.provenance.deletedRules[list] = {};
+          continue;
+        }
+        const provRules = next.provenance.rules[list];
+        const provDeleted = next.provenance.deletedRules[list];
+        next.classifier.rules[list] = mergeRuleList(next.classifier.rules[list], incoming, `${source}.classifier.rules.${list}`, diagnostics, (event) => {
+          if (event.kind === "delete") {
+            delete provRules[event.key];
+            provDeleted[event.name] = source;
+            return;
+          }
+          delete provDeleted[event.name];
+          const previous = event.kind === "override" ? provRules[event.key] : undefined;
+          provRules[event.key] = previous ? { source, overrides: previous.source } : { source };
+        });
       }
     }
   }
@@ -393,13 +502,25 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
   return next;
 }
 
+export function globalGuardConfigPath(): string {
+  return path.join(getAgentDir(), "extensions", "guard.json");
+}
+
+/** Short display label for a provenance source: "default", "global", "project", or the raw path when unrecognized. */
+export function configSourceLabel(source: string): string {
+  if (source === "default") return "default";
+  if (source === globalGuardConfigPath()) return "global";
+  if (source.endsWith(path.join(CONFIG_DIR_NAME, "guard.json"))) return "project";
+  return source;
+}
+
 export function loadConfig(ctx: ExtensionContext): ResolvedGuardConfig {
   const diagnostics: string[] = [];
   let config: ResolvedGuardConfig = structuredClone(DEFAULT_CONFIG);
   config.diagnostics = [];
   config.sources = ["defaults"];
 
-  const globalPath = path.join(getAgentDir(), "extensions", "guard.json");
+  const globalPath = globalGuardConfigPath();
   const projectPath = path.join(ctx.cwd, CONFIG_DIR_NAME, "guard.json");
 
   const globalConfig = readJson(globalPath, diagnostics);

@@ -2,8 +2,9 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Text } from "@earendil-works/pi-tui";
 import type { EffectivePolicy } from "./backends/types.ts";
 import { classifierEnabled, resolveClassifierModel } from "./classifier.ts";
-import type { ResolvedGuardConfig, StatusLineMode } from "./config.ts";
+import { configSourceLabel, ruleProvenanceKey, type ClassifierRuleListKey, type ProvenanceListKey, type ResolvedGuardConfig, type StatusLineMode } from "./config.ts";
 import { getPersistentConfigPath } from "./persistent-settings.ts";
+import { resolveConfigPath } from "./policy.ts";
 import type { GuardEvent, GuardStats, RuntimeState } from "./state.ts";
 
 function decisionLabel(decision: GuardEvent["decision"]): string {
@@ -235,49 +236,82 @@ export function registerGuardMessageRenderer(pi: ExtensionAPI): void {
   });
 }
 
-/** The resolved policy view for /guard policy: deterministic rules plus classifier rules. */
+/** The resolved policy view for /guard policy: deterministic rules plus classifier rules, provenance-annotated. */
 export function formatGuardPolicy(state: RuntimeState, config: ResolvedGuardConfig): string {
   const effective = state.backend?.describeEffectivePolicy(config);
   const rules = config.classifier.rules;
-  const ruleSection = (title: string, entries: string[]) => [
-    `## ${title} (${entries.length})`,
-    ...(entries.length > 0 ? entries.map((rule) => `  • ${rule}`) : ["  (none)"]),
-    "",
-  ];
+
+  // Effective (backend) lists hold resolved literals while provenance is keyed
+  // by config pattern, so each list's lookup also indexes the resolved form.
+  const listAnnotator = (listKey: ProvenanceListKey, resolvePaths: boolean) => {
+    const lookup = new Map<string, string>();
+    for (const [entry, source] of Object.entries(config.provenance.lists[listKey])) {
+      lookup.set(entry, source);
+      if (resolvePaths) lookup.set(resolveConfigPath(process.cwd(), entry), source);
+    }
+    return (entry: string) => {
+      const source = lookup.get(entry);
+      return !source || source === "default" ? entry : `${entry} [${configSourceLabel(source)}]`;
+    };
+  };
+  /** One trailing suffix for inline (comma-joined) lists — wholesale replacement makes the source uniform. */
+  const inlineListSuffix = (listKey: ProvenanceListKey) => {
+    const sources = [...new Set(Object.values(config.provenance.lists[listKey]))].filter((source) => source !== "default");
+    return sources.length === 0 ? "" : ` [${sources.map(configSourceLabel).join(", ")}]`;
+  };
+  const annotateAll = (listKey: ProvenanceListKey, entries: string[], resolvePaths = true) => entries.map(listAnnotator(listKey, resolvePaths));
+
+  const ruleSection = (title: string, listKey: ClassifierRuleListKey, entries: string[]) => {
+    const annotate = (rule: string) => {
+      const provenance = config.provenance.rules[listKey][ruleProvenanceKey(rule)];
+      if (!provenance || provenance.source === "default") return rule;
+      const label = configSourceLabel(provenance.source);
+      return provenance.overrides ? `${rule} [${label} overrides ${configSourceLabel(provenance.overrides)}]` : `${rule} [${label}]`;
+    };
+    const deleted = Object.entries(config.provenance.deletedRules[listKey]);
+    return [
+      `## ${title} (${entries.length})`,
+      ...(entries.length > 0 ? entries.map((rule) => `  • ${annotate(rule)}`) : ["  (none)"]),
+      ...(deleted.length > 0 ? [`  removed by config: ${deleted.map(([name, source]) => `${name} [${configSourceLabel(source)}]`).join(", ")}`] : []),
+      "",
+    ];
+  };
+
   const lines = [
     "# Pi Guard Policy",
+    "  unmarked entries are built-in defaults; [global]/[project] name the config that set them",
     "",
     "## Filesystem",
     `  Restrictions: ${config.filesystem.enabled ? "enabled" : "disabled (lists still route classifier exemptions)"}`,
     `  Read mode: ${config.filesystem.allowRead.length === 0 ? "blacklist (all paths except deny read)" : "whitelist"}`,
     ...(config.filesystem.allowRead.length > 0
-      ? ["  Allow read:", ...bulletList(effective?.filesystem.allowRead ?? config.filesystem.allowRead, Number.POSITIVE_INFINITY)]
+      ? ["  Allow read:", ...bulletList(annotateAll("filesystem.allowRead", effective?.filesystem.allowRead ?? config.filesystem.allowRead), Number.POSITIVE_INFINITY)]
       : ["  Allow read: (all)"]),
     "  Allow write:",
-    ...bulletList(effective?.filesystem.allowWrite ?? config.filesystem.allowWrite, Number.POSITIVE_INFINITY),
+    ...bulletList(annotateAll("filesystem.allowWrite", effective?.filesystem.allowWrite ?? config.filesystem.allowWrite), Number.POSITIVE_INFINITY),
     "  Deny read:",
-    ...bulletList(effective?.filesystem.denyRead ?? config.filesystem.denyRead, Number.POSITIVE_INFINITY),
+    ...bulletList(annotateAll("filesystem.denyRead", effective?.filesystem.denyRead ?? config.filesystem.denyRead), Number.POSITIVE_INFINITY),
     "  Deny write:",
-    ...bulletList(effective?.filesystem.denyWrite ?? config.filesystem.denyWrite, Number.POSITIVE_INFINITY),
+    ...bulletList(annotateAll("filesystem.denyWrite", effective?.filesystem.denyWrite ?? config.filesystem.denyWrite), Number.POSITIVE_INFINITY),
     ...sandboxFidelityLines(effective, Number.POSITIVE_INFINITY),
     "",
     "## Network",
     `  Restrictions: ${config.network.enabled ? "enabled" : "disabled (unrestricted)"}`,
     "  Allowed domains:",
-    ...bulletList(config.network.enabled ? (effective?.network.allowedDomains ?? config.network.allowedDomains) : [], Number.POSITIVE_INFINITY),
-    `  Denied domains: ${formatArray(config.network.deniedDomains)}`,
+    ...bulletList(annotateAll("network.allowedDomains", config.network.enabled ? (effective?.network.allowedDomains ?? config.network.allowedDomains) : [], false), Number.POSITIVE_INFINITY),
+    `  Denied domains: ${formatArray(config.network.deniedDomains)}${inlineListSuffix("network.deniedDomains")}`,
     "",
     "## Environment scrubbing",
-    `  Allow: ${formatArray(config.environment.allow)}`,
-    `  Unset: ${formatArray(config.environment.unset)}`,
+    `  Allow: ${formatArray(config.environment.allow)}${inlineListSuffix("environment.allow")}`,
+    `  Unset: ${formatArray(config.environment.unset)}${inlineListSuffix("environment.unset")}`,
     "",
     "## Classifier",
     `  ${classifierEnabled(config, state.classifier) ? "enabled" : "disabled"} · model ${state.classifier.modelOverride ?? config.classifier.model} · fail ${config.classifier.failClosed ? "closed" : "open"}`,
     "",
-    ...ruleSection("Classifier allow rules", rules.allow),
-    ...ruleSection("Classifier soft-deny rules (ask without authorization)", rules.soft_deny),
-    ...ruleSection("Classifier hard-deny rules (never allowed)", rules.hard_deny),
-    ...ruleSection("Classifier environment assumptions", rules.environment),
+    ...ruleSection("Classifier allow rules", "allow", rules.allow),
+    ...ruleSection("Classifier soft-deny rules (ask without authorization)", "soft_deny", rules.soft_deny),
+    ...ruleSection("Classifier hard-deny rules (never allowed)", "hard_deny", rules.hard_deny),
+    ...ruleSection("Classifier environment assumptions", "environment", rules.environment),
     "## Config sources",
     ...config.sources.map((source) => `  • ${source}`),
   ];

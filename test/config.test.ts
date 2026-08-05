@@ -121,3 +121,74 @@ describe("mergeConfig", () => {
     assert.deepEqual(DEFAULT_CONFIG, before);
   });
 });
+
+describe("config provenance", () => {
+  it("seeds every default list entry and rule with source \"default\"", () => {
+    const config = testConfig();
+    assert.equal(config.provenance.lists["filesystem.denyRead"]["~/.ssh"], "default");
+    assert.equal(config.provenance.lists["environment.allow"]["PATH"], "default");
+    assert.equal(config.provenance.lists["commands.allow"]["grep *"], "default");
+    assert.ok(Object.values(config.provenance.rules.soft_deny).every((p) => p.source === "default" && p.overrides === undefined));
+    assert.deepEqual(config.provenance.deletedRules.soft_deny, {});
+  });
+
+  it("labels replaced arrays with the writing source, entry by entry", () => {
+    const merged = mergeConfig(testConfig(), { filesystem: { denyRead: ["/only/this"] }, environment: { unset: ["MY_SECRET"] } }, "global.json");
+    assert.deepEqual(merged.provenance.lists["filesystem.denyRead"], { "/only/this": "global.json" });
+    assert.deepEqual(merged.provenance.lists["environment.unset"], { MY_SECRET: "global.json" });
+    assert.equal(merged.provenance.lists["filesystem.allowWrite"]["."], "default", "untouched lists keep default provenance");
+  });
+
+  it("records name-merge override and delete provenance", () => {
+    const merged = mergeConfig(
+      testConfig(),
+      {
+        classifier: {
+          rules: {
+            soft_deny: [
+              "Git Push to Default Branch:",
+              "Production Deploy: deploying to the staging cluster is routine.",
+              "My Custom Rule: never touch the vendor directory.",
+            ],
+          },
+        },
+      },
+      "project.json",
+    );
+    assert.deepEqual(merged.provenance.rules.soft_deny["production deploy"], { source: "project.json", overrides: "default" });
+    assert.deepEqual(merged.provenance.rules.soft_deny["my custom rule"], { source: "project.json" });
+    assert.equal(merged.provenance.rules.soft_deny["git push to default branch"], undefined, "deleted rules leave the provenance map");
+    assert.deepEqual(merged.provenance.deletedRules.soft_deny, { "Git Push to Default Branch": "project.json" });
+  });
+
+  it("tracks last-writer-wins across layered global then project merges", () => {
+    const afterGlobal = mergeConfig(
+      testConfig(),
+      { network: { allowedDomains: ["global.example"] }, classifier: { rules: { hard_deny: ["Data Exfiltration: global version."] } } },
+      "global.json",
+    );
+    assert.deepEqual(afterGlobal.provenance.lists["network.allowedDomains"], { "global.example": "global.json" });
+    const afterProject = mergeConfig(
+      afterGlobal,
+      { network: { allowedDomains: ["project.example"] }, classifier: { rules: { hard_deny: ["Data Exfiltration: project version."] } } },
+      "project.json",
+    );
+    assert.deepEqual(afterProject.provenance.lists["network.allowedDomains"], { "project.example": "project.json" });
+    assert.deepEqual(afterProject.provenance.rules.hard_deny["data exfiltration"], { source: "project.json", overrides: "global.json" });
+  });
+
+  it("resets rule provenance and deletions when replace is true", () => {
+    const afterDelete = mergeConfig(testConfig(), { classifier: { rules: { allow: ["Source Control Reads:"] } } }, "global.json");
+    assert.ok(afterDelete.provenance.deletedRules.allow["Source Control Reads"]);
+    const merged = mergeConfig(afterDelete, { classifier: { rules: { replace: true, allow: ["Only Rule: nothing else."] } } }, "project.json");
+    assert.deepEqual(merged.provenance.rules.allow, { "only rule": { source: "project.json" } });
+    assert.deepEqual(merged.provenance.deletedRules.allow, {});
+  });
+
+  it("restores provenance when a deleted rule is re-added by a later layer", () => {
+    const afterDelete = mergeConfig(testConfig(), { classifier: { rules: { hard_deny: ["Data Exfiltration:"] } } }, "global.json");
+    const afterAdd = mergeConfig(afterDelete, { classifier: { rules: { hard_deny: ["Data Exfiltration: back again."] } } }, "project.json");
+    assert.deepEqual(afterAdd.provenance.rules.hard_deny["data exfiltration"], { source: "project.json" });
+    assert.deepEqual(afterAdd.provenance.deletedRules.hard_deny, {});
+  });
+});
