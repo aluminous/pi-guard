@@ -1,5 +1,5 @@
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
-import { Container, Input, matchesKey, Text, visibleWidth } from "@earendil-works/pi-tui";
+import { Container, Editor, Input, matchesKey, Text, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import type { CapabilityId } from "../capabilities.ts";
 import { dispositionCell, type DispositionRow } from "../dispositions.ts";
 import { styleGuardLine } from "../status.ts";
@@ -85,14 +85,27 @@ interface Component {
 }
 
 /**
- * Seeds an Input with existing text and leaves the caret after it. setValue
- * alone would park the caret at column 0 (it only ever clamps the cursor down),
- * so a prefilled edit form would type backwards; a bracketed paste is the
- * public API that both inserts and advances.
+ * The definition editor is pi-tui's Editor — the same component behind pi's
+ * chat input — styled to match it: borderMuted rules above and below, no
+ * horizontal padding (the chat default), wrapping and growing with the text.
+ * Editor's constructor asks for a full TUI, but everything it touches at
+ * runtime is requestRender() and terminal.rows — exactly the PanelTui slice —
+ * so the one cast below keeps the page drivable with the same structural
+ * fakes the tests already use.
  */
-function prefill(input: Input, text: string): void {
-  input.setValue("");
-  input.handleInput(`\x1b[200~${text}\x1b[201~`);
+function createDefinitionEditor(tui: PanelTui, theme: PanelTheme): Editor {
+  const accent = (text: string) => theme.fg("accent", text);
+  const muted = (text: string) => theme.fg("muted", text);
+  const editor = new Editor(tui as unknown as TUI, {
+    borderColor: (text) => theme.fg("borderMuted", text),
+    // Required by EditorTheme but only rendered by autocomplete, which never
+    // activates here: no provider is attached.
+    selectList: { selectedPrefix: accent, selectedText: accent, description: muted, scrollInfo: muted, noMatch: muted },
+  });
+  // Enter is the page's commit gesture; the editor must never submit-and-clear
+  // on its own if a stray Enter reaches it.
+  editor.disableSubmit = true;
+  return editor;
 }
 
 /**
@@ -120,7 +133,7 @@ export class DispositionPage extends Container {
   private scroll = 0;
   /** Add-form fields; reused across openings so a cancelled form starts clean. */
   private idInput = new Input();
-  private definitionInput = new Input();
+  private definitionEditor: Editor;
   private formField: "id" | "definition" = "id";
   private formError: string | undefined;
   private editingId: CapabilityId | undefined;
@@ -129,6 +142,7 @@ export class DispositionPage extends Container {
     super();
     this.params = params;
     this.tab = params.initialTab ?? "dispositions";
+    this.definitionEditor = createDefinitionEditor(params.tui, params.theme);
     // jiti caveat: pi's DynamicBorder default color reads a global theme that
     // extensions may not share — always pass the explicit color function.
     const border = () => new DynamicBorder((text) => params.theme.fg("border", text));
@@ -245,16 +259,26 @@ export class DispositionPage extends Container {
   private renderForm(): void {
     const theme = this.params.theme;
     const adding = this.mode === "add";
+    const definitionActive = !adding || this.formField === "definition";
     this.body.addChild(new Text(theme.fg("accent", `  ${adding ? "New capability class" : `Edit ${this.editingId}`}`), 0, 0));
     if (adding) {
-      this.body.addChild(new FormField("id        ", this.idInput, theme, this.formField === "id"));
+      this.idInput.focused = !definitionActive;
+      this.body.addChild(new FormField("id", this.idInput, theme, !definitionActive));
     }
-    this.body.addChild(new FormField("definition", this.definitionInput, theme, this.formField === "definition" || !adding));
+    // The definition gets the chat-input treatment: a labelled full-width
+    // Editor box that wraps and grows with the text, instead of a single
+    // Input line scrolling a sliver of a paragraph past the caret.
+    this.definitionEditor.focused = definitionActive;
+    const marker = definitionActive ? theme.fg("accent", "→ ") : "  ";
+    this.body.addChild(new Text(`${marker}${definitionActive ? theme.fg("accent", "definition") : theme.fg("muted", "definition")}`, 0, 0));
+    this.body.addChild(this.definitionEditor);
     if (this.formError) this.body.addChild(new Text(theme.fg("error", `  ${this.formError}`), 0, 0));
     this.body.addChild(new Text(theme.fg("muted", "  The definition is prompt text the namer reads verbatim; write it as a decision boundary."), 0, 0));
-    // Enter commits rather than inserting a newline: these are Input fields, not
-    // a multi-line Editor, so there is no newline to insert. Ctrl+S commits too,
-    // which keeps the "save" gesture meaning the same thing in both modes.
+    // Enter commits, matching the chat input's submit gesture and working on
+    // terminals without extended keys. Newlines are an editing convenience
+    // ("\"+Enter and ctrl+j continue on the next line, chat-style); the commit
+    // joins them back to spaces because the definition serializes as one
+    // string. Ctrl+S commits too, so "save" means the same thing in both modes.
     this.body.addChild(new Text(theme.fg("muted", `  ${adding ? "Tab switches field · " : ""}Enter or Ctrl+S commits (session scope) · Esc cancels`), 0, 0));
   }
 
@@ -337,13 +361,33 @@ export class DispositionPage extends Container {
       this.refresh();
       return;
     }
-    if (this.params.keybindings.matches(data, "tui.select.confirm") || matchesKey(data, "ctrl+s")) {
+    const definitionActive = this.mode === "edit" || this.formField === "definition";
+    if (this.params.keybindings.matches(data, "tui.select.confirm")) {
+      // Chat parity for terminals without shift+enter: "\" then Enter deletes
+      // the backslash and continues on the next line instead of committing.
+      if (definitionActive && this.caretFollowsBackslash()) {
+        this.definitionEditor.handleInput("\x7f");
+        this.definitionEditor.handleInput("\n");
+        this.refresh();
+        return;
+      }
       this.commitForm();
       return;
     }
-    const field = this.mode === "add" && this.formField === "id" ? this.idInput : this.definitionInput;
-    field.handleInput(data);
+    if (matchesKey(data, "ctrl+s")) {
+      this.commitForm();
+      return;
+    }
+    if (definitionActive) this.definitionEditor.handleInput(data);
+    else this.idInput.handleInput(data);
     this.refresh();
+  }
+
+  /** Whether the character immediately before the definition caret is a backslash. */
+  private caretFollowsBackslash(): boolean {
+    const cursor = this.definitionEditor.getCursor();
+    const line = this.definitionEditor.getLines()[cursor.line] ?? "";
+    return cursor.col > 0 && line[cursor.col - 1] === "\\";
   }
 
   private openAddForm(): void {
@@ -351,9 +395,7 @@ export class DispositionPage extends Container {
     this.formField = "id";
     this.formError = undefined;
     this.idInput.setValue("");
-    this.definitionInput.setValue("");
-    this.idInput.focused = true;
-    this.definitionInput.focused = true;
+    this.definitionEditor.setText("");
     this.refresh();
   }
 
@@ -366,9 +408,9 @@ export class DispositionPage extends Container {
     this.formError = undefined;
     // Definition only, for built-ins and custom classes alike: the id is the
     // namer's vocabulary and the name is cosmetic, while the definition is the
-    // thing that actually changes how actions get labelled.
-    prefill(this.definitionInput, row.fullDefinition);
-    this.definitionInput.focused = true;
+    // thing that actually changes how actions get labelled. setText, unlike
+    // Input.setValue, leaves the caret at the end of the seeded text.
+    this.definitionEditor.setText(row.fullDefinition);
     this.refresh();
   }
 
@@ -379,10 +421,20 @@ export class DispositionPage extends Container {
     this.refresh();
   }
 
+  /**
+   * The committed definition: one line, since it lands in the namer prompt as
+   * a single JSON string. Newlines picked up while editing (ctrl+j, "\"+Enter,
+   * pasted paragraphs) join back to single spaces; getExpandedText restores
+   * any pastes the editor collapsed into markers.
+   */
+  private definitionText(): string {
+    return this.definitionEditor.getExpandedText().replace(/\s*\n\s*/g, " ").trim();
+  }
+
   private commitForm(): void {
     if (this.mode === "add") {
       const id = this.idInput.getValue().trim();
-      const error = this.params.addClass({ id, definition: this.definitionInput.getValue() });
+      const error = this.params.addClass({ id, definition: this.definitionText() });
       if (error) {
         this.formError = error;
         this.refresh();
@@ -394,7 +446,7 @@ export class DispositionPage extends Container {
     }
     const id = this.editingId;
     if (!id) return this.closeForm();
-    const error = this.params.editDefinition(id, this.definitionInput.getValue());
+    const error = this.params.editDefinition(id, this.definitionText());
     if (error) {
       this.formError = error;
       this.refresh();

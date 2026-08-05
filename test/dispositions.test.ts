@@ -524,8 +524,7 @@ describe("DispositionPage class editing", () => {
     const { page, text } = openPage(state, config);
     page.handleInput("e");
     assert.match(text(), /Edit read-project/);
-    // The field is seeded with the current definition and the caret sits after
-    // it, so the Input has scrolled to show the tail rather than the head.
+    // The editor is seeded with the current definition, wrapped in full view.
     assert.match(text(), /is credentials instead\./, "the field starts from the current definition");
 
     // Clear the prefill, then type the replacement.
@@ -535,6 +534,58 @@ describe("DispositionPage class editing", () => {
 
     assert.equal(dispositionRow(config, state, "read-project").fullDefinition, "Reads, rephrased.");
     assert.match(text(), /<warning> \(edited\)<\/warning>/);
+  });
+
+  it("wraps a long definition across multiple lines between chat-style rules", () => {
+    const { page } = openPage(createRuntimeState(), testConfig());
+    page.handleInput("e");
+    // Narrow enough that read-project's paragraph must wrap several times.
+    const lines = page.render(60);
+    const rules = lines.filter((line) => line.includes("<borderMuted>─</borderMuted>"));
+    assert.equal(rules.length, 2, "the editor draws the chat input's rules above and below");
+    // The two rule lines render identically, so find them from opposite ends.
+    const top = lines.indexOf(rules[0]!);
+    const bottom = lines.lastIndexOf(rules[1]!);
+    assert.ok(bottom - top - 1 >= 3, `the paragraph wraps across the box, got ${bottom - top - 1} lines`);
+    assert.match(lines[top + 1] ?? "", /^Reading, listing/, "text sits flush like the chat input (no padding)");
+  });
+
+  it("prefill leaves the caret at the end, so typing appends", () => {
+    const state = createRuntimeState();
+    const config = testConfig();
+    const { page } = openPage(state, config);
+    page.handleInput("e");
+    type(page, " Also symlinks.");
+    page.handleInput("<enter>");
+    assert.match(dispositionRow(config, state, "read-project").fullDefinition, /is credentials instead\. Also symlinks\.$/);
+  });
+
+  it("joins editing newlines into spaces on commit", () => {
+    const state = createRuntimeState();
+    const { page } = openPage(state, testConfig());
+    page.handleInput("a");
+    type(page, "multi-line-class");
+    page.handleInput(TAB);
+    type(page, "First line.");
+    page.handleInput("\n"); // ctrl+j: a newline while editing, chat-style
+    type(page, "Second line.");
+    page.handleInput("<enter>");
+    assert.equal(state.capabilities.customClasses[0]?.definition, "First line. Second line.");
+  });
+
+  it("continues on a new line instead of committing when Enter follows a backslash", () => {
+    const state = createRuntimeState();
+    const { page, text } = openPage(state, testConfig());
+    page.handleInput("a");
+    type(page, "backslash-class");
+    page.handleInput(TAB);
+    type(page, "First.\\");
+    page.handleInput("<enter>");
+    assert.match(text(), /New capability class/, "the backslash swallowed the commit");
+    assert.equal(state.capabilities.customClasses.length, 0);
+    type(page, "Second.");
+    page.handleInput("<enter>");
+    assert.equal(state.capabilities.customClasses[0]?.definition, "First. Second.");
   });
 
   it("cancels a form with Esc, leaving the session untouched", () => {
