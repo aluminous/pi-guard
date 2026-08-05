@@ -13,6 +13,7 @@ import {
   type Disposition,
 } from "./capabilities.ts";
 import { DEFAULT_COMMAND_ALLOWLIST } from "./command-allowlist.ts";
+import { formatError } from "./util.ts";
 
 export type RailBackendName = "seatbelt" | "none" | "container";
 
@@ -343,7 +344,7 @@ function readJson(filePath: string, diagnostics: string[]): Partial<RailConfig> 
     }
     return parsed as Partial<RailConfig>;
   } catch (error) {
-    diagnostics.push(`Ignoring ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
+    diagnostics.push(`Ignoring ${filePath}: ${formatError(error)}`);
     return undefined;
   }
 }

@@ -2,7 +2,7 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { ResolvedRailConfig } from "./config.ts";
 import { expandHome } from "./paths.ts";
-import { textPrefix, unique } from "./util.ts";
+import { formatError, textPrefix, unique } from "./util.ts";
 
 export type AccessKind = "read" | "write";
 
@@ -30,7 +30,7 @@ function canonicalizeExistingPath(normalizedPath: string): { ok: true; path: str
   try {
     return { ok: true, path: realpathSync.native(normalizedPath) };
   } catch (error) {
-    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+    return { ok: false, reason: formatError(error) };
   }
 }
 
@@ -40,7 +40,7 @@ function canonicalizeWritePath(normalizedPath: string): { ok: true; path: string
     return canonicalizeExistingPath(normalizedPath);
   } catch (error: any) {
     if (error?.code !== "ENOENT") {
-      return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+      return { ok: false, reason: formatError(error) };
     }
   }
 

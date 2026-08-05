@@ -5,7 +5,7 @@ import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import type { ResolvedRailConfig } from "../config.ts";
 import { existingRealPath } from "../paths.ts";
 import { compileFilesystemPolicy, resolveConfigPath } from "../policy.ts";
-import { asStringArray, unique } from "../util.ts";
+import { asStringArray, formatError, unique } from "../util.ts";
 import type { EffectivePolicy, RailBackend, WrappedCommand } from "./types.ts";
 
 type SandboxManagerApi = typeof import("@anthropic-ai/sandbox-runtime")["SandboxManager"];
@@ -145,7 +145,7 @@ export class SeatbeltBackend implements RailBackend {
     } catch (error) {
       return {
         ok: false,
-        reason: `Missing @anthropic-ai/sandbox-runtime. Run npm install in the Pi Rail extension directory. (${error instanceof Error ? error.message : String(error)})`,
+        reason: `Missing @anthropic-ai/sandbox-runtime. Run npm install in the Pi Rail extension directory. (${formatError(error)})`,
       };
     }
     if (!manager.isSupportedPlatform()) {

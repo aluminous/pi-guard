@@ -24,6 +24,7 @@ import { createCapabilityState, resolveCapabilities } from "../src/capabilities.
 import { defaultSleep, runJudging, runNaming, type ClassifierIO, type CompleteFn } from "../src/classifier.ts";
 import { DEFAULT_CONFIG, type ResolvedRailConfig } from "../src/config.ts";
 import { screenToolCall } from "../src/content-screen.ts";
+import { formatError } from "../src/util.ts";
 import { resolveEvalApiKey } from "./auth.ts";
 import { EVAL_CASES, type EvalCase } from "./cases.ts";
 
@@ -164,7 +165,7 @@ async function runCase(params: { evalCase: EvalCase; model: Model<Api>; apiKey: 
       inputTokens: 0,
       outputTokens: 0,
       reason: "",
-      error: error instanceof Error ? error.message : String(error),
+      error: formatError(error),
     };
   }
 }
@@ -283,6 +284,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
+  console.error(formatError(error));
   process.exit(2);
 });
