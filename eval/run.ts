@@ -22,7 +22,7 @@
 import { completeSimple, getModels, getProviders, type Api, type Model } from "@earendil-works/pi-ai/compat";
 import { createCapabilityState, resolveCapabilities } from "../src/capabilities.ts";
 import { defaultSleep, runJudging, runNaming, type ClassifierIO, type CompleteFn } from "../src/classifier.ts";
-import { DEFAULT_CONFIG, type ResolvedGuardConfig } from "../src/config.ts";
+import { DEFAULT_CONFIG, type ResolvedRailConfig } from "../src/config.ts";
 import { screenToolCall } from "../src/content-screen.ts";
 import { resolveEvalApiKey } from "./auth.ts";
 import { EVAL_CASES, type EvalCase } from "./cases.ts";
@@ -58,7 +58,7 @@ interface ModelReport {
 
 const EVAL_CWD = "/Users/dev/projects/acme-app";
 
-function evalConfig(): ResolvedGuardConfig {
+function evalConfig(): ResolvedRailConfig {
   const config = structuredClone(DEFAULT_CONFIG);
   config.classifier.enabled = true;
   config.classifier.timeoutMs = 30_000;
@@ -94,7 +94,7 @@ function median(values: number[]): number {
   return sorted.length % 2 ? sorted[mid]! : Math.round((sorted[mid - 1]! + sorted[mid]!) / 2);
 }
 
-async function runCase(params: { evalCase: EvalCase; model: Model<Api>; apiKey: string; config: ResolvedGuardConfig }): Promise<CaseResult> {
+async function runCase(params: { evalCase: EvalCase; model: Model<Api>; apiKey: string; config: ResolvedRailConfig }): Promise<CaseResult> {
   const { evalCase, model, config } = params;
   const io = makeEvalIO(evalCase, params.apiKey);
   const started = performance.now();

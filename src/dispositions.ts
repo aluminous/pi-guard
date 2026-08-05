@@ -21,7 +21,7 @@ import {
   type Disposition,
   type EffectiveDisposition,
 } from "./capabilities.ts";
-import { configSourceLabel, globalGuardConfigPath, type ResolvedGuardConfig } from "./config.ts";
+import { configSourceLabel, globalRailConfigPath, type ResolvedRailConfig } from "./config.ts";
 import {
   updatePersistentCapabilityClass,
   updatePersistentCapabilityDefinition,
@@ -90,7 +90,7 @@ function statsLabel(stats: CapabilityStats | undefined): string {
 }
 
 /** Every class in registry order. Recomputed on each refresh, so live stats, class edits, and preset changes land without extra plumbing. */
-export function dispositionRows(config: ResolvedGuardConfig | undefined, state: RuntimeState): DispositionRow[] {
+export function dispositionRows(config: ResolvedRailConfig | undefined, state: RuntimeState): DispositionRow[] {
   // The preset is derived from state.readOnly; sync here so a read-only toggle
   // while the page is open shows up on the next refresh.
   syncCapabilityPreset(state);
@@ -121,7 +121,7 @@ export function dispositionRows(config: ResolvedGuardConfig | undefined, state: 
   });
 }
 
-export function dispositionRow(config: ResolvedGuardConfig | undefined, state: RuntimeState, id: CapabilityId): DispositionRow {
+export function dispositionRow(config: ResolvedRailConfig | undefined, state: RuntimeState, id: CapabilityId): DispositionRow {
   return dispositionRows(config, state).find((row) => row.id === id)!;
 }
 
@@ -137,7 +137,7 @@ export function cycleDisposition(current: Disposition, step: 1 | -1): Dispositio
  * drops the override instead of recording a no-op one, so Ctrl+S only ever
  * writes rows the user actually changed.
  */
-export function setRowDisposition(config: ResolvedGuardConfig | undefined, state: RuntimeState, id: CapabilityId, disposition: Disposition): void {
+export function setRowDisposition(config: ResolvedRailConfig | undefined, state: RuntimeState, id: CapabilityId, disposition: Disposition): void {
   const persisted = getEffectiveDisposition(config, undefined, id).disposition;
   if (disposition === persisted) clearSessionDisposition(state.capabilities, id);
   else setSessionDisposition(state.capabilities, id, disposition);
@@ -176,12 +176,12 @@ export const DEFAULT_DISPOSITION_PERSISTENCE: DispositionPersistence = {
  * value moves.
  */
 export function saveDispositions(
-  config: ResolvedGuardConfig | undefined,
+  config: ResolvedRailConfig | undefined,
   state: RuntimeState,
   persist: DispositionPersistence = DEFAULT_DISPOSITION_PERSISTENCE,
 ): SaveResult {
   const result: SaveResult = { saved: [], shadowed: [], added: [], edited: [], removed: [] };
-  const globalPath = globalGuardConfigPath();
+  const globalPath = globalRailConfigPath();
 
   // Classes first: a disposition row for a class added in the same session has
   // to land in a config that already declares the class.
@@ -275,7 +275,7 @@ export const NEW_CLASS_DISPOSITION: Disposition = "ask";
  * typed definition is not lost.
  */
 export function addClass(
-  config: ResolvedGuardConfig | undefined,
+  config: ResolvedRailConfig | undefined,
   state: RuntimeState,
   input: { id: string; definition: string; name?: string },
 ): string | undefined {
@@ -297,7 +297,7 @@ export function addClass(
 
 /** Edits a class definition at session scope. Any class may be edited, including built-ins. */
 export function editClassDefinition(
-  config: ResolvedGuardConfig | undefined,
+  config: ResolvedRailConfig | undefined,
   state: RuntimeState,
   id: CapabilityId,
   definition: string,

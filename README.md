@@ -1,17 +1,17 @@
-# Pi Guard Extension
+# Pi Rail Extension
 
-Defense-in-depth command and file-tool guardrails for Pi. Today Pi Guard uses macOS Seatbelt for contained shell execution, deterministic path policy for Pi file tools, environment scrubbing, and an optional LLM reviewer that names actions against a small capability taxonomy which your own [disposition table](#capability-mode) then decides on. The extension is structured around a backend interface so a container backend can be added later.
+Defense-in-depth command and file-tool guardrails for Pi. Today Pi Rail uses macOS Seatbelt for contained shell execution, deterministic path policy for Pi file tools, environment scrubbing, and an optional LLM reviewer that names actions against a small capability taxonomy which your own [disposition table](#capability-mode) then decides on. The extension is structured around a backend interface so a container backend can be added later.
 
 ## Relationship to pi-sandbox
 
-Pi Guard is inspired by Chris Arderne's [`pi-sandbox`](https://github.com/carderne/pi-sandbox), which provides OS-level sandboxing for Pi with interactive permission prompts. Both extensions wrap shell execution in an OS sandbox and intercept Pi's direct `read`, `write`, and `edit` tools because those file operations do not run inside subprocess containment.
+Pi Rail is inspired by Chris Arderne's [`pi-sandbox`](https://github.com/carderne/pi-sandbox), which provides OS-level sandboxing for Pi with interactive permission prompts. Both extensions wrap shell execution in an OS sandbox and intercept Pi's direct `read`, `write`, and `edit` tools because those file operations do not run inside subprocess containment.
 
 The main differences are:
 
-- Pi Guard adds an optional AI reviewer that names `bash`, `read`, `write`, and `edit` calls with capability classes after deterministic policy checks; a user-owned disposition table then decides.
-- Pi Guard currently targets macOS Seatbelt via `@anthropic-ai/sandbox-runtime`; `pi-sandbox` supports macOS `sandbox-exec` and Linux `bubblewrap` through `@carderne/sandbox-runtime`.
-- Pi Guard treats configured deny-write paths as hard blocks and keeps path approvals session-local; `pi-sandbox` emphasizes interactive prompts that can persist allowances to project or global config.
-- Pi Guard includes environment scrubbing and capability critique/model selection commands in addition to sandbox status controls.
+- Pi Rail adds an optional AI reviewer that names `bash`, `read`, `write`, and `edit` calls with capability classes after deterministic policy checks; a user-owned disposition table then decides.
+- Pi Rail currently targets macOS Seatbelt via `@anthropic-ai/sandbox-runtime`; `pi-sandbox` supports macOS `sandbox-exec` and Linux `bubblewrap` through `@carderne/sandbox-runtime`.
+- Pi Rail treats configured deny-write paths as hard blocks and keeps path approvals session-local; `pi-sandbox` emphasizes interactive prompts that can persist allowances to project or global config.
+- Pi Rail includes environment scrubbing and capability critique/model selection commands in addition to sandbox status controls.
 
 If you do not need semantic review and want the mature prompt-oriented sandbox, especially on Linux, start with `pi-sandbox`.
 
@@ -28,7 +28,7 @@ If you do not need semantic review and want the mature prompt-oriented sandbox, 
 Pi extensions execute with the same system permissions as Pi. Review the source
 and security limitations before installing third-party extensions.
 
-Install Pi Guard directly from GitHub:
+Install Pi Rail directly from GitHub:
 
 ```bash
 pi install git:github.com/aluminous/pi-guard
@@ -73,7 +73,7 @@ pi -ne -e .
 
 Flags:
 
-- `--no-guard`: explicitly disable Pi Guard and run bash unguarded.
+- `--no-guard`: explicitly disable Pi Rail and run bash unguarded.
 
 Commands — everything lives under `/guard`, with argument autocomplete:
 
@@ -83,7 +83,7 @@ Commands — everything lives under `/guard`, with argument autocomplete:
 - `/guard policy rules`: open the same page on its **rules** tab — the resolved mechanism policy (filesystem, network, environment scrubbing, and the command allowlist, provenance-annotated). **Tab** cycles between the two tabs; invoking the other tab while the panel is open switches rather than closing. Outside the TUI this stays a standalone live widget, as before.
 - `/guard set <class> [allow|judge|ask|deny]`: set one class for this session from the command line (completions offer class ids — including custom ones — then dispositions). Without a disposition it prints the current effective value and where it came from.
 - `/guard guide <text>`: add classifier guidance for this session without waiting to be asked (see [Session guidance](#session-guidance)). Bare `/guard guide` prompts for the text; `/guard guide clear` drops every entry.
-- `/guard on`: enable Pi Guard.
+- `/guard on`: enable Pi Rail.
 - `/guard off`: disable for the next agent turn, then re-enable automatically.
 - `/guard off session`: disable until the session ends.
 - `/guard readonly` (or `ro`, or ctrl+alt+r): toggle session read-only mode — `write`/`edit` are blocked, `bash` must be reviewed (and is blocked outright if the classifier is off), and a session disposition preset denies the writing capability classes.
@@ -93,19 +93,19 @@ Commands — everything lives under `/guard`, with argument autocomplete:
 - `/guard smoke`: run the command-containment and namer smoke tests.
 - `/guard critique [provider/model-id]`: critique the capability class definitions, the disposition table, and the content screen with Pi's current model or a specific one.
 
-Guard reports are **never placed into the conversation**: pi delivers custom
+Rail reports are **never placed into the conversation**: pi delivers custom
 messages to the LLM as user messages, and a status or policy report is a map
 of the guard's rules, approvals, and session guidance — exactly what a
 compromised agent would want to read. All guard output goes through
 user-only channels (popups, widgets, notifications); the agent only ever
-sees the block reason attached to a denied tool call. Guard commands are
+sees the block reason attached to a denied tool call. Rail commands are
 user-facing: in headless modes (json/print) there is no one to invoke or see
 them, so views are a stderr error and pickers resolve as cancelled.
 
 Statusline legend — the guard statusline is deliberately terse:
 
 ```
-Guard: seatbelt, 26 domains, auto (openai-codex/gpt-5.4-mini) R2(+1) C4 D1 ↑12k ↓800
+Rail: seatbelt, 26 domains, auto (openai-codex/gpt-5.4-mini) R2(+1) C4 D1 ↑12k ↓800
 ```
 
 `R` = deterministic decisions (no model consulted), `C` = model reviews (namer
@@ -170,7 +170,7 @@ Example `.pi/guard.json`:
 ```
 
 The `filesystem.enabled` and `network.enabled` fields control whether those
-restriction layers are enforced; they do not turn Pi Guard or the reviewers
+restriction layers are enforced; they do not turn Pi Rail or the reviewers
 on and off. Both default to `true`.
 
 Ready-to-copy profiles are available under [`examples/configs`](examples/configs):
@@ -415,7 +415,7 @@ command goes to the namer.
 }
 ```
 
-The default namer model is `"auto"`: Pi Guard picks the best available
+The default namer model is `"auto"`: Pi Rail picks the best available
 model from a known-good list (see `src/classifier-models.ts`), preferring
 subscription providers (openai-codex, github-copilot) over per-token providers
 like OpenRouter, and ordered by the benchmark in `eval/RESULTS.md` within each
@@ -462,8 +462,8 @@ enabled and use an empty allowlist:
 
 ## What is protected
 
-- Agent `bash` tool calls are routed through Pi Guard.
-- User `!` and `!!` bash commands are routed through Pi Guard.
+- Agent `bash` tool calls are routed through Pi Rail.
+- User `!` and `!!` bash commands are routed through Pi Rail.
 - When filesystem restrictions are enabled, built-in `read`, `write`, and `edit` tool calls are checked by deterministic path policy because Seatbelt only contains subprocesses.
 - When filesystem restrictions are enabled, reads are allowed by default except for configured sensitive paths, and writes are limited to configured roots.
 - Environment variables are scrubbed before guarded commands are spawned: `environment.unset` patterns are removed first, then `environment.allow` (when non-empty) whitelists the rest. The default allow list passes CA-certificate variables (`SSL_CERT_FILE`, `CURL_CA_BUNDLE`, `NODE_EXTRA_CA_CERTS`, `AWS_CA_BUNDLE`, `JAVA_TOOL_OPTIONS`, and friends) so a private CA reaches sandboxed tooling; to make that work, the default unset list names explicit AWS credential variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, …) instead of a broad `AWS_*` glob, with the generic `*_TOKEN`/`*_SECRET`/`*_KEY` globs as the backstop for unknown secrets.
@@ -471,7 +471,7 @@ enabled and use an empty allowlist:
 - Trusted reads never reach a model: a `read` whose canonical path is inside the session working directory or matches an explicit `allowRead` entry — and does not match `denyRead` — is labelled deterministically (0 tokens, 0 latency; counted as "Exempt (no model consulted)" in the status report, together with allowlisted commands and screen-clean writes). The allow/deny lists are consulted for this routing even when `filesystem.enabled` is `false`, which only disables *blocking*.
 - A `read` matching `denyRead` is **not** hard-blocked any more: it is labelled `credentials`, which defaults to `judge`. Reading a test-fixture key and reading toward exfiltration are different actions, and telling them apart is a judgment call. `denyWrite` matches stay hard blocks — writes to secret and config paths are containment, not policy.
 - Writes and edits are never exempted by path alone: their content goes through the deterministic content screen, and anything it trips on goes to the namer.
-- Reviewer timeouts/network failures are retried with bounded exponential backoff up to five attempts and surfaced to the user. If no usable namer model is available, or fail-closed naming still fails after retries, Pi Guard stops the current turn for user intervention without exiting Pi. A judge failure instead degrades to asking you.
+- Reviewer timeouts/network failures are retried with bounded exponential backoff up to five attempts and surfaced to the user. If no usable namer model is available, or fail-closed naming still fails after retries, Pi Rail stops the current turn for user intervention without exiting Pi. A judge failure instead degrades to asking you.
 
 ## Approval prompts and session guidance
 
@@ -531,7 +531,7 @@ pi-guard. A guard-to-guard approval side channel was considered and deferred
 The [`pi-subagents`](https://github.com/nicobailon/pi-subagents) extension
 (not affiliated; also distinct from the npm `pi-guard` package it recommends
 for bash policy) spawns children that inherit your installed extensions by
-default, so each child runs its own guard instance. Pi Guard participates in
+default, so each child runs its own guard instance. Pi Rail participates in
 its acknowledgement channel both ways:
 
 - **As a child**, when the guard is enforcing it emits
@@ -579,7 +579,7 @@ session (false-positive candidates worth adding to `eval/cases.ts`).
 
 ## Limitations
 
-Pi Guard is a defense-in-depth containment layer, not a complete adversarial security boundary.
+Pi Rail is a defense-in-depth containment layer, not a complete adversarial security boundary.
 
 - Seatbelt applies to spawned subprocesses, not arbitrary Pi extension code.
 - Domain-level network allowlisting is limited and depends on the sandbox runtime's hostname handling. A proxy layer is a better future design for more precise domain policy.
@@ -609,8 +609,8 @@ Three seam modules own every run-mode branch; feature code never inspects
 
 - `src/live-view.ts` — display surfaces (status, policy rules, smoke/critique
   reports): docked panel in the TUI, `setWidget` over RPC, a stderr error
-  headless. `showGuardView` replaces any open view; `toggleGuardView` adds
-  toggle semantics for the recurring views; `toggleGuardPanel` hosts an
+  headless. `showRailView` replaces any open view; `toggleRailView` adds
+  toggle semantics for the recurring views; `toggleRailPanel` hosts an
   interactive panel (the disposition page) and returns false where custom
   components do not exist, so the caller degrades.
 - `src/approvals.ts` — response dialogs (approval prompts): a custom dialog

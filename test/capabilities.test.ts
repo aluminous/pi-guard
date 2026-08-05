@@ -25,7 +25,7 @@ import {
   strictestDisposition,
   usedCapabilityStats,
 } from "../src/capabilities.ts";
-import { globalGuardConfigPath, mergeConfig } from "../src/config.ts";
+import { globalRailConfigPath, mergeConfig } from "../src/config.ts";
 import { testConfig } from "./helpers.ts";
 
 describe("taxonomy", () => {
@@ -100,11 +100,11 @@ describe("disposition scopes", () => {
       scope: "default",
     });
 
-    const configured = mergeConfig(base, { dispositions: { "install-dependencies": "ask" } }, globalGuardConfigPath());
+    const configured = mergeConfig(base, { dispositions: { "install-dependencies": "ask" } }, globalRailConfigPath());
     const fromConfig = getEffectiveDisposition(configured, state, "install-dependencies");
     assert.equal(fromConfig.disposition, "ask");
     assert.equal(fromConfig.scope, "config");
-    assert.equal(fromConfig.source, globalGuardConfigPath());
+    assert.equal(fromConfig.source, globalRailConfigPath());
 
     setSessionDisposition(state, "install-dependencies", "allow");
     assert.equal(getEffectiveDisposition(configured, state, "install-dependencies").scope, "session");
@@ -115,7 +115,7 @@ describe("disposition scopes", () => {
   });
 
   it("merges the table per row, keeping untouched classes on their defaults", () => {
-    const merged = mergeConfig(testConfig(), { dispositions: { credentials: "deny" } }, globalGuardConfigPath());
+    const merged = mergeConfig(testConfig(), { dispositions: { credentials: "deny" } }, globalRailConfigPath());
     assert.equal(merged.dispositions.credentials, "deny");
     assert.equal(merged.dispositions["local-destructive"], "judge");
     assert.equal(merged.provenance.dispositions["local-destructive"], "default");

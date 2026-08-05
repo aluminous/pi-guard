@@ -1,11 +1,11 @@
-import type { GuardBackend } from "./backends/types.ts";
+import type { RailBackend } from "./backends/types.ts";
 import { applyReadOnlyPreset, clearPreset, createCapabilityState, recordCapabilityHits, type CapabilityId, type CapabilityState, type Disposition } from "./capabilities.ts";
 import type { ClassifierState } from "./classifier.ts";
-import type { ResolvedGuardConfig } from "./config.ts";
+import type { ResolvedRailConfig } from "./config.ts";
 import { TRACE_LIMIT, type DecisionTrace } from "./decision-trace.ts";
 import type { AccessKind } from "./policy.ts";
 
-export interface GuardEvent {
+export interface RailEvent {
   at: number;
   toolName: string;
   decision: "allow" | "deny" | "ask" | "block" | "error";
@@ -14,7 +14,7 @@ export interface GuardEvent {
   reason: string;
 }
 
-export interface GuardStats {
+export interface RailStats {
   reviewed: number;
   allowed: number;
   denied: number;
@@ -38,14 +38,14 @@ export interface GuardStats {
 }
 
 /** "status"/"policy" are the toggleable live views; "report" is one-shot output (smoke, critique). */
-export type GuardViewKind = "status" | "policy" | "report";
+export type RailViewKind = "status" | "policy" | "report";
 
 /**
  * An open live guard view — a TUI overlay popup or an RPC widget.
  * refresh() re-renders content from current state, close() dismisses it.
  */
-export interface GuardLiveView {
-  kind: GuardViewKind;
+export interface RailLiveView {
+  kind: RailViewKind;
   refresh(): void;
   close(): void;
   /**
@@ -58,8 +58,8 @@ export interface GuardLiveView {
 }
 
 export interface RuntimeState {
-  config: ResolvedGuardConfig | undefined;
-  backend: GuardBackend | undefined;
+  config: ResolvedRailConfig | undefined;
+  backend: RailBackend | undefined;
   enabled: boolean;
   disabledForNextAgent: boolean;
   /** Session read-only mode: write/edit blocked, bash named-and-judged under the read-only disposition preset (blocked if the classifier is off). */
@@ -71,13 +71,13 @@ export interface RuntimeState {
   /** Session disposition overrides, the read-only preset, and per-class stats. */
   capabilities: CapabilityState;
   /** Open live status/policy view (TUI overlay or RPC widget), if any. */
-  liveView?: GuardLiveView;
+  liveView?: RailLiveView;
   approvals: {
     read: string[];
     write: string[];
   };
-  stats: GuardStats;
-  recent: GuardEvent[];
+  stats: RailStats;
+  recent: RailEvent[];
   /** Per-call decision traces for /guard explain, newest first (last TRACE_LIMIT). */
   traces: DecisionTrace[];
   /** Most recent guarded bash execution, for the /guard why sandbox-denial window. */
@@ -90,7 +90,7 @@ export interface RuntimeState {
   appendEntry?: (customType: string, data: unknown) => void;
 }
 
-export function createGuardStats(): GuardStats {
+export function createRailStats(): RailStats {
   return {
     reviewed: 0,
     allowed: 0,
@@ -126,7 +126,7 @@ export function createRuntimeState(): RuntimeState {
     classifier: {},
     capabilities: createCapabilityState(),
     approvals: { read: [], write: [] },
-    stats: createGuardStats(),
+    stats: createRailStats(),
     recent: [],
     traces: [],
     availableModelSpecs: [],
@@ -147,7 +147,7 @@ export function resetSessionState(state: RuntimeState): void {
   state.classifier = {};
   state.capabilities = createCapabilityState();
   state.approvals = { read: [], write: [] };
-  state.stats = createGuardStats();
+  state.stats = createRailStats();
   state.traces = [];
   state.lastBashCommand = undefined;
   state.subagentAckWarned = new Set();
@@ -171,7 +171,7 @@ export function resetTurnStats(state: RuntimeState): void {
   state.stats.turnBlocked = 0;
 }
 
-function pushRecent(state: RuntimeState, event: GuardEvent) {
+function pushRecent(state: RuntimeState, event: RailEvent) {
   state.recent.unshift(event);
   state.recent = state.recent.slice(0, 8);
 }

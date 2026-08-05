@@ -1,7 +1,7 @@
 import type { AccessKind } from "./policy.ts";
 import { textPrefix } from "./util.ts";
 
-export interface GuardedToolSpec {
+export interface InterceptedToolSpec {
   /** Path access checks the interceptor runs for this tool, in order. */
   access: AccessKind[];
   /** Extracts the filesystem path this call touches, when the tool takes one. */
@@ -30,7 +30,7 @@ export function describeAction(toolName: string, inputSummary: Record<string, un
   return toolName;
 }
 
-export const GUARDED_TOOLS: Record<string, GuardedToolSpec> = {
+export const INTERCEPTED_TOOLS: Record<string, InterceptedToolSpec> = {
   bash: {
     access: [],
     project: (input) => ({ command: typeof input.command === "string" ? input.command : "", timeout: input.timeout }),

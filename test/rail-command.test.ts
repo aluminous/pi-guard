@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { BUILTIN_CAPABILITY_IDS, type CapabilityId, type Disposition } from "../src/capabilities.ts";
-import { createGuardCommand } from "../src/commands/guard.ts";
+import { createRailCommand } from "../src/commands/rail.ts";
 import { addClass, setRowDisposition } from "../src/dispositions.ts";
 import { addSessionGuidance } from "../src/classifier.ts";
 import { createRuntimeState, type RuntimeState } from "../src/state.ts";
@@ -12,11 +12,11 @@ import { testConfig } from "./helpers.ts";
 function makeCommand(specs: string[] = []) {
   const state = createRuntimeState();
   state.availableModelSpecs = specs;
-  return createGuardCommand({
+  return createRailCommand({
     state,
-    enableGuard: async () => {},
-    disableGuard: async () => {},
-    runGuardSmoke: async () => {},
+    enableRail: async () => {},
+    disableRail: async () => {},
+    runRailSmoke: async () => {},
     runCritique: async () => {},
   });
 }
@@ -26,11 +26,11 @@ function makeDispositionCommand() {
   const state = createRuntimeState();
   state.config = testConfig();
   const persisted: Array<[CapabilityId, Disposition | undefined]> = [];
-  const command = createGuardCommand({
+  const command = createRailCommand({
     state,
-    enableGuard: async () => {},
-    disableGuard: async () => {},
-    runGuardSmoke: async () => {},
+    enableRail: async () => {},
+    disableRail: async () => {},
+    runRailSmoke: async () => {},
     runCritique: async () => {},
     persistDisposition: { disposition: (id, disposition) => void persisted.push([id, disposition]) },
   });
@@ -231,7 +231,7 @@ describe("/guard policy routing", () => {
     await command.handler("policy rules", ctx);
     assert.equal(state.liveView?.kind, "policy");
     assert.equal(widgets.at(-1)?.key, "guard-policy");
-    assert.match(widgets.at(-1)?.lines?.join("\n") ?? "", /# Pi Guard Policy Rules/);
+    assert.match(widgets.at(-1)?.lines?.join("\n") ?? "", /# Pi Rail Policy Rules/);
     assert.doesNotMatch(widgets.at(-1)?.lines?.join("\n") ?? "", /## Capability dispositions/);
   });
 
@@ -262,7 +262,7 @@ describe("/guard policy routing", () => {
     const tui = tuiCtx();
     await command.handler("policy rules", tui.ctx);
     const page = tui.panel() as DispositionPage;
-    assert.match(page.render(200).join("\n"), /Pi Guard Policy Rules/);
+    assert.match(page.render(200).join("\n"), /Pi Rail Policy Rules/);
   });
 
   it("warns on an unknown policy argument", async () => {

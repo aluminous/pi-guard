@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { CapabilityId, Disposition } from "./capabilities.ts";
-import type { CapabilitiesConfig, GuardConfig, StatusLineMode } from "./config.ts";
+import type { CapabilitiesConfig, RailConfig, StatusLineMode } from "./config.ts";
 
 /** The on-disk shape of a custom class: exactly what capabilities.classes entries look like. */
 export interface PersistedCapabilityClass {
@@ -53,20 +53,20 @@ function withConfigLock<T>(fn: () => T): T {
   }
 }
 
-function readConfigUnlocked(): GuardConfig {
+function readConfigUnlocked(): RailConfig {
   const filePath = configPath();
   if (!existsSync(filePath)) return {};
   const text = readFileSync(filePath, "utf8");
   if (!text.trim()) return {};
   const parsed = JSON.parse(text);
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as GuardConfig) : {};
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as RailConfig) : {};
 }
 
 export function updatePersistentClassifierSettings(update: { enabled?: boolean; model?: string }): void {
   withConfigLock(() => {
     const filePath = configPath();
     const current = readConfigUnlocked();
-    const next: GuardConfig = {
+    const next: RailConfig = {
       ...current,
       classifier: {
         ...(current.classifier ?? {}),
@@ -85,7 +85,7 @@ export function updatePersistentDisposition(id: CapabilityId, disposition: Dispo
     const dispositions = { ...(current.dispositions ?? {}) };
     if (disposition === undefined) delete dispositions[id];
     else dispositions[id] = disposition;
-    const next: GuardConfig = { ...current, dispositions };
+    const next: RailConfig = { ...current, dispositions };
     if (Object.keys(dispositions).length === 0) delete next.dispositions;
     writeFileSync(filePath, JSON.stringify(next, null, 2), "utf8");
   });
@@ -136,7 +136,7 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Drops an empty capabilities section, so removing the last class leaves no stub behind. */
-function pruneCapabilities(config: GuardConfig): GuardConfig {
+function pruneCapabilities(config: RailConfig): RailConfig {
   const next = { ...config };
   if (next.capabilities && Object.keys(next.capabilities).length === 0) delete next.capabilities;
   return next;
@@ -145,7 +145,7 @@ function pruneCapabilities(config: GuardConfig): GuardConfig {
 export function updatePersistentStatusLine(mode: StatusLineMode): void {
   withConfigLock(() => {
     const filePath = configPath();
-    const next: GuardConfig = { ...readConfigUnlocked(), statusLine: mode };
+    const next: RailConfig = { ...readConfigUnlocked(), statusLine: mode };
     writeFileSync(filePath, JSON.stringify(next, null, 2), "utf8");
   });
 }

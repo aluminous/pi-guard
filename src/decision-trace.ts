@@ -43,7 +43,7 @@ function formatTraceAge(at: number): string {
   return `${Math.floor(minutes / 60)}h ago`;
 }
 
-/** Colored tags reuse styleGuardLine's [ALLOW]/[BLOCK]/[ASK]/[ERROR] conventions. */
+/** Colored tags reuse styleRailLine's [ALLOW]/[BLOCK]/[ASK]/[ERROR] conventions. */
 function stageTag(outcome: string): string {
   if (outcome === "block" || outcome === "deny" || outcome === "denied" || outcome === "unanswerable") return "BLOCK";
   if (outcome === "error") return "ERROR";
@@ -54,7 +54,7 @@ function stageTag(outcome: string): string {
 
 export function formatDecisionTrace(trace: DecisionTrace, index: number, total: number): string {
   const lines = [
-    `# Guard Decision Trace (${index}/${total}, newest first)`,
+    `# Rail Decision Trace (${index}/${total}, newest first)`,
     "",
     `  ${trace.action}`,
     `  ${formatTraceAge(trace.at)} · final: ${trace.final}`,
@@ -68,5 +68,5 @@ export function formatDecisionTrace(trace: DecisionTrace, index: number, total: 
 }
 
 export function formatEmptyTrace(): string {
-  return ["# Guard Decision Trace", "", "  (no guarded tool calls traced yet this session)"].join("\n");
+  return ["# Rail Decision Trace", "", "  (no guarded tool calls traced yet this session)"].join("\n");
 }

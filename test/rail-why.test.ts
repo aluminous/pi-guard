@@ -7,10 +7,10 @@ import os from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { GuardBackend } from "../src/backends/types.ts";
-import { createGuardWhy } from "../src/commands/why.ts";
+import type { RailBackend } from "../src/backends/types.ts";
+import { createRailWhy } from "../src/commands/why.ts";
 import { compileFilesystemPolicy } from "../src/policy.ts";
-import { attributeDenial, formatGuardWhy, parseSandboxDenials, type LogWindow } from "../src/sandbox-log.ts";
+import { attributeDenial, formatRailWhy, parseSandboxDenials, type LogWindow } from "../src/sandbox-log.ts";
 import { createRuntimeState } from "../src/state.ts";
 import { makeFixtureDir, testConfig } from "./helpers.ts";
 
@@ -85,14 +85,14 @@ describe("attributeDenial", () => {
   });
 });
 
-describe("formatGuardWhy", () => {
+describe("formatRailWhy", () => {
   it("renders rule attributions with degraded notes", () => {
     const config = testConfig((c) => {
       c.filesystem.denyRead = ["*.pem"];
     });
     const compiled = compileFilesystemPolicy(config, cwd);
     const denial = parseSandboxDenials(FIXTURE_LOG)[1]!;
-    const report = formatGuardWhy({
+    const report = formatRailWhy({
       command: { command: "cat server.pem", startedAt: Date.now() - 5000, endedAt: Date.now() - 4000 },
       attributions: [attributeDenial(compiled, cwd, denial)],
     });
@@ -103,7 +103,7 @@ describe("formatGuardWhy", () => {
   });
 
   it("says so and suggests re-running when the window has no denials", () => {
-    const report = formatGuardWhy({
+    const report = formatRailWhy({
       command: { command: "ls", startedAt: Date.now(), endedAt: Date.now() },
       attributions: [],
     });
@@ -133,7 +133,7 @@ describe("/guard why command flow", () => {
   it("warns when no guarded command has run yet", async () => {
     const state = createRuntimeState();
     const { ctx, widgets, notifications } = makeCtx();
-    await createGuardWhy({ state, logRunner: async () => "" })(ctx);
+    await createRailWhy({ state, logRunner: async () => "" })(ctx);
     assert.equal(widgets.length, 0);
     assert.match(notifications.at(-1) ?? "", /run the failing command first/);
   });
@@ -141,11 +141,11 @@ describe("/guard why command flow", () => {
   it("queries the command window with margin and renders the attribution report", async () => {
     const state = createRuntimeState();
     state.config = testConfig();
-    state.backend = { name: "seatbelt" } as GuardBackend;
+    state.backend = { name: "seatbelt" } as RailBackend;
     state.lastBashCommand = { command: "cat ~/.ssh/id_rsa", startedAt: 1_000_000, endedAt: 1_000_500 };
     const windows: LogWindow[] = [];
     const { ctx, widgets, notifications } = makeCtx();
-    await createGuardWhy({
+    await createRailWhy({
       state,
       logRunner: async (window) => {
         windows.push(window);
@@ -165,7 +165,7 @@ describe("/guard why command flow", () => {
     state.config = testConfig();
     state.lastBashCommand = { command: "ls", startedAt: 1, endedAt: 2 };
     const { ctx, widgets } = makeCtx();
-    await createGuardWhy({ state, logRunner: async () => "" })(ctx);
+    await createRailWhy({ state, logRunner: async () => "" })(ctx);
     assert.match((widgets.at(-1)?.lines ?? []).join("\n"), /\(none found\)/);
   });
 });

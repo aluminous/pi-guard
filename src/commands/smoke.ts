@@ -3,17 +3,17 @@ import { resolveCapabilities } from "../capabilities.ts";
 import { nameToolCall } from "../classifier.ts";
 import { loadConfig } from "../config.ts";
 import { screenToolCall } from "../content-screen.ts";
-import { showGuardView } from "../live-view.ts";
+import { showRailView } from "../live-view.ts";
 import type { RuntimeState } from "../state.ts";
 import { formatError } from "../util.ts";
 
-export function createGuardSmoke(deps: {
+export function createRailSmoke(deps: {
   state: RuntimeState;
-  guardedOps: () => BashOperations | undefined;
+  sandboxedOps: () => BashOperations | undefined;
 }) {
   async function runCommandSmoke(ctx: ExtensionContext): Promise<void> {
-    const ops = deps.guardedOps();
-    if (!ops) throw new Error("Guard operations are unavailable");
+    const ops = deps.sandboxedOps();
+    if (!ops) throw new Error("Rail operations are unavailable");
     let output = "";
     const result = await ops.exec("echo guard smoke", ctx.cwd, {
       timeout: 10,
@@ -74,11 +74,11 @@ export function createGuardSmoke(deps: {
       `${"-".repeat(nameWidth)}  ${"-".repeat(dispositionWidth)}  ${"-".repeat(labelWidth)}  ------`,
       ...rows.map((row) => `${row.name.padEnd(nameWidth)}  ${row.disposition.padEnd(dispositionWidth)}  ${row.labels.padEnd(labelWidth)}  ${row.detail}`),
     ].join("\n");
-    showGuardView(ctx, deps.state, "report", () => output.split("\n"));
+    showRailView(ctx, deps.state, "report", () => output.split("\n"));
     ctx.ui.notify("Namer smoke complete.", "info");
   }
 
-  return async function runGuardSmoke(ctx: ExtensionContext): Promise<void> {
+  return async function runRailSmoke(ctx: ExtensionContext): Promise<void> {
     await runCommandSmoke(ctx);
     await runClassifierSmoke(ctx);
   };

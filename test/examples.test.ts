@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { mergeConfig, type GuardConfig } from "../src/config.ts";
+import { mergeConfig, type RailConfig } from "../src/config.ts";
 import { testConfig } from "./helpers.ts";
 
-function readExample(name: string): GuardConfig {
+function readExample(name: string): RailConfig {
   const filePath = fileURLToPath(new URL(`../examples/configs/${name}`, import.meta.url));
-  return JSON.parse(readFileSync(filePath, "utf8")) as GuardConfig;
+  return JSON.parse(readFileSync(filePath, "utf8")) as RailConfig;
 }
 
 describe("disposition-only example configurations", () => {

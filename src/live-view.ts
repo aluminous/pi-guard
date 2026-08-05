@@ -1,12 +1,12 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
-import type { GuardViewKind, RuntimeState } from "./state.ts";
-import { styleGuardLine } from "./status.ts";
-import { GuardReportPanel, type PanelTheme, type PanelTui } from "./tui/report-panel.ts";
+import type { RailViewKind, RuntimeState } from "./state.ts";
+import { styleRailLine } from "./status.ts";
+import { RailReportPanel, type PanelTheme, type PanelTui } from "./tui/report-panel.ts";
 import type { Keybindings } from "./tui/select-list.ts";
 
 /** What ctx.ui.custom hands a docked panel, narrowed to the structural slices the guard panels use. */
-export interface GuardPanelHost {
+export interface RailPanelHost {
   tui: PanelTui;
   theme: PanelTheme;
   keybindings: Keybindings;
@@ -14,15 +14,15 @@ export interface GuardPanelHost {
 }
 
 /** A docked panel the live view can refresh in place. */
-export type GuardPanelFactory = (host: GuardPanelHost) => Container & { refresh(): void };
+export type RailPanelFactory = (host: RailPanelHost) => Container & { refresh(): void };
 
 /**
  * TUI presentation: a bordered panel docked in the editor area, exactly like
  * pi's model chooser (non-overlay custom UI). The agent keeps streaming above
- * it and content refreshes live from updateGuardStatus; typing resumes when
+ * it and content refreshes live from updateRailStatus; typing resumes when
  * it closes.
  */
-function openPanel(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, factory: GuardPanelFactory): void {
+function openPanel(ctx: ExtensionContext, state: RuntimeState, kind: RailViewKind, factory: RailPanelFactory): void {
   let panel: (Container & { refresh(): void }) | undefined;
   let doneFn: ((value: undefined) => void) | undefined;
   let closed = false;
@@ -52,21 +52,21 @@ function openPanel(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKi
 }
 
 /** The read-only report panel, as a panel factory. */
-function reportPanel(lines: () => string[]): GuardPanelFactory {
-  return (host) => new GuardReportPanel({ ...host, lines, styleLine: styleGuardLine });
+function reportPanel(lines: () => string[]): RailPanelFactory {
+  return (host) => new RailReportPanel({ ...host, lines, styleLine: styleRailLine });
 }
 
 /**
  * RPC presentation: the same report as a live widget above the editor via the
  * fire-and-forget setWidget extension-UI request. Re-setting the key updates
- * it in place (updateGuardStatus drives refreshes; age labels only tick on
+ * it in place (updateRailStatus drives refreshes; age labels only tick on
  * events since there is no client-side timer); clearing the key closes it.
  */
-function openWidget(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, lines: () => string[]): void {
+function openWidget(ctx: ExtensionContext, state: RuntimeState, kind: RailViewKind, lines: () => string[]): void {
   const key = `guard-${kind}`;
   // refresh() fires on every guard event while the view is open; skip the
   // protocol round-trip when content is unchanged (also collapses the
-  // open-then-updateGuardStatus double send into one setWidget).
+  // open-then-updateRailStatus double send into one setWidget).
   let lastSent: string | undefined;
   const entry = {
     kind,
@@ -104,20 +104,20 @@ function openWidget(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewK
  * show a view to (or to invoke these commands); that is an error, not a
  * fallback path.
  */
-export function showGuardView(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, lines: () => string[]): void {
+export function showRailView(ctx: ExtensionContext, state: RuntimeState, kind: RailViewKind, lines: () => string[]): void {
   state.liveView?.close();
   if (ctx.mode === "tui" && ctx.hasUI) return openPanel(ctx, state, kind, reportPanel(lines));
   if (ctx.hasUI) return openWidget(ctx, state, kind, lines);
-  console.error("Guard views require an interactive session (TUI or RPC).");
+  console.error("Rail views require an interactive session (TUI or RPC).");
 }
 
 /** Toggle variant for the recurring status/policy views: the same kind closes, anything else shows. */
-export function toggleGuardView(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, lines: () => string[]): void {
+export function toggleRailView(ctx: ExtensionContext, state: RuntimeState, kind: RailViewKind, lines: () => string[]): void {
   if (state.liveView?.kind === kind) {
     state.liveView.close();
     return;
   }
-  showGuardView(ctx, state, kind, lines);
+  showRailView(ctx, state, kind, lines);
 }
 
 /**
@@ -125,7 +125,7 @@ export function toggleGuardView(ctx: ExtensionContext, state: RuntimeState, kind
  * TUI-only, so this returns false everywhere else and the caller degrades
  * (the disposition page falls back to select dialogs over RPC).
  */
-export function toggleGuardPanel(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, factory: GuardPanelFactory): boolean {
+export function toggleRailPanel(ctx: ExtensionContext, state: RuntimeState, kind: RailViewKind, factory: RailPanelFactory): boolean {
   if (ctx.mode !== "tui" || !ctx.hasUI) return false;
   if (state.liveView?.kind === kind) {
     state.liveView.close();

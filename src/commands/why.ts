@@ -3,24 +3,24 @@
 // sandbox-log.ts for the validated predicate and parsing).
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "../config.ts";
-import { showGuardView } from "../live-view.ts";
-import { attributeDenials, defaultLogRunner, formatGuardWhy, parseSandboxDenials, type LogRunner } from "../sandbox-log.ts";
+import { showRailView } from "../live-view.ts";
+import { attributeDenials, defaultLogRunner, formatRailWhy, parseSandboxDenials, type LogRunner } from "../sandbox-log.ts";
 import type { RuntimeState } from "../state.ts";
 import { formatError } from "../util.ts";
 
 /** Margin around the command's execution window: the kernel timestamps can straddle the recorded bounds. */
 const WINDOW_MARGIN_MS = 2_000;
 
-export interface GuardWhyDeps {
+export interface RailWhyDeps {
   state: RuntimeState;
   logRunner?: LogRunner;
 }
 
-export function createGuardWhy(deps: GuardWhyDeps) {
+export function createRailWhy(deps: RailWhyDeps) {
   const { state } = deps;
   const runner = deps.logRunner ?? defaultLogRunner;
 
-  return async function runGuardWhy(ctx: ExtensionContext): Promise<void> {
+  return async function runRailWhy(ctx: ExtensionContext): Promise<void> {
     const command = state.lastBashCommand;
     if (!command) {
       const message = "No guarded bash command has run this session; run the failing command first, then /guard why.";
@@ -45,7 +45,7 @@ export function createGuardWhy(deps: GuardWhyDeps) {
     }
     const config = state.config ?? loadConfig(ctx);
     const attributions = attributeDenials(config, ctx.cwd, parseSandboxDenials(raw));
-    const report = formatGuardWhy({ command, attributions });
-    showGuardView(ctx, state, "report", () => report.split("\n"));
+    const report = formatRailWhy({ command, attributions });
+    showRailView(ctx, state, "report", () => report.split("\n"));
   };
 }

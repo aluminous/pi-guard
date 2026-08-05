@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { addSessionGuidance, type ClassifierState } from "../src/classifier.ts";
-import { GuardApprovalDialog, type GuardApprovalAnswer } from "../src/tui/approval-dialog.ts";
+import { RailApprovalDialog, type RailApprovalAnswer } from "../src/tui/approval-dialog.ts";
 
 const theme = { fg: (_name: string, text: string) => text };
 
@@ -17,10 +17,10 @@ const keybindings = {
   },
 };
 
-function openDialog(): { dialog: GuardApprovalDialog; answers: GuardApprovalAnswer[] } {
-  const answers: GuardApprovalAnswer[] = [];
-  const dialog = new GuardApprovalDialog({
-    title: "Guard reviewer asks for approval",
+function openDialog(): { dialog: RailApprovalDialog; answers: RailApprovalAnswer[] } {
+  const answers: RailApprovalAnswer[] = [];
+  const dialog = new RailApprovalDialog({
+    title: "Rail reviewer asks for approval",
     message: "Deploy to staging?",
     theme,
     keybindings,
@@ -30,7 +30,7 @@ function openDialog(): { dialog: GuardApprovalDialog; answers: GuardApprovalAnsw
   return { dialog, answers };
 }
 
-describe("GuardApprovalDialog", () => {
+describe("RailApprovalDialog", () => {
   it("resolves plain allow and deny without a comment", () => {
     const allow = openDialog();
     allow.dialog.handleInput("<enter>");

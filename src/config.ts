@@ -14,7 +14,7 @@ import {
 } from "./capabilities.ts";
 import { DEFAULT_COMMAND_ALLOWLIST } from "./command-allowlist.ts";
 
-export type GuardBackendName = "seatbelt" | "none" | "container";
+export type RailBackendName = "seatbelt" | "none" | "container";
 
 /** When the guard statusline is visible: always, never, or auto (only when the guard is off/erroring or something was denied since the last user message). */
 export type StatusLineMode = "always" | "never" | "auto";
@@ -54,9 +54,9 @@ export interface CapabilitiesConfig {
   definitions?: Record<string, string>;
 }
 
-export interface GuardConfig {
+export interface RailConfig {
   enabled?: boolean;
-  backend?: GuardBackendName;
+  backend?: RailBackendName;
   statusLine?: StatusLineMode;
   filesystem?: {
     enabled?: boolean;
@@ -109,9 +109,9 @@ export interface ConfigProvenance {
   capabilityDefinitions: Record<string, string>;
 }
 
-export interface ResolvedGuardConfig {
+export interface ResolvedRailConfig {
   enabled: boolean;
-  backend: GuardBackendName;
+  backend: RailBackendName;
   statusLine: StatusLineMode;
   filesystem: {
     enabled: boolean;
@@ -247,7 +247,7 @@ function listProvenance(entries: string[], source: string): Record<string, strin
   return Object.fromEntries(entries.map((entry) => [entry, source]));
 }
 
-function defaultProvenance(config: Omit<ResolvedGuardConfig, "provenance">): ConfigProvenance {
+function defaultProvenance(config: Omit<ResolvedRailConfig, "provenance">): ConfigProvenance {
   return {
     lists: {
       "filesystem.allowRead": listProvenance(config.filesystem.allowRead, "default"),
@@ -266,7 +266,7 @@ function defaultProvenance(config: Omit<ResolvedGuardConfig, "provenance">): Con
   };
 }
 
-const DEFAULTS_SANS_PROVENANCE: Omit<ResolvedGuardConfig, "provenance"> = {
+const DEFAULTS_SANS_PROVENANCE: Omit<ResolvedRailConfig, "provenance"> = {
   enabled: true,
   backend: "seatbelt",
   statusLine: "always",
@@ -318,7 +318,7 @@ const DEFAULTS_SANS_PROVENANCE: Omit<ResolvedGuardConfig, "provenance"> = {
   sources: ["defaults"],
 };
 
-export const DEFAULT_CONFIG: ResolvedGuardConfig = { ...DEFAULTS_SANS_PROVENANCE, provenance: defaultProvenance(DEFAULTS_SANS_PROVENANCE) };
+export const DEFAULT_CONFIG: ResolvedRailConfig = { ...DEFAULTS_SANS_PROVENANCE, provenance: defaultProvenance(DEFAULTS_SANS_PROVENANCE) };
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -333,7 +333,7 @@ function asStringArray(value: unknown, name: string, diagnostics: string[]): str
   return value;
 }
 
-function readJson(filePath: string, diagnostics: string[]): Partial<GuardConfig> | undefined {
+function readJson(filePath: string, diagnostics: string[]): Partial<RailConfig> | undefined {
   if (!existsSync(filePath)) return undefined;
   try {
     const parsed = JSON.parse(readFileSync(filePath, "utf8"));
@@ -341,7 +341,7 @@ function readJson(filePath: string, diagnostics: string[]): Partial<GuardConfig>
       diagnostics.push(`Ignoring ${filePath}: expected a JSON object`);
       return undefined;
     }
-    return parsed as Partial<GuardConfig>;
+    return parsed as Partial<RailConfig>;
   } catch (error) {
     diagnostics.push(`Ignoring ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
@@ -392,7 +392,7 @@ function parseCapabilityClass(entry: unknown, index: number, source: string, dia
 }
 
 /** Merges the capabilities section by id, so a project config adding one class keeps the global ones. */
-function mergeCapabilities(next: ResolvedGuardConfig, override: CapabilitiesConfig, source: string, diagnostics: string[]): void {
+function mergeCapabilities(next: ResolvedRailConfig, override: CapabilitiesConfig, source: string, diagnostics: string[]): void {
   if (override.classes !== undefined) {
     if (!Array.isArray(override.classes)) {
       diagnostics.push(`Ignoring ${source}.capabilities.classes: expected an array`);
@@ -430,9 +430,9 @@ function mergeCapabilities(next: ResolvedGuardConfig, override: CapabilitiesConf
   }
 }
 
-export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardConfig>, source: string): ResolvedGuardConfig {
+export function mergeConfig(base: ResolvedRailConfig, override: Partial<RailConfig>, source: string): ResolvedRailConfig {
   const diagnostics = [...base.diagnostics];
-  const next: ResolvedGuardConfig = {
+  const next: ResolvedRailConfig = {
     ...base,
     filesystem: { ...base.filesystem },
     environment: { ...base.environment },
@@ -550,25 +550,25 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
   return next;
 }
 
-export function globalGuardConfigPath(): string {
+export function globalRailConfigPath(): string {
   return path.join(getAgentDir(), "extensions", "guard.json");
 }
 
 /** Short display label for a provenance source: "default", "global", "project", or the raw path when unrecognized. */
 export function configSourceLabel(source: string): string {
   if (source === "default") return "default";
-  if (source === globalGuardConfigPath()) return "global";
+  if (source === globalRailConfigPath()) return "global";
   if (source.endsWith(path.join(CONFIG_DIR_NAME, "guard.json"))) return "project";
   return source;
 }
 
-export function loadConfig(ctx: ExtensionContext): ResolvedGuardConfig {
+export function loadConfig(ctx: ExtensionContext): ResolvedRailConfig {
   const diagnostics: string[] = [];
-  let config: ResolvedGuardConfig = structuredClone(DEFAULT_CONFIG);
+  let config: ResolvedRailConfig = structuredClone(DEFAULT_CONFIG);
   config.diagnostics = [];
   config.sources = ["defaults"];
 
-  const globalPath = globalGuardConfigPath();
+  const globalPath = globalRailConfigPath();
   const projectPath = path.join(ctx.cwd, CONFIG_DIR_NAME, "guard.json");
 
   const globalConfig = readJson(globalPath, diagnostics);

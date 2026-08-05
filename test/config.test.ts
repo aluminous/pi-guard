@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEFAULT_CONFIG, globalGuardConfigPath, mergeConfig, type GuardConfig } from "../src/config.ts";
+import { DEFAULT_CONFIG, globalRailConfigPath, mergeConfig, type RailConfig } from "../src/config.ts";
 import { getEffectiveDisposition } from "../src/capabilities.ts";
 import { testConfig } from "./helpers.ts";
 
@@ -69,7 +69,7 @@ describe("mergeConfig", () => {
   it("loads a config carrying retired classifier.rules with one diagnostic and no error", () => {
     const merged = mergeConfig(
       testConfig(),
-      { classifier: { enabled: true, rules: { allow: ["My Rule: fine."], soft_deny: [], hard_deny: ["Whatever:"] } } } as Partial<GuardConfig>,
+      { classifier: { enabled: true, rules: { allow: ["My Rule: fine."], soft_deny: [], hard_deny: ["Whatever:"] } } } as Partial<RailConfig>,
       "test.json",
     );
     assert.equal(merged.diagnostics.length, 1);
@@ -112,7 +112,7 @@ describe("config provenance", () => {
 });
 
 describe("capabilities config", () => {
-  const globalPath = globalGuardConfigPath();
+  const globalPath = globalRailConfigPath();
   const projectPath = "/repo/.pi/guard.json";
 
   it("parses custom classes, defaulting name to the id and disposition to ask", () => {

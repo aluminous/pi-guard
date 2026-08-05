@@ -15,7 +15,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { GuardTelemetryRecord } from "../src/telemetry.ts";
+import type { RailTelemetryRecord } from "../src/telemetry.ts";
 
 interface SessionEntry {
   type?: string;
@@ -54,7 +54,7 @@ function percentile(sorted: number[], p: number): number {
   return sorted[index] ?? 0;
 }
 
-function commandOf(record: GuardTelemetryRecord): string | undefined {
+function commandOf(record: RailTelemetryRecord): string | undefined {
   if (record.kind !== "review" || !record.projection) return undefined;
   const command = record.projection.inputSummary.command;
   return typeof command === "string" && command.trim() ? command : undefined;
@@ -80,14 +80,14 @@ const dumpCases = args.includes("--cases");
 const sessionsDir = path.join(getAgentDir(), "sessions");
 const files = [...sessionFiles(sessionsDir)];
 
-const records: Array<{ file: string; index: number; record: GuardTelemetryRecord }> = [];
+const records: Array<{ file: string; index: number; record: RailTelemetryRecord }> = [];
 const fileEntries = new Map<string, SessionEntry[]>();
 for (const file of files) {
   const entries = parseEntries(file);
   fileEntries.set(file, entries);
   entries.forEach((entry, index) => {
     if (entry.type === "custom" && entry.customType === "guard" && entry.data && typeof entry.data === "object") {
-      records.push({ file, index, record: entry.data as GuardTelemetryRecord });
+      records.push({ file, index, record: entry.data as RailTelemetryRecord });
     }
   });
 }
@@ -166,7 +166,7 @@ const summary = {
 
 if (dumpCases) {
   const candidates = [...reviews.filter((r) => r.record.kind === "review" && (r.record.decision === "deny" || r.record.userApproved === false))].map((r) => {
-    const record = r.record as Extract<GuardTelemetryRecord, { kind: "review" }>;
+    const record = r.record as Extract<RailTelemetryRecord, { kind: "review" }>;
     const command = commandOf(record);
     return {
       tool: record.tool,

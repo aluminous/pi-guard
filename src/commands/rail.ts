@@ -5,20 +5,20 @@ import type { DispositionPersistence } from "../dispositions.ts";
 import { formatDecisionTrace, formatEmptyTrace } from "../decision-trace.ts";
 import { updatePersistentStatusLine } from "../persistent-settings.ts";
 import type { RuntimeState } from "../state.ts";
-import { classifierModelLabel, formatGuardPolicy, formatGuardStatus, networkPolicyLabel, updateGuardStatus } from "../status.ts";
-import { showGuardView, toggleGuardView } from "../live-view.ts";
+import { classifierModelLabel, formatRailPolicy, formatRailStatus, networkPolicyLabel, updateRailStatus } from "../status.ts";
+import { showRailView, toggleRailView } from "../live-view.ts";
 import { pickFromList, type SelectItem } from "../tui/select-list.ts";
 import { formatError } from "../util.ts";
 import { createDispositionCommands } from "./dispositions.ts";
 import { runModelCommand } from "./model.ts";
-import { createGuardTest } from "./test.ts";
-import { createGuardWhy } from "./why.ts";
+import { createRailTest } from "./test.ts";
+import { createRailWhy } from "./why.ts";
 
-export interface GuardCommandDeps {
+export interface RailCommandDeps {
   state: RuntimeState;
-  enableGuard(ctx: ExtensionContext): Promise<void>;
-  disableGuard(ctx: ExtensionContext, scope: "next-agent" | "session"): Promise<void>;
-  runGuardSmoke(ctx: ExtensionContext): Promise<void>;
+  enableRail(ctx: ExtensionContext): Promise<void>;
+  disableRail(ctx: ExtensionContext, scope: "next-agent" | "session"): Promise<void>;
+  runRailSmoke(ctx: ExtensionContext): Promise<void>;
   runCritique(args: string, ctx: ExtensionContext): Promise<void>;
   /** Disposition persist boundary; defaults to the global config writers, overridden in tests. */
   persistDisposition?: Partial<DispositionPersistence>;
@@ -45,10 +45,10 @@ const SUBCOMMANDS: Array<{ value: string; description: string }> = [
   { value: "critique", description: "Critique the capability classes and content screen with a model" },
 ];
 
-export function createGuardCommand(deps: GuardCommandDeps) {
+export function createRailCommand(deps: RailCommandDeps) {
   const { state } = deps;
-  const runGuardTest = createGuardTest({ state });
-  const runGuardWhy = createGuardWhy({ state });
+  const runRailTest = createRailTest({ state });
+  const runRailWhy = createRailWhy({ state });
 
   const show = (ctx: ExtensionContext, message: string, level: "info" | "warning" | "error" = "info") => {
     if (!ctx.hasUI) console.log(message);
@@ -61,7 +61,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     notify: show,
     // The rules tab renders the same report the standalone view did; computed
     // per refresh so provenance and backend changes show up live.
-    policyLines: (ctx) => formatGuardPolicy(state, state.config ?? loadConfig(ctx)).split("\n"),
+    policyLines: (ctx) => formatRailPolicy(state, state.config ?? loadConfig(ctx)).split("\n"),
   });
 
   /**
@@ -93,37 +93,37 @@ export function createGuardCommand(deps: GuardCommandDeps) {
 
   async function enable(ctx: ExtensionContext): Promise<void> {
     try {
-      await deps.enableGuard(ctx);
-      show(ctx, "Pi Guard enabled.");
+      await deps.enableRail(ctx);
+      show(ctx, "Pi Rail enabled.");
     } catch (error) {
       state.enabled = false;
       state.initialized = false;
       state.lastError = formatError(error);
-      show(ctx, `Could not enable Pi Guard: ${state.lastError}`, "error");
+      show(ctx, `Could not enable Pi Rail: ${state.lastError}`, "error");
     }
   }
 
   async function disableTurn(ctx: ExtensionContext): Promise<void> {
-    await deps.disableGuard(ctx, "next-agent");
-    show(ctx, "Pi Guard disabled for the next agent turn; it will re-enable when the agent finishes.", "warning");
+    await deps.disableRail(ctx, "next-agent");
+    show(ctx, "Pi Rail disabled for the next agent turn; it will re-enable when the agent finishes.", "warning");
   }
 
   async function disableSession(ctx: ExtensionContext): Promise<void> {
-    await deps.disableGuard(ctx, "session");
-    show(ctx, "Pi Guard disabled for this session; bash and file-tool policy checks are unguarded.", "warning");
+    await deps.disableRail(ctx, "session");
+    show(ctx, "Pi Rail disabled for this session; bash and file-tool policy checks are unguarded.", "warning");
   }
 
   function toggleReadOnly(ctx: ExtensionContext): void {
     state.readOnly = !state.readOnly;
-    if (state.readOnly) show(ctx, "Guard read-only mode on: write/edit are blocked and bash is restricted to read-only commands.");
-    else show(ctx, "Guard read-only mode off.");
+    if (state.readOnly) show(ctx, "Rail read-only mode on: write/edit are blocked and bash is restricted to read-only commands.");
+    else show(ctx, "Rail read-only mode off.");
   }
 
   /** Shows the nth-newest decision trace (1-based, default newest) through the report view. */
   function showExplain(ctx: ExtensionContext, args: string): void {
     const total = state.traces.length;
     if (total === 0) {
-      showGuardView(ctx, state, "report", () => formatEmptyTrace().split("\n"));
+      showRailView(ctx, state, "report", () => formatEmptyTrace().split("\n"));
       return;
     }
     const n = args.trim() === "" ? 1 : Number.parseInt(args.trim(), 10);
@@ -132,14 +132,14 @@ export function createGuardCommand(deps: GuardCommandDeps) {
       return;
     }
     const trace = state.traces[n - 1]!;
-    showGuardView(ctx, state, "report", () => formatDecisionTrace(trace, n, total).split("\n"));
+    showRailView(ctx, state, "report", () => formatDecisionTrace(trace, n, total).split("\n"));
   }
 
   /** TUI: toggle the live popup. RPC: toggle a live widget. Headless: print to stdout. Never posted to the agent. */
   function showView(ctx: ExtensionContext, kind: "status" | "policy"): void {
-    toggleGuardView(ctx, state, kind, () => {
+    toggleRailView(ctx, state, kind, () => {
       const config = state.config ?? loadConfig(ctx);
-      return (kind === "status" ? formatGuardStatus(state, config) : formatGuardPolicy(state, config)).split("\n");
+      return (kind === "status" ? formatRailStatus(state, config) : formatRailPolicy(state, config)).split("\n");
     });
   }
 
@@ -171,14 +171,14 @@ export function createGuardCommand(deps: GuardCommandDeps) {
       description: mode.description,
       current: config.statusLine === mode.value,
     }));
-    const picked = await pickFromList<StatusLineMode>(ctx, { title: "Guard statusline", items });
+    const picked = await pickFromList<StatusLineMode>(ctx, { title: "Rail statusline", items });
     if (!picked) return;
     config.statusLine = picked.value;
     try {
       updatePersistentStatusLine(picked.value);
-      show(ctx, `Guard statusline set to ${picked.value} and saved.`);
+      show(ctx, `Rail statusline set to ${picked.value} and saved.`);
     } catch (error) {
-      show(ctx, `Guard statusline set to ${picked.value} for this session, but saving failed: ${formatError(error)}`, "warning");
+      show(ctx, `Rail statusline set to ${picked.value} for this session, but saving failed: ${formatError(error)}`, "warning");
     }
   }
 
@@ -206,7 +206,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
       { value: "explain", label: "Explain last decision", searchText: "explain trace decision why last chain stages", description: "Show the decision chain the guard ran for the most recent tool call" },
     );
 
-    const picked = await pickFromList<PanelAction>(ctx, { title: "Pi Guard", headerLines: panelHeader(ctx), items });
+    const picked = await pickFromList<PanelAction>(ctx, { title: "Pi Rail", headerLines: panelHeader(ctx), items });
     if (!picked) return;
     switch (picked.value) {
       case "on":
@@ -214,7 +214,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
       case "off-turn":
         return disableTurn(ctx);
       case "off-session": {
-        const ok = await ctx.ui.confirm("Disable Pi Guard for this session?", "Bash and file-tool policy checks will run unguarded until Pi restarts.");
+        const ok = await ctx.ui.confirm("Disable Pi Rail for this session?", "Bash and file-tool policy checks will run unguarded until Pi restarts.");
         if (ok) return disableSession(ctx);
         return;
       }
@@ -225,7 +225,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
       case "statusline":
         return chooseStatusLine(ctx);
       case "smoke":
-        return deps.runGuardSmoke(ctx);
+        return deps.runRailSmoke(ctx);
       case "critique":
         return deps.runCritique("", ctx);
       case "status":
@@ -245,7 +245,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     try {
       await dispatch(args, ctx);
     } finally {
-      updateGuardStatus(ctx, state);
+      updateRailStatus(ctx, state);
     }
   }
 
@@ -274,8 +274,8 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     if (sub === "set") return dispositions.runSet(rest, ctx);
     if (sub === "guide") return runGuide(rest, ctx);
     if (sub === "explain") return showExplain(ctx, rest);
-    if (sub === "test") return runGuardTest(rest, ctx);
-    if (sub === "why" && !rest) return runGuardWhy(ctx);
+    if (sub === "test") return runRailTest(rest, ctx);
+    if (sub === "why" && !rest) return runRailWhy(ctx);
     if (sub === "on" || sub === "enable") return enable(ctx);
     if (sub === "off" || sub === "disable") {
       if (rest.toLowerCase() === "session") return disableSession(ctx);
@@ -283,7 +283,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     }
     if ((sub === "readonly" || sub === "ro") && !rest) return toggleReadOnly(ctx);
     if (sub === "model") return runModelCommand(rest, ctx, state);
-    if (sub === "smoke" && !rest) return deps.runGuardSmoke(ctx);
+    if (sub === "smoke" && !rest) return deps.runRailSmoke(ctx);
     if (sub === "critique") return deps.runCritique(rest, ctx);
 
     show(ctx, "Usage: /guard [status|policy [rules]|set <class> [disposition]|guide <text>|guide clear|explain [n]|test …|why|on|off|off session|readonly|model …|smoke|critique …]", "warning");

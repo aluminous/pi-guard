@@ -2,7 +2,7 @@ import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { Container, Editor, Input, matchesKey, Text, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import type { CapabilityId } from "../capabilities.ts";
 import { dispositionCell, type DispositionRow } from "../dispositions.ts";
-import { styleGuardLine } from "../status.ts";
+import { styleRailLine } from "../status.ts";
 import type { PanelTheme, PanelTui } from "./report-panel.ts";
 import type { Keybindings } from "./select-list.ts";
 
@@ -34,7 +34,7 @@ export interface DispositionPageParams {
   save(): void;
   /** One-line note about an active session preset, when there is one. */
   banner(): string | undefined;
-  /** formatGuardPolicy lines for the rules tab, re-read each refresh (never snapshotted). */
+  /** formatRailPolicy lines for the rules tab, re-read each refresh (never snapshotted). */
   policyLines(): string[];
   /** Adds a class at session scope; returns a validation error to keep the user in the form. */
   addClass(input: { id: string; definition: string }): string | undefined;
@@ -239,7 +239,7 @@ export class DispositionPage extends Container {
     ].join("");
   }
 
-  /** The read-only mechanism policy, scrolled like GuardReportPanel and re-read from formatGuardPolicy each refresh. */
+  /** The read-only mechanism policy, scrolled like RailReportPanel and re-read from formatRailPolicy each refresh. */
   private renderRules(): void {
     const theme = this.params.theme;
     const lines = this.params.policyLines();
@@ -247,7 +247,7 @@ export class DispositionPage extends Container {
     const maxScroll = Math.max(0, lines.length - maxVisible);
     if (this.scroll > maxScroll) this.scroll = maxScroll;
     for (const line of lines.slice(this.scroll, this.scroll + maxVisible)) {
-      this.body.addChild(new Text(styleGuardLine(line, theme), 0, 0));
+      this.body.addChild(new Text(styleRailLine(line, theme), 0, 0));
     }
     const footer: string[] = [];
     if (maxScroll > 0) footer.push(`${this.scroll + 1}-${Math.min(lines.length, this.scroll + maxVisible)}/${lines.length} · ↑↓ scroll`);

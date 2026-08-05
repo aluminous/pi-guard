@@ -27,7 +27,7 @@ export async function runModelCommand(args: string, ctx: ExtensionContext, state
   if (arg === "off") {
     state.classifier.enabledOverride = false;
     persist(ctx, { enabled: false });
-    show("Guard classifier disabled and saved.");
+    show("Rail classifier disabled and saved.");
     return;
   }
   if (arg === "auto") {
@@ -35,7 +35,7 @@ export async function runModelCommand(args: string, ctx: ExtensionContext, state
     state.classifier.modelOverride = "auto";
     persist(ctx, { enabled: true, model: "auto" });
     const resolved = resolveClassifierModel(ctx, config, state.classifier);
-    show(`Guard classifier enabled in auto mode and saved${resolved ? `; currently resolves to ${resolved.provider}/${resolved.id}` : "; no known-good model is available yet"}.`);
+    show(`Rail classifier enabled in auto mode and saved${resolved ? `; currently resolves to ${resolved.provider}/${resolved.id}` : "; no known-good model is available yet"}.`);
     return;
   }
   if (arg === "current") {
@@ -46,7 +46,7 @@ export async function runModelCommand(args: string, ctx: ExtensionContext, state
     state.classifier.enabledOverride = true;
     state.classifier.modelOverride = "current";
     persist(ctx, { enabled: true, model: "current" });
-    show(`Guard classifier enabled using current model and saved: ${ctx.model.provider}/${ctx.model.id}`);
+    show(`Rail classifier enabled using current model and saved: ${ctx.model.provider}/${ctx.model.id}`);
     return;
   }
   if (arg && arg !== "status") {
@@ -59,7 +59,7 @@ export async function runModelCommand(args: string, ctx: ExtensionContext, state
     state.classifier.enabledOverride = true;
     state.classifier.modelOverride = `${model.provider}/${model.id}`;
     persist(ctx, { enabled: true, model: state.classifier.modelOverride });
-    show(`Guard classifier enabled and saved using ${model.provider}/${model.id}`);
+    show(`Rail classifier enabled and saved using ${model.provider}/${model.id}`);
     return;
   }
 

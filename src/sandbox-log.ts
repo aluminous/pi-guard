@@ -7,7 +7,7 @@
 //
 // plus "N duplicate report for Sandbox: …" coalescing lines with the same tail.
 import { execFile } from "node:child_process";
-import type { ResolvedGuardConfig } from "./config.ts";
+import type { ResolvedRailConfig } from "./config.ts";
 import { compileFilesystemPolicy, findMatchingPattern, type CompiledFilesystemPolicy, type DegradedPattern } from "./policy.ts";
 
 /** Validated predicate: denial reports arrive from the kernel with sender "Sandbox". */
@@ -111,7 +111,7 @@ export function attributeDenial(compiled: CompiledFilesystemPolicy, cwd: string,
   return { denial };
 }
 
-export function attributeDenials(config: ResolvedGuardConfig, cwd: string, denials: SandboxDenial[]): DenialAttribution[] {
+export function attributeDenials(config: ResolvedRailConfig, cwd: string, denials: SandboxDenial[]): DenialAttribution[] {
   const compiled = compileFilesystemPolicy(config, cwd);
   return denials.map((denial) => attributeDenial(compiled, cwd, denial));
 }
@@ -123,13 +123,13 @@ function formatCommandAge(at: number): string {
   return minutes < 60 ? `${minutes}m ago` : `${Math.floor(minutes / 60)}h ago`;
 }
 
-export function formatGuardWhy(params: {
+export function formatRailWhy(params: {
   command: { command: string; startedAt: number; endedAt?: number };
   attributions: DenialAttribution[];
 }): string {
   const { command, attributions } = params;
   const lines = [
-    "# Guard Sandbox Denials",
+    "# Rail Sandbox Denials",
     "",
     `  last guarded command: ${command.command}`,
     `  started ${formatCommandAge(command.startedAt)}${command.endedAt !== undefined ? `, ran ${command.endedAt - command.startedAt}ms` : ", still running"}`,

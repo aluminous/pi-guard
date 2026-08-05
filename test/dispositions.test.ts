@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { recordCapabilityHits, recordCapabilityOutcome, type CapabilityId, type Disposition } from "../src/capabilities.ts";
-import { globalGuardConfigPath, mergeConfig, type ResolvedGuardConfig } from "../src/config.ts";
+import { globalRailConfigPath, mergeConfig, type ResolvedRailConfig } from "../src/config.ts";
 import {
   addClass,
   cycleDisposition,
@@ -69,13 +69,13 @@ function spyPersistence(rows: Array<[CapabilityId, Disposition | undefined]>) {
   return persistence;
 }
 
-function openPage(state: RuntimeState, config: ResolvedGuardConfig, initialTab?: DispositionTab) {
+function openPage(state: RuntimeState, config: ResolvedRailConfig, initialTab?: DispositionTab) {
   const persisted: Array<[CapabilityId, Disposition | undefined]> = [];
   const closes: undefined[] = [];
   const notes: Array<{ message: string; level?: string }> = [];
   // Long enough to scroll: the rules pane shows terminal.rows - 13 lines.
   const policy = [
-    "# Pi Guard Policy Rules",
+    "# Pi Rail Policy Rules",
     "## Filesystem",
     "  Allow write:",
     ...Array.from({ length: 40 }, (_, i) => `  • /repo/path-${i}`),
@@ -109,7 +109,7 @@ function type(page: DispositionPage, value: string): void {
 
 describe("disposition rows", () => {
   it("resolves value, persisted, and modified against the config", () => {
-    const config = mergeConfig(testConfig(), { dispositions: { "install-dependencies": "ask" } }, globalGuardConfigPath());
+    const config = mergeConfig(testConfig(), { dispositions: { "install-dependencies": "ask" } }, globalRailConfigPath());
     const state = createRuntimeState();
     const before = dispositionRows(config, state);
     assert.equal(before.length, 12);
@@ -169,7 +169,7 @@ describe("disposition rows", () => {
   });
 
   it("names where a row came from", () => {
-    const config = mergeConfig(testConfig(), { dispositions: { "install-dependencies": "ask" } }, globalGuardConfigPath());
+    const config = mergeConfig(testConfig(), { dispositions: { "install-dependencies": "ask" } }, globalRailConfigPath());
     const state = createRuntimeState();
     assert.equal(describeDispositionSource(dispositionRow(config, state, "read-project").effective), "built-in default");
     assert.equal(describeDispositionSource(dispositionRow(config, state, "install-dependencies").effective), "global config");
@@ -198,7 +198,7 @@ describe("saveDispositions", () => {
     assert.equal(row.value, "ask", "the effective value does not move on save");
     assert.equal(row.persisted, "ask");
     assert.equal(row.modified, false, "highlights clear once the value is persisted");
-    assert.equal(config.provenance.dispositions["modify-project"], globalGuardConfigPath());
+    assert.equal(config.provenance.dispositions["modify-project"], globalRailConfigPath());
   });
 
   it("reports rows a project config will win back", () => {
@@ -379,7 +379,7 @@ describe("saveDispositions with class changes", () => {
     const config = mergeConfig(
       testConfig(),
       { capabilities: { classes: [{ id: "legacy-class", definition: "On its way out." }] } },
-      globalGuardConfigPath(),
+      globalRailConfigPath(),
     );
     const state = createRuntimeState();
     addClass(config, state, { id: "touches-customer-data", definition: "Customer records." });
@@ -417,7 +417,7 @@ describe("saveDispositions with class changes", () => {
     const config = mergeConfig(
       testConfig(),
       { capabilities: { classes: [{ id: "touches-customer-data", definition: "Old wording." }] } },
-      globalGuardConfigPath(),
+      globalRailConfigPath(),
     );
     const state = createRuntimeState();
     editClassDefinition(config, state, "touches-customer-data", "New wording.");
@@ -438,7 +438,7 @@ describe("DispositionPage tabs", () => {
     assert.match(text(), /<muted>Tab:<\/muted> <accent>dispositions<\/accent><muted> \| <\/muted><muted>rules<\/muted>/);
   });
 
-  it("cycles tabs with tui.input.tab and renders formatGuardPolicy on the rules tab", () => {
+  it("cycles tabs with tui.input.tab and renders formatRailPolicy on the rules tab", () => {
     const { page, text } = openPage(createRuntimeState(), testConfig());
     assert.equal(page.activeTab(), "dispositions");
     assert.match(text(), /read-project/);
@@ -446,7 +446,7 @@ describe("DispositionPage tabs", () => {
     page.handleInput(TAB);
     assert.equal(page.activeTab(), "rules");
     const rules = text();
-    assert.match(rules, /Pi Guard Policy Rules/, "the rules tab shows the mechanism report");
+    assert.match(rules, /Pi Rail Policy Rules/, "the rules tab shows the mechanism report");
     assert.match(rules, /Filesystem/);
     assert.doesNotMatch(rules, /↑↓ row · ←→\/Enter cycle/, "the table's key hints are gone");
     assert.match(rules, /Tab switches view/);
@@ -458,7 +458,7 @@ describe("DispositionPage tabs", () => {
   it("opens directly on the rules tab when asked", () => {
     const { page, text } = openPage(createRuntimeState(), testConfig(), "rules");
     assert.equal(page.activeTab(), "rules");
-    assert.match(text(), /Pi Guard Policy Rules/);
+    assert.match(text(), /Pi Rail Policy Rules/);
   });
 
   it("scrolls the rules tab with up and down rather than moving a selection", () => {

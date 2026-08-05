@@ -133,13 +133,13 @@ test("pi TUI: guard startup, status/policy page and its tabs, no [guard] convers
 
     // Startup: init notification plus a statusline (statusLine defaults to "always").
     await waitFor(
-      (pane) => pane.includes("Guard initialized with seatbelt backend"),
+      (pane) => pane.includes("Rail initialized with seatbelt backend"),
       "guard init notification",
       STARTUP_TIMEOUT_MS,
     );
     await waitFor(
-      (pane) => pane.split("\n").some((line) => line.trim().startsWith("Guard: seatbelt")),
-      'statusline starting with "Guard: seatbelt"',
+      (pane) => pane.split("\n").some((line) => line.trim().startsWith("Rail: seatbelt")),
+      'statusline starting with "Rail: seatbelt"',
       UI_TIMEOUT_MS,
     );
 
@@ -196,13 +196,13 @@ test("pi TUI: guard startup, status/policy page and its tabs, no [guard] convers
     await submitCommand("/guard policy");
     await waitFor((pane) => pane.includes("Capability policy"), "policy page before tabbing", UI_TIMEOUT_MS);
     tmux("send-keys", "-t", TARGET, "Tab");
-    await waitFor((pane) => pane.includes("Pi Guard Policy Rules"), "rules tab content after Tab", UI_TIMEOUT_MS);
-    await closeOverlay("policy rules tab", "Pi Guard Policy Rules");
+    await waitFor((pane) => pane.includes("Pi Rail Policy Rules"), "rules tab content after Tab", UI_TIMEOUT_MS);
+    await closeOverlay("policy rules tab", "Pi Rail Policy Rules");
 
     // /guard policy rules opens the same page directly on that tab.
     await submitCommand("/guard policy rules");
-    await waitFor((pane) => pane.includes("Pi Guard Policy Rules"), "policy rules tab title", UI_TIMEOUT_MS);
-    await closeOverlay("policy rules", "Pi Guard Policy Rules");
+    await waitFor((pane) => pane.includes("Pi Rail Policy Rules"), "policy rules tab title", UI_TIMEOUT_MS);
+    await closeOverlay("policy rules", "Pi Rail Policy Rules");
 
     // Nothing above should have posted a [guard] report into the conversation.
     const scrollback = fullScrollback();

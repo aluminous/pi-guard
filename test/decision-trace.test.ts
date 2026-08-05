@@ -6,9 +6,9 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { after, describe, it } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { GuardBackend } from "../src/backends/types.ts";
+import type { RailBackend } from "../src/backends/types.ts";
 import type { CompleteFn } from "../src/classifier.ts";
-import { createGuardCommand } from "../src/commands/guard.ts";
+import { createRailCommand } from "../src/commands/rail.ts";
 import { formatDecisionTrace, TRACE_LIMIT, type DecisionTrace } from "../src/decision-trace.ts";
 import { interceptToolCall } from "../src/interceptor.ts";
 import { createRuntimeState, recordDecisionTrace, resetSessionState } from "../src/state.ts";
@@ -40,7 +40,7 @@ function fakeCtx(options?: { model?: { provider: string; id: string } }) {
   return ctx as unknown as ExtensionContext;
 }
 
-function guardedState(config: ReturnType<typeof testConfig>) {
+function railState(config: ReturnType<typeof testConfig>) {
   const state = createRuntimeState();
   state.config = config;
   state.enabled = true;
@@ -64,7 +64,7 @@ function fakeComplete(script: string[]): CompleteFn {
 
 describe("decision traces", () => {
   it("records a path-policy block with the matching deny pattern", async () => {
-    const state = guardedState(testConfig());
+    const state = railState(testConfig());
     const result = await interceptToolCall({ toolName: "write", input: { path: ".env", content: "SECRET=1" } }, fakeCtx(), state);
     assert.equal(result?.block, true);
     assert.equal(state.traces.length, 1);
@@ -78,7 +78,7 @@ describe("decision traces", () => {
 
   it("routes a denyRead read to the credentials label instead of blocking on the path", async () => {
     writeFileSync(path.join(cwd, ".env"), "SECRET=1");
-    const state = guardedState(testConfig());
+    const state = railState(testConfig());
     const result = await interceptToolCall({ toolName: "read", input: { path: ".env" } }, fakeCtx(), state);
     // Headless, so the judge-class ask still ends as a block — but via the table, not the path.
     assert.equal(result?.block, true);
@@ -95,7 +95,7 @@ describe("decision traces", () => {
   });
 
   it("records the exempt-read condition for an in-cwd read", async () => {
-    const state = guardedState(testConfig((c) => (c.classifier.enabled = true)));
+    const state = railState(testConfig((c) => (c.classifier.enabled = true)));
     const result = await interceptToolCall({ toolName: "read", input: { path: "src/app.ts" } }, fakeCtx(), state);
     assert.equal(result, undefined);
     const trace = state.traces[0]!;
@@ -109,8 +109,8 @@ describe("decision traces", () => {
   });
 
   it("records per-segment rule matches for an allowlisted command", async () => {
-    const state = guardedState(testConfig((c) => (c.classifier.enabled = true)));
-    state.backend = { name: "seatbelt" } as GuardBackend;
+    const state = railState(testConfig((c) => (c.classifier.enabled = true)));
+    state.backend = { name: "seatbelt" } as RailBackend;
     const result = await interceptToolCall({ toolName: "bash", input: { command: "grep foo src || git status" } }, fakeCtx(), state);
     assert.equal(result, undefined);
     const trace = state.traces[0]!;
@@ -125,8 +125,8 @@ describe("decision traces", () => {
   });
 
   it("records the allowlist refusal reason for a non-allowlisted segment", async () => {
-    const state = guardedState(testConfig());
-    state.backend = { name: "seatbelt" } as GuardBackend;
+    const state = railState(testConfig());
+    state.backend = { name: "seatbelt" } as RailBackend;
     state.classifier.enabledOverride = true;
     const result = await interceptToolCall({ toolName: "bash", input: { command: "grep a; curl example.com" } }, fakeCtx(), state);
     assert.equal(result?.block, true, "classifier is unavailable here, so the call blocks");
@@ -140,7 +140,7 @@ describe("decision traces", () => {
       c.classifier.enabled = true;
       c.classifier.model = "test/fake-model";
     });
-    const state = guardedState(config);
+    const state = railState(config);
     const complete = fakeComplete(['{"labels":["run-dev-tools"]}']);
     const result = await interceptToolCall(
       { toolName: "bash", input: { command: "npm run build" } },
@@ -167,7 +167,7 @@ describe("decision traces", () => {
       c.classifier.model = "test/fake-model";
       c.classifier.judgeModel = "test/fake-model";
     });
-    const state = guardedState(config);
+    const state = railState(config);
     const complete = fakeComplete([
       '{"labels":["local-destructive"]}',
       '{"decision":"deny","reason":"removes untracked work with no recovery path"}',
@@ -179,7 +179,7 @@ describe("decision traces", () => {
       complete,
     );
     assert.equal(result?.block, true);
-    assert.match(result.reason, /Guard judge denied/);
+    assert.match(result.reason, /Rail judge denied/);
     const trace = state.traces[0]!;
     assert.deepEqual(
       trace.stages.map((s) => s.stage),
@@ -191,7 +191,7 @@ describe("decision traces", () => {
   });
 
   it("keeps traces newest first, caps at TRACE_LIMIT, and resets per session", async () => {
-    const state = guardedState(testConfig());
+    const state = railState(testConfig());
     for (let i = 0; i < TRACE_LIMIT + 5; i++) {
       const trace: DecisionTrace = { at: i, toolName: "read", action: `read: ${i}`, final: "allowed", stages: [] };
       recordDecisionTrace(state, trace);
@@ -206,11 +206,11 @@ describe("decision traces", () => {
 describe("/guard explain", () => {
   function makeCommand() {
     const state = createRuntimeState();
-    const command = createGuardCommand({
+    const command = createRailCommand({
       state,
-      enableGuard: async () => {},
-      disableGuard: async () => {},
-      runGuardSmoke: async () => {},
+      enableRail: async () => {},
+      disableRail: async () => {},
+      runRailSmoke: async () => {},
       runCritique: async () => {},
     });
     const widgets: Array<{ key: string; lines: string[] | undefined }> = [];

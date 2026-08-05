@@ -10,7 +10,7 @@
  * boundaries ("X, but Y is class Z instead"), not as marketing copy. Edit them
  * as you would edit a prompt.
  */
-import type { ResolvedGuardConfig } from "./config.ts";
+import type { ResolvedRailConfig } from "./config.ts";
 
 export const BUILTIN_CAPABILITY_IDS = [
   "read-project",
@@ -361,7 +361,7 @@ export interface EffectiveDisposition {
  * the id is in no layer at all — a label naming a class that was just deleted.
  */
 function classDefault(
-  config: ResolvedGuardConfig | undefined,
+  config: ResolvedRailConfig | undefined,
   state: CapabilityState | undefined,
   id: CapabilityId,
 ): { disposition: Disposition; known: boolean } {
@@ -376,7 +376,7 @@ function classDefault(
 }
 
 export function getEffectiveDisposition(
-  config: ResolvedGuardConfig | undefined,
+  config: ResolvedRailConfig | undefined,
   state: CapabilityState | undefined,
   id: CapabilityId,
 ): EffectiveDisposition {
@@ -412,7 +412,7 @@ export interface CapabilityResolution {
 
 /** Severity-max resolution across an action's labels. An empty label set resolves as `unclassified`. */
 export function resolveCapabilities(
-  config: ResolvedGuardConfig | undefined,
+  config: ResolvedRailConfig | undefined,
   state: CapabilityState | undefined,
   labels: CapabilityId[],
 ): CapabilityResolution {

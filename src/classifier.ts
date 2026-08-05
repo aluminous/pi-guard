@@ -7,7 +7,7 @@ import {
   type CapabilityId,
   type CapabilityState,
 } from "./capabilities.ts";
-import type { ResolvedGuardConfig } from "./config.ts";
+import type { ResolvedRailConfig } from "./config.ts";
 import {
   buildJudgeText,
   buildNamerText,
@@ -22,7 +22,7 @@ import {
   projectToolCall,
   retryFailureKind,
   type ClassifierTokenUsage,
-  type GuardDecision,
+  type RailDecision,
   type JudgeResult,
   type NamerResult,
 } from "./classifier-protocol.ts";
@@ -33,25 +33,25 @@ import { formatError, textPrefix } from "./util.ts";
 export {
   isClassifierModelUnavailable,
   projectToolCall,
-  type GuardDecision,
+  type RailDecision,
   type JudgeResult,
   type NamerResult,
   type ReviewProjection,
 } from "./classifier-protocol.ts";
 
 /** The last resolved decision, for the status panel. */
-export interface LastGuardDecision {
+export interface LastRailDecision {
   toolName: string;
   at: number;
   labels: CapabilityId[];
-  decision: GuardDecision;
+  decision: RailDecision;
   reason: string;
 }
 
 export interface ClassifierState {
   enabledOverride?: boolean;
   modelOverride?: string;
-  lastDecision?: LastGuardDecision;
+  lastDecision?: LastRailDecision;
   lastError?: string;
   /**
    * Session-scoped, user-authored guidance collected from allow/deny-with-
@@ -119,7 +119,7 @@ function currentModel(ctx: ExtensionContext): Model<Api> | undefined {
   return ctx.model;
 }
 
-export function resolveClassifierModel(ctx: ExtensionContext, config: ResolvedGuardConfig, state: ClassifierState): Model<Api> | undefined {
+export function resolveClassifierModel(ctx: ExtensionContext, config: ResolvedRailConfig, state: ClassifierState): Model<Api> | undefined {
   return resolveModelSpec(ctx, state.modelOverride ?? config.classifier.model);
 }
 
@@ -128,7 +128,7 @@ export function resolveClassifierModel(ctx: ExtensionContext, config: ResolvedGu
  * "current" — the session's own (strong) model — rather than the cheap namer
  * model. Same spec grammar as classifier.model.
  */
-export function resolveJudgeModel(ctx: ExtensionContext, config: ResolvedGuardConfig): Model<Api> | undefined {
+export function resolveJudgeModel(ctx: ExtensionContext, config: ResolvedRailConfig): Model<Api> | undefined {
   return resolveModelSpec(ctx, config.classifier.judgeModel);
 }
 
@@ -257,12 +257,12 @@ async function completeText(params: {
     params.budget.attempts++;
     const attempt = params.budget.attempts;
     try {
-      if (attempt > 1) params.io.notify(`Guard classifier retry ${attempt}/${params.budget.maxAttempts}...`, "warning");
+      if (attempt > 1) params.io.notify(`Rail classifier retry ${attempt}/${params.budget.maxAttempts}...`, "warning");
       return await completeTextOnce(params);
     } catch (error) {
       if (error instanceof ClassifierModelUnavailableError || !isRetryableClassifierError(error) || params.budget.attempts >= params.budget.maxAttempts) throw error;
       const delayMs = 250 * 2 ** (attempt - 1);
-      params.io.notify(`Guard classifier attempt ${attempt}/${params.budget.maxAttempts} failed (${retryFailureKind(error)}): ${formatError(error)}. Retrying in ${delayMs}ms.`, "warning");
+      params.io.notify(`Rail classifier attempt ${attempt}/${params.budget.maxAttempts} failed (${retryFailureKind(error)}): ${formatError(error)}. Retrying in ${delayMs}ms.`, "warning");
       await params.io.sleep(delayMs, params.io.signal);
     }
   }
@@ -284,7 +284,7 @@ function addUsage(total: ClassifierTokenUsage, part: ClassifierTokenUsage | unde
 export async function runNaming(params: {
   io: ClassifierIO;
   model: Model<Api>;
-  config: ResolvedGuardConfig;
+  config: ResolvedRailConfig;
   toolName: string;
   input: unknown;
   sessionGuidance?: string[];
@@ -312,7 +312,7 @@ export async function runNaming(params: {
 export async function runJudging(params: {
   io: ClassifierIO;
   model: Model<Api>;
-  config: ResolvedGuardConfig;
+  config: ResolvedRailConfig;
   toolName: string;
   input: unknown;
   labels: CapabilityId[];
@@ -346,7 +346,7 @@ export async function runJudging(params: {
 
 export async function nameToolCall(params: {
   ctx: ExtensionContext;
-  config: ResolvedGuardConfig;
+  config: ResolvedRailConfig;
   state: ClassifierState;
   toolName: string;
   input: unknown;
@@ -368,7 +368,7 @@ export async function nameToolCall(params: {
 
 export async function judgeToolCall(params: {
   ctx: ExtensionContext;
-  config: ResolvedGuardConfig;
+  config: ResolvedRailConfig;
   state: ClassifierState;
   toolName: string;
   input: unknown;
@@ -395,7 +395,7 @@ export async function judgeToolCall(params: {
 }
 
 /** What /guard critique reviews: the prompts, the class definitions, the table, and the screen's coverage. */
-export function buildCapabilityPromptForCritique(config: ResolvedGuardConfig, capabilities: CapabilityState | undefined): string {
+export function buildCapabilityPromptForCritique(config: ResolvedRailConfig, capabilities: CapabilityState | undefined): string {
   const table = capabilityRegistry(config, capabilities).map((entry) => {
     const effective = getEffectiveDisposition(config, capabilities, entry.id);
     return `- ${entry.id}: ${effective.disposition} (${effective.scope})\n  ${entry.definition}`;
@@ -416,7 +416,7 @@ export function buildCapabilityPromptForCritique(config: ResolvedGuardConfig, ca
   ].join("\n");
 }
 
-export function classifierEnabled(config: ResolvedGuardConfig | undefined, state: ClassifierState): boolean {
+export function classifierEnabled(config: ResolvedRailConfig | undefined, state: ClassifierState): boolean {
   if (!config) return false;
   return state.enabledOverride ?? config.classifier.enabled;
 }

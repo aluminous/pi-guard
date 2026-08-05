@@ -23,7 +23,7 @@ export const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";
 /** Child event bus channel pi-subagents collects extension acknowledgements on. */
 export const SUBAGENT_ACK_EVENT = "subagent:acknowledge-extension";
 /** Id acknowledged with; the parent-side check also accepts an "@version" suffix. */
-export const GUARD_ACK_ID = "pi-extension-guard";
+export const RAIL_ACK_ID = "pi-extension-guard";
 
 /** pi-subagents tools whose results carry per-child acknowledgement data. */
 const SUBAGENT_RESULT_TOOLS = new Set(["subagent", "subagent_wait"]);
@@ -35,11 +35,11 @@ const SUBAGENT_RESULT_TOOLS = new Set(["subagent", "subagent_wait"]);
  * acknowledgement means "bash here is guarded", not merely "the extension
  * loaded", so the parent-side warning fires for those children too.
  */
-export function acknowledgeGuardInSubagentChild(pi: ExtensionAPI, state: RuntimeState, env: NodeJS.ProcessEnv = process.env): boolean {
+export function acknowledgeRailInSubagentChild(pi: ExtensionAPI, state: RuntimeState, env: NodeJS.ProcessEnv = process.env): boolean {
   if (env[SUBAGENT_CHILD_ENV] !== "1") return false;
   if (!state.enabled || !state.initialized) return false;
   try {
-    pi.events.emit(SUBAGENT_ACK_EVENT, { id: GUARD_ACK_ID });
+    pi.events.emit(SUBAGENT_ACK_EVENT, { id: RAIL_ACK_ID });
     return true;
   } catch {
     return false;
@@ -58,10 +58,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function hasGuardAck(entry: Record<string, unknown>): boolean {
+function hasRailAck(entry: Record<string, unknown>): boolean {
   const ack = entry.runtimeAcknowledgedExtensions;
   if (!isRecord(ack) || !Array.isArray(ack.ids)) return false;
-  return ack.ids.some((id) => id === GUARD_ACK_ID || (typeof id === "string" && id.startsWith(`${GUARD_ACK_ID}@`)));
+  return ack.ids.some((id) => id === RAIL_ACK_ID || (typeof id === "string" && id.startsWith(`${RAIL_ACK_ID}@`)));
 }
 
 /**
@@ -78,7 +78,7 @@ export function findUnacknowledgedSubagents(toolName: string, details: unknown):
     if (entry.detached === true) continue;
     if (isRecord(entry.progress) && entry.progress.status === "running") continue;
     if (entry.exitCode === undefined && entry.error === undefined) continue;
-    if (hasGuardAck(entry)) continue;
+    if (hasRailAck(entry)) continue;
     const launch = entry.launchResolvedExtensions;
     const sessionFile = typeof entry.sessionFile === "string" ? entry.sessionFile : undefined;
     const transcriptPath = typeof entry.transcriptPath === "string" ? entry.transcriptPath : undefined;
@@ -122,5 +122,5 @@ export function warnUnacknowledgedSubagents(event: { toolName: string; details?:
   const parts: string[] = [];
   if (restricted.length > 0) parts.push(`${agentList(restricted)} (launched with ambient extensions disabled, e.g. agent 'extensions:' frontmatter or subagents.defaultExtensions)`);
   if (other.length > 0) parts.push(`${agentList(other)} (guard not loaded or not enforcing there — disabled config, an external runner, or an older pi-subagents)`);
-  ctx.ui.notify(`Pi Guard was not active in finished subagent children: ${parts.join("; ")}. Their bash and file actions ran unguarded.`, "warning");
+  ctx.ui.notify(`Pi Rail was not active in finished subagent children: ${parts.join("; ")}. Their bash and file actions ran unguarded.`, "warning");
 }

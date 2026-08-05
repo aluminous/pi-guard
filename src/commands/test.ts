@@ -8,16 +8,16 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { capabilityName, resolveCapabilities, type CapabilityId, type CapabilityResolution } from "../capabilities.ts";
 import { classifierEnabled, judgeToolCall, nameToolCall, resolveClassifierModel, resolveJudgeModel, type CompleteFn, type NamerResult } from "../classifier.ts";
 import { allowlistCapabilities, explainCommandAllowlist } from "../command-allowlist.ts";
-import { configSourceLabel, loadConfig, type ResolvedGuardConfig } from "../config.ts";
+import { configSourceLabel, loadConfig, type ResolvedRailConfig } from "../config.ts";
 import { screenToolCall } from "../content-screen.ts";
-import { GUARDED_TOOLS } from "../guarded-tools.ts";
+import { INTERCEPTED_TOOLS } from "../intercepted-tools.ts";
 import { exemptReadCallReason } from "../interceptor.ts";
-import { showGuardView } from "../live-view.ts";
+import { showRailView } from "../live-view.ts";
 import { decidePathAccess, denyReadMatch, type AccessKind } from "../policy.ts";
 import { syncCapabilityPreset, type RuntimeState } from "../state.ts";
 import { formatError } from "../util.ts";
 
-export interface GuardTestDeps {
+export interface RailTestDeps {
   state: RuntimeState;
   /** Test seam for the namer/judge calls (production uses the default model-call function). */
   completeFn?: CompleteFn;
@@ -52,17 +52,17 @@ function scopeLabel(entry: CapabilityResolution["effective"][number]): string {
   return entry.scope;
 }
 
-export function createGuardTest(deps: GuardTestDeps) {
+export function createRailTest(deps: RailTestDeps) {
   const { state } = deps;
 
   /** Runs the namer for real when the deterministic mappers could not label the action. */
-  async function namerLines(ctx: ExtensionContext, config: ResolvedGuardConfig, plan: NamingPlan): Promise<{ lines: string[]; named?: NamerResult; failed?: boolean }> {
+  async function namerLines(ctx: ExtensionContext, config: ResolvedRailConfig, plan: NamingPlan): Promise<{ lines: string[]; named?: NamerResult; failed?: boolean }> {
     // The deterministic reason is the more useful one when both apply.
     if (plan.skip) return { lines: [`  namer: ${plan.skip}`] };
     if (!classifierEnabled(config, state.classifier)) return { lines: ["  namer: classifier disabled — would not run"] };
     const model = resolveClassifierModel(ctx, config, state.classifier);
     const modelLabel = model ? `${model.provider}/${model.id}` : `unavailable (${state.classifier.modelOverride ?? config.classifier.model})`;
-    ctx.ui.notify(`Guard test: running a real capability naming call (${modelLabel})...`, "info");
+    ctx.ui.notify(`Rail test: running a real capability naming call (${modelLabel})...`, "info");
     try {
       const named = await nameToolCall({ ctx, config, state: state.classifier, toolName: plan.toolName, input: plan.input, completeFn: deps.completeFn });
       const usage = named.tokenUsage;
@@ -88,7 +88,7 @@ export function createGuardTest(deps: GuardTestDeps) {
 
   async function tableLines(
     ctx: ExtensionContext,
-    config: ResolvedGuardConfig,
+    config: ResolvedRailConfig,
     labels: CapabilityId[],
     named: NamerResult | undefined,
     plan: NamingPlan,
@@ -109,7 +109,7 @@ export function createGuardTest(deps: GuardTestDeps) {
     }
     const model = resolveJudgeModel(ctx, config);
     const modelLabel = model ? `${model.provider}/${model.id}` : `unavailable (${config.classifier.judgeModel})`;
-    ctx.ui.notify(`Guard test: running a real judge review (${modelLabel})...`, "info");
+    ctx.ui.notify(`Rail test: running a real judge review (${modelLabel})...`, "info");
     try {
       const judge = await judgeToolCall({
         ctx,
@@ -136,7 +136,7 @@ export function createGuardTest(deps: GuardTestDeps) {
     }
   }
 
-  async function testFileOp(ctx: ExtensionContext, config: ResolvedGuardConfig, kind: "read" | "write", target: string): Promise<string[]> {
+  async function testFileOp(ctx: ExtensionContext, config: ResolvedRailConfig, kind: "read" | "write", target: string): Promise<string[]> {
     const lines: string[] = [];
     let verdict = "would allow";
     let blocked = false;
@@ -182,7 +182,7 @@ export function createGuardTest(deps: GuardTestDeps) {
       plan.skip = "not reached — the call is blocked deterministically";
     } else if (kind === "read") {
       const denied = denyReadMatch(config, ctx.cwd, target);
-      const exemption = exemptReadCallReason(GUARDED_TOOLS.read!, { path: target }, ctx.cwd, config, undefined);
+      const exemption = exemptReadCallReason(INTERCEPTED_TOOLS.read!, { path: target }, ctx.cwd, config, undefined);
       lines.push("## Read exemption");
       if (denied) {
         lines.push(`  [ASK] matches denyRead '${denied}' → credentials`);
@@ -220,7 +220,7 @@ export function createGuardTest(deps: GuardTestDeps) {
     return [`  verdict: ${verdict}`, ...lines];
   }
 
-  async function testCommand(ctx: ExtensionContext, config: ResolvedGuardConfig, command: string): Promise<string[]> {
+  async function testCommand(ctx: ExtensionContext, config: ResolvedRailConfig, command: string): Promise<string[]> {
     const lines: string[] = [];
     const explanation = explainCommandAllowlist(command, config.commands.allow);
     const enforcing = config.filesystem.enabled && state.initialized && state.backend?.name === "seatbelt";
@@ -277,7 +277,7 @@ export function createGuardTest(deps: GuardTestDeps) {
     return [`  verdict: ${verdict}`, ...lines];
   }
 
-  return async function runGuardTest(args: string, ctx: ExtensionContext): Promise<void> {
+  return async function runRailTest(args: string, ctx: ExtensionContext): Promise<void> {
     const subject = parseSubject(args);
     if (!subject) {
       const message = "Usage: /guard test <shell command> | test read <path> | test write <path>";
@@ -292,7 +292,7 @@ export function createGuardTest(deps: GuardTestDeps) {
       subject.kind === "command"
         ? await testCommand(ctx, config, subject.command)
         : await testFileOp(ctx, config, subject.kind, subject.path);
-    const report = ["# Guard Test (dry run — nothing executed)", "", `  ${subjectLabel}`, ...body.slice(0, 1), "", ...body.slice(1)];
-    showGuardView(ctx, state, "report", () => report);
+    const report = ["# Rail Test (dry run — nothing executed)", "", `  ${subjectLabel}`, ...body.slice(0, 1), "", ...body.slice(1)];
+    showRailView(ctx, state, "report", () => report);
   };
 }

@@ -1,8 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RuntimeState } from "./state.ts";
-import { GuardApprovalDialog, type GuardApprovalAnswer } from "./tui/approval-dialog.ts";
+import { RailApprovalDialog, type RailApprovalAnswer } from "./tui/approval-dialog.ts";
 
-export type { GuardApprovalAnswer } from "./tui/approval-dialog.ts";
+export type { RailApprovalAnswer } from "./tui/approval-dialog.ts";
 
 const OPTION_LABELS = ["Allow", "Allow with comment", "Deny", "Deny with comment"] as const;
 
@@ -13,13 +13,13 @@ const OPTION_LABELS = ["Allow", "Allow with comment", "Deny", "Deny with comment
  * the driving client answers via the extension-UI sub-protocol. Callers must
  * check ctx.hasUI first — without a UI this resolves to a plain deny.
  */
-export async function askGuardApproval(ctx: ExtensionContext, state: RuntimeState, title: string, message: string): Promise<GuardApprovalAnswer> {
+export async function askRailApproval(ctx: ExtensionContext, state: RuntimeState, title: string, message: string): Promise<RailApprovalAnswer> {
   if (ctx.mode === "tui" && ctx.hasUI) {
     // The status/policy panel and this dialog share the editor area; close the
     // panel first so the two non-overlay customs never fight over it.
     state.liveView?.close();
-    const answer = await ctx.ui.custom<GuardApprovalAnswer | undefined>(
-      (_tui, theme, keybindings, done) => new GuardApprovalDialog({ title, message, theme, keybindings, done }),
+    const answer = await ctx.ui.custom<RailApprovalAnswer | undefined>(
+      (_tui, theme, keybindings, done) => new RailApprovalDialog({ title, message, theme, keybindings, done }),
     );
     return answer ?? { approved: false };
   }

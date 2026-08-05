@@ -32,10 +32,10 @@ interface ReportPanelParams {
  * docked in the editor area like pi's model chooser (non-overlay custom UI):
  * DynamicBorder rules top and bottom to match the native dialog style. The
  * agent keeps streaming above it; content refreshes live via refresh()
- * (updateGuardStatus plus a 1s timer for age labels). Esc closes; arrows and
+ * (updateRailStatus plus a 1s timer for age labels). Esc closes; arrows and
  * page keys scroll.
  */
-export class GuardReportPanel extends Container {
+export class RailReportPanel extends Container {
   /** Focusable: set by the TUI when focus changes. */
   focused = false;
 

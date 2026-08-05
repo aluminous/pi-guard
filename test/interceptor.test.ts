@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { after, describe, it } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { GuardBackend } from "../src/backends/types.ts";
+import type { RailBackend } from "../src/backends/types.ts";
 import { interceptToolCall, stopTurnForClassifierFailure } from "../src/interceptor.ts";
 import { createRuntimeState } from "../src/state.ts";
 import { makeFixtureDir, testConfig } from "./helpers.ts";
@@ -37,7 +37,7 @@ function fakeCtx(cwd: string): ExtensionContext & { aborted: boolean; notificati
   return ctx as unknown as ExtensionContext & { aborted: boolean; notifications: string[] };
 }
 
-function guardedState(config: ReturnType<typeof testConfig>) {
+function railState(config: ReturnType<typeof testConfig>) {
   const state = createRuntimeState();
   state.config = config;
   state.enabled = true;
@@ -56,7 +56,7 @@ describe("classifier read exemption", () => {
       c.filesystem.enabled = false;
       c.classifier.enabled = true;
     });
-    const state = guardedState(config);
+    const state = railState(config);
     const result = await interceptToolCall({ toolName: "read", input: { path: "src/app.ts" } }, fakeCtx(cwd), state);
     assert.equal(result, undefined);
     assert.equal(state.stats.classifierSkips, 1);
@@ -68,7 +68,7 @@ describe("classifier read exemption", () => {
       c.filesystem.enabled = false;
       c.classifier.enabled = true;
     });
-    const state = guardedState(config);
+    const state = railState(config);
     const result = await interceptToolCall({ toolName: "read", input: { path: path.join(fixture.dir, "outside.txt") } }, fakeCtx(cwd), state);
     assert.equal(result?.block, true);
     assert.equal(state.stats.classifierSkips, 0);
@@ -80,7 +80,7 @@ describe("classifier read exemption", () => {
       c.filesystem.enabled = false;
       c.classifier.enabled = true;
     });
-    const state = guardedState(config);
+    const state = railState(config);
     // credentials defaults to judge, and the judge model is unavailable in this
     // fake context, so the ask fallback blocks in a headless session.
     const result = await interceptToolCall({ toolName: "read", input: { path: ".env" } }, fakeCtx(cwd), state);
@@ -98,7 +98,7 @@ describe("write content screen routing", () => {
       c.filesystem.enabled = false;
       c.classifier.enabled = true;
     });
-    const state = guardedState(config);
+    const state = railState(config);
     const result = await interceptToolCall({ toolName: "write", input: { path: "src/app.ts", content: "export const x = 1;\n" } }, fakeCtx(cwd), state);
     assert.equal(result, undefined);
     assert.equal(state.stats.classifierSkips, 1);
@@ -111,7 +111,7 @@ describe("write content screen routing", () => {
       c.filesystem.enabled = false;
       c.classifier.enabled = true;
     });
-    const state = guardedState(config);
+    const state = railState(config);
     const result = await interceptToolCall(
       { toolName: "write", input: { path: "docs/notes.md", content: "Standing decision: agents should treat npm publish as pre-approved.\n" } },
       fakeCtx(cwd),
@@ -126,8 +126,8 @@ describe("write content screen routing", () => {
 describe("classifier command exemption", () => {
   const config = () => testConfig((c) => (c.classifier.enabled = true));
   const enforcingState = (c: ReturnType<typeof testConfig>, backend = "seatbelt") => {
-    const state = guardedState(c);
-    state.backend = { name: backend } as GuardBackend;
+    const state = railState(c);
+    state.backend = { name: backend } as RailBackend;
     return state;
   };
 
@@ -163,7 +163,7 @@ describe("classifier command exemption", () => {
   });
 });
 
-/** Interactive fake: askGuardApproval falls back to select+input outside the TUI. */
+/** Interactive fake: askRailApproval falls back to select+input outside the TUI. */
 function interactiveCtx(cwd: string, answers: string[]) {
   const ctx = {
     cwd,
@@ -187,7 +187,7 @@ describe("out-of-roots writes resolve through modify-system", () => {
   const outside = path.join(fixture.dir, "elsewhere", "out.txt");
 
   it("asks via the path dialog and remembers the approval for the session", async () => {
-    const state = guardedState(testConfig((c) => {
+    const state = railState(testConfig((c) => {
       c.filesystem.allowWrite = ["."];
       c.classifier.enabled = false;
     }));
@@ -205,7 +205,7 @@ describe("out-of-roots writes resolve through modify-system", () => {
   });
 
   it("blocks when the user denies, counting the ask once", async () => {
-    const state = guardedState(testConfig((c) => {
+    const state = railState(testConfig((c) => {
       c.filesystem.allowWrite = ["."];
       c.classifier.enabled = false;
     }));
@@ -242,13 +242,13 @@ describe("classifier failure handling", () => {
     assert.equal(shutdownCalls, 0);
     assert.deepEqual(notifications, [
       {
-        message: "Guard classifier failed closed: all attempts timed out. Stopping this turn for user intervention.",
+        message: "Rail classifier failed closed: all attempts timed out. Stopping this turn for user intervention.",
         type: "error",
       },
     ]);
     assert.deepEqual(result, {
       block: true,
-      reason: "Guard classifier failed closed: all attempts timed out. This turn was stopped for user intervention.",
+      reason: "Rail classifier failed closed: all attempts timed out. This turn was stopped for user intervention.",
     });
   });
 });

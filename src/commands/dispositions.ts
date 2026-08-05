@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DISPOSITIONS, capabilityRegistry, isDisposition, type CapabilityId, type Disposition } from "../capabilities.ts";
-import { loadConfig, type ResolvedGuardConfig } from "../config.ts";
+import { loadConfig, type ResolvedRailConfig } from "../config.ts";
 import {
   DEFAULT_DISPOSITION_PERSISTENCE,
   addClass,
@@ -20,7 +20,7 @@ import {
   type SaveResult,
 } from "../dispositions.ts";
 import type { RuntimeState } from "../state.ts";
-import { toggleGuardPanel } from "../live-view.ts";
+import { toggleRailPanel } from "../live-view.ts";
 import { DispositionPage, type DispositionTab } from "../tui/disposition-page.ts";
 import { pickFromList, type SelectItem } from "../tui/select-list.ts";
 import { formatError } from "../util.ts";
@@ -30,7 +30,7 @@ export interface DispositionCommandDeps {
   /** Persist boundary; injectable so tests never touch the real config file. */
   persist?: Partial<DispositionPersistence>;
   notify(ctx: ExtensionContext, message: string, level?: "info" | "warning" | "error"): void;
-  /** Lines for the read-only rules tab; the guard command supplies formatGuardPolicy. */
+  /** Lines for the read-only rules tab; the guard command supplies formatRailPolicy. */
   policyLines?(ctx: ExtensionContext): string[];
 }
 
@@ -84,7 +84,7 @@ export function createDispositionCommands(deps: DispositionCommandDeps) {
     // The page outlives this call, so it reads state.config each refresh (a new
     // session reloads it) and falls back to what we resolved here.
     const current = () => state.config ?? resolved;
-    const opened = toggleGuardPanel(ctx, state, "policy", (host) => {
+    const opened = toggleRailPanel(ctx, state, "policy", (host) => {
       const page = new DispositionPage({
         ...host,
         initialTab: tab,
@@ -122,7 +122,7 @@ export function createDispositionCommands(deps: DispositionCommandDeps) {
    * session scope and the class list comes back so several rows can be edited
    * in a row. "Save persistently" is the Ctrl+S equivalent; cancel exits.
    */
-  async function runSelectFlow(ctx: ExtensionContext, resolved: ResolvedGuardConfig): Promise<void> {
+  async function runSelectFlow(ctx: ExtensionContext, resolved: ResolvedRailConfig): Promise<void> {
     for (;;) {
       const rows = dispositionRows(resolved, state);
       const banner = presetBanner(state);
@@ -163,7 +163,7 @@ export function createDispositionCommands(deps: DispositionCommandDeps) {
   }
 
   /** Prompts for id then definition; validation failures report and drop back to the list. */
-  async function runAddClass(ctx: ExtensionContext, resolved: ResolvedGuardConfig): Promise<void> {
+  async function runAddClass(ctx: ExtensionContext, resolved: ResolvedRailConfig): Promise<void> {
     const id = await ctx.ui.input("New capability class id (kebab-case, e.g. touches-customer-data)");
     if (!id?.trim()) return;
     const definition = await ctx.ui.input(`Definition for ${id.trim()} — prompt text the namer reads verbatim`);
@@ -177,7 +177,7 @@ export function createDispositionCommands(deps: DispositionCommandDeps) {
   }
 
   /** Disposition choices for one class, plus the definition edit and (for custom classes) deletion. */
-  async function runClassMenu(ctx: ExtensionContext, resolved: ResolvedGuardConfig, id: CapabilityId): Promise<void> {
+  async function runClassMenu(ctx: ExtensionContext, resolved: ResolvedRailConfig, id: CapabilityId): Promise<void> {
     const row = dispositionRow(resolved, state, id);
     const items: SelectItem<Disposition | "edit" | "delete">[] = DISPOSITIONS.map((disposition) => ({
       value: disposition,

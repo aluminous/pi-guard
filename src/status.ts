@@ -3,12 +3,12 @@ import { Text } from "@earendil-works/pi-tui";
 import type { EffectivePolicy } from "./backends/types.ts";
 import { capabilityRegistry, usedCapabilityStats } from "./capabilities.ts";
 import { classifierEnabled, resolveClassifierModel } from "./classifier.ts";
-import { configSourceLabel, type ProvenanceListKey, type ResolvedGuardConfig, type StatusLineMode } from "./config.ts";
+import { configSourceLabel, type ProvenanceListKey, type ResolvedRailConfig, type StatusLineMode } from "./config.ts";
 import { getPersistentConfigPath } from "./persistent-settings.ts";
 import { resolveConfigPath } from "./policy.ts";
-import type { GuardEvent, GuardStats, RuntimeState } from "./state.ts";
+import type { RailEvent, RailStats, RuntimeState } from "./state.ts";
 
-function decisionLabel(decision: GuardEvent["decision"]): string {
+function decisionLabel(decision: RailEvent["decision"]): string {
   if (decision === "allow") return "ALLOW";
   if (decision === "deny") return "DENY";
   if (decision === "block") return "BLOCK";
@@ -42,7 +42,7 @@ function formatCompactTokens(tokens: number): string {
  * cache activity at all it reads "cache activity not reported", and before
  * any review the parenthetical is omitted.
  */
-function formatTokensWithCache(stats: GuardStats): string {
+function formatTokensWithCache(stats: RailStats): string {
   const totalPrompt = stats.classifierInputTokens + stats.classifierCacheReadTokens + stats.classifierCacheWriteTokens;
   const cachePart =
     stats.classifierCacheReadTokens > 0
@@ -76,13 +76,13 @@ function sandboxFidelityLines(effective: EffectivePolicy | undefined, max: numbe
   ];
 }
 
-export function networkPolicyLabel(config: ResolvedGuardConfig): string {
+export function networkPolicyLabel(config: ResolvedRailConfig): string {
   if (!config.network.enabled) return "network unrestricted";
   return config.network.allowedDomains.length > 0 ? `${config.network.allowedDomains.length} domains` : "network blocked";
 }
 
 /** Compact classifier label: "classifier off", "auto (provider/id)", "provider/id", or "model unavailable (spec)". */
-export function classifierModelLabel(ctx: ExtensionContext, config: ResolvedGuardConfig | undefined, state: RuntimeState): string {
+export function classifierModelLabel(ctx: ExtensionContext, config: ResolvedRailConfig | undefined, state: RuntimeState): string {
   if (!config || !classifierEnabled(config, state.classifier)) return "classifier off";
   const spec = state.classifier.modelOverride ?? config.classifier.model;
   const model = resolveClassifierModel(ctx, config, state.classifier);
@@ -97,7 +97,7 @@ export function statusLineVisible(mode: StatusLineMode, state: RuntimeState): bo
   return !state.enabled || state.lastError !== undefined || state.stats.turnClassifierDenials > 0 || state.stats.turnBlocked > 0;
 }
 
-export function updateGuardStatus(ctx: ExtensionContext, state: RuntimeState): void {
+export function updateRailStatus(ctx: ExtensionContext, state: RuntimeState): void {
   state.liveView?.refresh();
   if (!statusLineVisible(state.config?.statusLine ?? "always", state)) {
     ctx.ui.setStatus("guard", undefined);
@@ -117,18 +117,18 @@ export function updateGuardStatus(ctx: ExtensionContext, state: RuntimeState): v
     `↓${formatCompactTokens(stats.classifierOutputTokens)}`,
   ].join(" ");
   if (state.lastError) {
-    ctx.ui.setStatus("guard", error(`Guard: error ${compact}`));
+    ctx.ui.setStatus("guard", error(`Rail: error ${compact}`));
     return;
   }
   if (!state.enabled) {
     const label = state.disabledForNextAgent && !ctx.isIdle() ? "off this turn" : state.disabledForNextAgent ? "off next turn" : "disabled";
-    ctx.ui.setStatus("guard", warning(`Guard: ${label} ${compact}`));
+    ctx.ui.setStatus("guard", warning(`Rail: ${label} ${compact}`));
     return;
   }
   const backend = `${state.backend?.name ?? config?.backend ?? "unknown"}${state.readOnly ? " RO" : ""}`;
   const network = config ? networkPolicyLabel(config) : "network unknown";
   const hasImportantStats = stats.classifierDenials > 0 || stats.blocked > 0 || stats.errors > 0;
-  ctx.ui.setStatus("guard", `${muted(`Guard: ${backend}, ${network}, ${classifierModelLabel(ctx, config, state)} `)}${hasImportantStats ? warning(compact) : muted(compact)}`);
+  ctx.ui.setStatus("guard", `${muted(`Rail: ${backend}, ${network}, ${classifierModelLabel(ctx, config, state)} `)}${hasImportantStats ? warning(compact) : muted(compact)}`);
 }
 
 /** Per-class hits and outcomes, for classes actually seen; the editable table is the /guard policy page. */
@@ -145,7 +145,7 @@ function capabilityStatLines(state: RuntimeState): string[] {
   });
 }
 
-export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConfig): string {
+export function formatRailStatus(state: RuntimeState, config: ResolvedRailConfig): string {
   const classifierOn = classifierEnabled(config, state.classifier);
   const health = state.enabled && state.initialized ? "enforcing" : state.enabled ? "enabled but not initialized" : state.disabledForNextAgent ? "disabled for next agent turn" : "disabled";
   const effective = state.backend?.describeEffectivePolicy(config);
@@ -169,7 +169,7 @@ export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConf
       ]
     : ["  Filesystem restrictions: disabled (unrestricted)"];
   const lines = [
-    "# Pi Guard",
+    "# Pi Rail",
     "",
     "## Status",
     `  ${health}`,
@@ -221,13 +221,13 @@ export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConf
   return lines.join("\n");
 }
 
-interface GuardLineTheme {
+interface RailLineTheme {
   fg(name: string, text: string): string;
   bold(text: string): string;
 }
 
 /** Styles one line of a guard report (status or policy) for terminal display. */
-export function styleGuardLine(line: string, theme: GuardLineTheme): string {
+export function styleRailLine(line: string, theme: RailLineTheme): string {
   if (line.startsWith("# ")) return theme.fg("accent", theme.bold(line.slice(2)));
   if (line.startsWith("## ")) return theme.fg("toolTitle", theme.bold(`─ ${line.slice(3)} `));
   if (line.includes("[ALLOW]")) return theme.fg("success", line);
@@ -244,19 +244,19 @@ export function styleGuardLine(line: string, theme: GuardLineTheme): string {
  * custom messages enter agent context); this stays registered so sessions
  * recorded before that change still render their guard reports.
  */
-export function registerGuardMessageRenderer(pi: ExtensionAPI): void {
+export function registerRailMessageRenderer(pi: ExtensionAPI): void {
   pi.registerMessageRenderer("pi-guard", (message, _options, theme) => {
     const raw = String(message.content ?? "");
     const rendered = raw
       .split("\n")
-      .map((line) => styleGuardLine(line, theme))
+      .map((line) => styleRailLine(line, theme))
       .join("\n");
     return new Text(theme.fg("accent", theme.bold("[guard]")) + "\n" + rendered, 0, 0);
   });
 }
 
 /** The resolved mechanism view for /guard policy rules: the deterministic filesystem/network/environment/command policy, provenance-annotated. */
-export function formatGuardPolicy(state: RuntimeState, config: ResolvedGuardConfig): string {
+export function formatRailPolicy(state: RuntimeState, config: ResolvedRailConfig): string {
   const effective = state.backend?.describeEffectivePolicy(config);
 
   // Effective (backend) lists hold resolved literals while provenance is keyed
@@ -280,7 +280,7 @@ export function formatGuardPolicy(state: RuntimeState, config: ResolvedGuardConf
   const annotateAll = (listKey: ProvenanceListKey, entries: string[], resolvePaths = true) => entries.map(listAnnotator(listKey, resolvePaths));
 
   const lines = [
-    "# Pi Guard Policy Rules",
+    "# Pi Rail Policy Rules",
     "  unmarked entries are built-in defaults; [global]/[project] name the config that set them",
     "  the decision policy itself is the disposition table — /guard policy opens it",
     "",

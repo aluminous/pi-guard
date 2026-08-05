@@ -2,8 +2,8 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { complete, type Message } from "@earendil-works/pi-ai/compat";
 import { capabilityRegistry, getEffectiveDisposition } from "../capabilities.ts";
 import { buildCapabilityPromptForCritique } from "../classifier.ts";
-import { loadConfig, type ResolvedGuardConfig } from "../config.ts";
-import { showGuardView } from "../live-view.ts";
+import { loadConfig, type ResolvedRailConfig } from "../config.ts";
+import { showRailView } from "../live-view.ts";
 import { getPersistentConfigPath } from "../persistent-settings.ts";
 import { syncCapabilityPreset, type RuntimeState } from "../state.ts";
 import { formatError } from "../util.ts";
@@ -20,7 +20,7 @@ Critique the definitions and the screen for:
 
 The taxonomy is deliberately capped at twelve classes: propose sharper wording before proposing a thirteenth, and say plainly if a proposed class is edge-case disease. Be concise and constructive; comment only where something could be improved.`;
 
-function formatTableForCritique(config: ResolvedGuardConfig, state: RuntimeState): string {
+function formatTableForCritique(config: ResolvedRailConfig, state: RuntimeState): string {
   return capabilityRegistry(config, state.capabilities).map((entry) => {
     const effective = getEffectiveDisposition(config, state.capabilities, entry.id);
     return `- ${entry.id} (${entry.name}) → ${effective.disposition} [${effective.scope}]\n  ${entry.definition}`;
@@ -83,18 +83,18 @@ export function createCritiqueRunner(deps: { state: RuntimeState }) {
         .join("\n")
         .trim();
       const output = [
-        "# Guard capability critique",
+        "# Rail capability critique",
         "",
         `Model: ${model.provider}/${model.id}`,
         `Config: ${getPersistentConfigPath()}`,
         "",
         critique || "No critique returned.",
       ].join("\n");
-      showGuardView(ctx, state, "report", () => output.split("\n"));
-      ctx.ui.notify("Guard capability critique ready.", "info");
+      showRailView(ctx, state, "report", () => output.split("\n"));
+      ctx.ui.notify("Rail capability critique ready.", "info");
     } catch (error) {
       const reason = formatError(error);
-      ctx.ui.notify(`Guard critique failed: ${reason}`, "error");
+      ctx.ui.notify(`Rail critique failed: ${reason}`, "error");
     } finally {
       ctx.ui.setStatus("guard-critique", undefined);
     }

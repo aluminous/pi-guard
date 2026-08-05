@@ -6,10 +6,10 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { after, describe, it } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { GuardBackend } from "../src/backends/types.ts";
+import type { RailBackend } from "../src/backends/types.ts";
 import { getEffectiveDisposition, READ_ONLY_PRESET_DENY } from "../src/capabilities.ts";
 import type { CompleteFn } from "../src/classifier.ts";
-import { createGuardCommand } from "../src/commands/guard.ts";
+import { createRailCommand } from "../src/commands/rail.ts";
 import { interceptToolCall } from "../src/interceptor.ts";
 import { createRuntimeState, syncCapabilityPreset } from "../src/state.ts";
 import { makeFixtureDir, testConfig } from "./helpers.ts";
@@ -109,7 +109,7 @@ describe("read-only mode interception", () => {
     const state = readOnlyState(testConfig((c) => {
       c.classifier.enabled = false;
     }));
-    state.backend = { name: "seatbelt" } as GuardBackend;
+    state.backend = { name: "seatbelt" } as RailBackend;
     const allowed = await interceptToolCall({ toolName: "bash", input: { command: "grep foo src" } }, fakeCtx(cwd), state);
     assert.equal(allowed, undefined);
     const blocked = await interceptToolCall({ toolName: "bash", input: { command: "curl example.com" } }, fakeCtx(cwd), state);
@@ -187,7 +187,7 @@ describe("read-only disposition preset", () => {
       c.classifier.model = "test/fake-model";
     });
     const state = readOnlyState(config);
-    state.backend = { name: "seatbelt" } as GuardBackend;
+    state.backend = { name: "seatbelt" } as RailBackend;
     const ctx = fakeCtx(cwd, { model: { provider: "test", id: "fake-model" } });
     const result = await interceptToolCall(
       { toolName: "bash", input: { command: "printf hi > out.txt" } },
@@ -206,7 +206,7 @@ describe("read-only disposition preset", () => {
       c.classifier.model = "test/fake-model";
     });
     const state = readOnlyState(config);
-    state.backend = { name: "seatbelt" } as GuardBackend;
+    state.backend = { name: "seatbelt" } as RailBackend;
     const ctx = fakeCtx(cwd, { model: { provider: "test", id: "fake-model" } });
     const result = await interceptToolCall(
       { toolName: "bash", input: { command: "rg --files-with-matches TODO" } },
@@ -221,11 +221,11 @@ describe("read-only disposition preset", () => {
 describe("/guard readonly toggle", () => {
   function makeCommand() {
     const state = createRuntimeState();
-    const command = createGuardCommand({
+    const command = createRailCommand({
       state,
-      enableGuard: async () => {},
-      disableGuard: async () => {},
-      runGuardSmoke: async () => {},
+      enableRail: async () => {},
+      disableRail: async () => {},
+      runRailSmoke: async () => {},
       runCritique: async () => {},
     });
     const ctx = {

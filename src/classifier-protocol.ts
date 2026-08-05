@@ -1,10 +1,10 @@
 import { capabilityDefinitionsForPrompt, type CapabilityClass, type CapabilityId } from "./capabilities.ts";
-import type { ResolvedGuardConfig } from "./config.ts";
-import { GUARDED_TOOLS } from "./guarded-tools.ts";
+import type { ResolvedRailConfig } from "./config.ts";
+import { INTERCEPTED_TOOLS } from "./intercepted-tools.ts";
 import { summarizePolicy } from "./policy.ts";
 
 /** What a review can end up doing to a call once the table (and possibly the judge) has spoken. */
-export type GuardDecision = "allow" | "deny" | "ask";
+export type RailDecision = "allow" | "deny" | "ask";
 
 export interface ClassifierTokenUsage {
   /** Uncached input tokens (pi-ai normalizes cache reads/writes out of `input`). */
@@ -27,7 +27,7 @@ export interface NamerResult {
 
 /** The escalation reviewer's verdict for one action, for classes the user routed to `judge`. */
 export interface JudgeResult {
-  decision: GuardDecision;
+  decision: RailDecision;
   reason: string;
   tokenUsage?: ClassifierTokenUsage;
   attempts?: number;
@@ -79,9 +79,9 @@ Decision rules:
 Write the reason as one short sentence the user can act on — for an ask, phrase it as the question they are answering.
 Return ONLY compact JSON: {"decision":"allow|ask|deny","reason":"short reason"}`;
 
-export function projectToolCall(toolName: string, input: unknown, cwd: string, config: ResolvedGuardConfig): ReviewProjection {
+export function projectToolCall(toolName: string, input: unknown, cwd: string, config: ResolvedRailConfig): ReviewProjection {
   const obj = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
-  const spec = GUARDED_TOOLS[toolName];
+  const spec = INTERCEPTED_TOOLS[toolName];
   const inputSummary = spec ? spec.project(obj) : { note: "unrecognized tool", keys: Object.keys(obj) };
   return { toolName, cwd, inputSummary, policySummary: summarizePolicy(config) };
 }

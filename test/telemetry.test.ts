@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { interceptToolCall } from "../src/interceptor.ts";
 import { createRuntimeState, type RuntimeState } from "../src/state.ts";
-import { appendGuardTelemetry, redactTelemetryRecord, type GuardReviewTelemetry, type GuardTelemetryRecord } from "../src/telemetry.ts";
+import { appendRailTelemetry, redactTelemetryRecord, type RailReviewTelemetry, type RailTelemetryRecord } from "../src/telemetry.ts";
 import { testConfig } from "./helpers.ts";
 
 function fakeCtx(): ExtensionContext {
@@ -17,7 +17,7 @@ function fakeCtx(): ExtensionContext {
   } as unknown as ExtensionContext;
 }
 
-function readyState(captured: GuardTelemetryRecord[], overrides?: Parameters<typeof testConfig>[0]): { state: RuntimeState; config: ReturnType<typeof testConfig> } {
+function readyState(captured: RailTelemetryRecord[], overrides?: Parameters<typeof testConfig>[0]): { state: RuntimeState; config: ReturnType<typeof testConfig> } {
   const config = testConfig(overrides);
   const state = createRuntimeState();
   state.config = config;
@@ -25,13 +25,13 @@ function readyState(captured: GuardTelemetryRecord[], overrides?: Parameters<typ
   state.initialized = true;
   state.appendEntry = (customType, data) => {
     assert.equal(customType, "guard");
-    captured.push(data as GuardTelemetryRecord);
+    captured.push(data as RailTelemetryRecord);
   };
   return { state, config };
 }
 
 describe("redactTelemetryRecord", () => {
-  const record: GuardReviewTelemetry = {
+  const record: RailReviewTelemetry = {
     kind: "review",
     tool: "bash",
     decision: "allow",
@@ -72,31 +72,31 @@ describe("redactTelemetryRecord", () => {
   });
 
   it("leaves non-review records untouched in minimal mode", () => {
-    const block: GuardTelemetryRecord = { kind: "block", tool: "write", reason: "outside roots" };
+    const block: RailTelemetryRecord = { kind: "block", tool: "write", reason: "outside roots" };
     assert.deepEqual(redactTelemetryRecord(block, "minimal"), block);
   });
 });
 
-describe("appendGuardTelemetry", () => {
+describe("appendRailTelemetry", () => {
   it("writes records as guard custom entries", () => {
-    const captured: GuardTelemetryRecord[] = [];
+    const captured: RailTelemetryRecord[] = [];
     const { state } = readyState(captured);
-    appendGuardTelemetry(state, { kind: "block", tool: "write", reason: "denied" });
+    appendRailTelemetry(state, { kind: "block", tool: "write", reason: "denied" });
     assert.equal(captured.length, 1);
     assert.equal(captured[0]?.kind, "block");
   });
 
   it("writes nothing when telemetry is off", () => {
-    const captured: GuardTelemetryRecord[] = [];
+    const captured: RailTelemetryRecord[] = [];
     const { state } = readyState(captured, (c) => { c.classifier.telemetry = "off"; });
-    appendGuardTelemetry(state, { kind: "block", tool: "write", reason: "denied" });
+    appendRailTelemetry(state, { kind: "block", tool: "write", reason: "denied" });
     assert.equal(captured.length, 0);
   });
 
   it("writes nothing when no session appender is wired", () => {
     const state = createRuntimeState();
     state.config = testConfig();
-    appendGuardTelemetry(state, { kind: "block", tool: "write", reason: "denied" });
+    appendRailTelemetry(state, { kind: "block", tool: "write", reason: "denied" });
   });
 
   it("never throws when the session appender fails", () => {
@@ -105,13 +105,13 @@ describe("appendGuardTelemetry", () => {
     state.appendEntry = () => {
       throw new Error("no session file");
     };
-    appendGuardTelemetry(state, { kind: "block", tool: "write", reason: "denied" });
+    appendRailTelemetry(state, { kind: "block", tool: "write", reason: "denied" });
   });
 });
 
 describe("interceptor telemetry wiring", () => {
   it("records policy blocks", async () => {
-    const captured: GuardTelemetryRecord[] = [];
+    const captured: RailTelemetryRecord[] = [];
     const { state } = readyState(captured, (c) => { c.classifier.enabled = false; });
     const result = await interceptToolCall(
       { toolName: "write", input: { path: `${process.cwd()}/.env`, content: "x" } },
@@ -125,7 +125,7 @@ describe("interceptor telemetry wiring", () => {
   });
 
   it("records denied path approvals", async () => {
-    const captured: GuardTelemetryRecord[] = [];
+    const captured: RailTelemetryRecord[] = [];
     const { state } = readyState(captured, (c) => {
       c.classifier.enabled = false;
       c.filesystem.allowWrite = [];
@@ -142,7 +142,7 @@ describe("interceptor telemetry wiring", () => {
   });
 
   it("records nothing when telemetry is off", async () => {
-    const captured: GuardTelemetryRecord[] = [];
+    const captured: RailTelemetryRecord[] = [];
     const { state } = readyState(captured, (c) => {
       c.classifier.enabled = false;
       c.classifier.telemetry = "off";

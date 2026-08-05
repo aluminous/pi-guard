@@ -3,7 +3,7 @@
 Copy one of these files to `~/.pi/agent/extensions/guard.json` for a global
 profile or to `.pi/guard.json` in a trusted project.
 
-Configuration is layered over Pi Guard's defaults. Omitted fields retain their
+Configuration is layered over Pi Rail's defaults. Omitted fields retain their
 default values; arrays are replaced wholesale when present.
 
 - `classifier-focused.json` disables filesystem and network restrictions and

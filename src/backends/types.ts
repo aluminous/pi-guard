@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ResolvedGuardConfig } from "../config.ts";
+import type { ResolvedRailConfig } from "../config.ts";
 import type { DegradedPattern } from "../policy.ts";
 
 export interface WrappedCommand {
@@ -25,12 +25,12 @@ export interface EffectivePolicy {
   };
 }
 
-export interface GuardBackend {
+export interface RailBackend {
   name: string;
   supported(): Promise<{ ok: true } | { ok: false; reason: string }>;
-  initialize(config: ResolvedGuardConfig, ctx: ExtensionContext): Promise<void>;
+  initialize(config: ResolvedRailConfig, ctx: ExtensionContext): Promise<void>;
   wrapBash(command: string, cwd: string, env: Record<string, string>): Promise<WrappedCommand>;
   /** Returns the expanded policy this backend enforces, or undefined if it enforces nothing beyond the config. */
-  describeEffectivePolicy(config: ResolvedGuardConfig): EffectivePolicy | undefined;
+  describeEffectivePolicy(config: ResolvedRailConfig): EffectivePolicy | undefined;
   shutdown(): Promise<void>;
 }

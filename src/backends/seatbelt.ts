@@ -2,11 +2,11 @@ import os from "node:os";
 import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
-import type { ResolvedGuardConfig } from "../config.ts";
+import type { ResolvedRailConfig } from "../config.ts";
 import { existingRealPath } from "../paths.ts";
 import { compileFilesystemPolicy, resolveConfigPath } from "../policy.ts";
 import { asStringArray, unique } from "../util.ts";
-import type { EffectivePolicy, GuardBackend, WrappedCommand } from "./types.ts";
+import type { EffectivePolicy, RailBackend, WrappedCommand } from "./types.ts";
 
 type SandboxManagerApi = typeof import("@anthropic-ai/sandbox-runtime")["SandboxManager"];
 
@@ -60,7 +60,7 @@ function tempReadWriteAllowlist(): string[] {
   return unique(["/tmp", "/private/tmp", os.tmpdir(), existingRealPath(os.tmpdir())]);
 }
 
-export function getSeatbeltRuntimeConfig(config: ResolvedGuardConfig, cwd = process.cwd()): SandboxRuntimeConfig {
+export function getSeatbeltRuntimeConfig(config: ResolvedRailConfig, cwd = process.cwd()): SandboxRuntimeConfig {
   // Config pattern lists arrive pre-resolved through the shared compiler; only
   // the seatbelt-specific system allowlists are resolved here.
   const compiled = compileFilesystemPolicy(config, cwd);
@@ -130,14 +130,14 @@ export function getSeatbeltRuntimeConfig(config: ResolvedGuardConfig, cwd = proc
   } as SandboxRuntimeConfig;
 }
 
-export class SeatbeltBackend implements GuardBackend {
+export class SeatbeltBackend implements RailBackend {
   name = "seatbelt";
   private initialized = false;
   private manager: SandboxManagerApi | undefined;
 
   async supported(): Promise<{ ok: true } | { ok: false; reason: string }> {
     if (process.platform !== "darwin") {
-      return { ok: false, reason: `Pi Guarding is only supported on macOS; current platform is ${process.platform}` };
+      return { ok: false, reason: `Pi Rail is only supported on macOS; current platform is ${process.platform}` };
     }
     let manager: SandboxManagerApi;
     try {
@@ -145,7 +145,7 @@ export class SeatbeltBackend implements GuardBackend {
     } catch (error) {
       return {
         ok: false,
-        reason: `Missing @anthropic-ai/sandbox-runtime. Run npm install in the Pi Guard extension directory. (${error instanceof Error ? error.message : String(error)})`,
+        reason: `Missing @anthropic-ai/sandbox-runtime. Run npm install in the Pi Rail extension directory. (${error instanceof Error ? error.message : String(error)})`,
       };
     }
     if (!manager.isSupportedPlatform()) {
@@ -155,7 +155,7 @@ export class SeatbeltBackend implements GuardBackend {
     return { ok: true };
   }
 
-  async initialize(config: ResolvedGuardConfig, _ctx: ExtensionContext): Promise<void> {
+  async initialize(config: ResolvedRailConfig, _ctx: ExtensionContext): Promise<void> {
     const support = await this.supported();
     if (!support.ok) throw new Error(support.reason);
     const manager = this.manager ?? (await getSandboxManager());
@@ -179,7 +179,7 @@ export class SeatbeltBackend implements GuardBackend {
     };
   }
 
-  describeEffectivePolicy(config: ResolvedGuardConfig): EffectivePolicy {
+  describeEffectivePolicy(config: ResolvedRailConfig): EffectivePolicy {
     const cwd = process.cwd();
     const runtime = getSeatbeltRuntimeConfig(config, cwd);
     const filesystem = (runtime.filesystem ?? {}) as Record<string, unknown>;

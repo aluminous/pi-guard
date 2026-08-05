@@ -1,6 +1,6 @@
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
-import type { ResolvedGuardConfig } from "./config.ts";
+import type { ResolvedRailConfig } from "./config.ts";
 import { expandHome } from "./paths.ts";
 import { textPrefix, unique } from "./util.ts";
 
@@ -164,7 +164,7 @@ export interface CompiledFilesystemPolicy {
  * reported in `degraded` rather than silently losing their wider
  * policy-engine semantics in the sandbox.
  */
-export function compileFilesystemPolicy(config: ResolvedGuardConfig, cwd: string): CompiledFilesystemPolicy {
+export function compileFilesystemPolicy(config: ResolvedRailConfig, cwd: string): CompiledFilesystemPolicy {
   const patterns: Record<FilesystemListName, string[]> = {
     allowRead: [...config.filesystem.allowRead],
     denyRead: [...config.filesystem.denyRead],
@@ -206,7 +206,7 @@ function isDenied(cwd: string, candidate: string, patterns: string[]): string | 
   return findMatchingPattern(cwd, candidate, patterns);
 }
 
-export function decidePathAccess(config: ResolvedGuardConfig, cwd: string, inputPath: string, kind: AccessKind): PolicyDecision {
+export function decidePathAccess(config: ResolvedRailConfig, cwd: string, inputPath: string, kind: AccessKind): PolicyDecision {
   const normalizedPath = normalizeUserPath(cwd, inputPath);
   if (!config.filesystem.enabled) return { allowed: true, normalizedPath };
 
@@ -247,7 +247,7 @@ export function decidePathAccess(config: ResolvedGuardConfig, cwd: string, input
  * file content, so an allowlisted path is the whole action; write/edit
  * content still needs review no matter how trusted the path is.
  */
-export function isClassifierExemptRead(config: ResolvedGuardConfig, cwd: string, inputPath: string): boolean {
+export function isClassifierExemptRead(config: ResolvedRailConfig, cwd: string, inputPath: string): boolean {
   return classifierExemptReadReason(config, cwd, inputPath) !== undefined;
 }
 
@@ -257,7 +257,7 @@ export function isClassifierExemptRead(config: ResolvedGuardConfig, cwd: string,
  * are secrets" even when blocking is off, and capability mode uses it as the
  * deterministic `credentials` label rather than as a hard block.
  */
-export function denyReadMatch(config: ResolvedGuardConfig, cwd: string, inputPath: string): string | undefined {
+export function denyReadMatch(config: ResolvedRailConfig, cwd: string, inputPath: string): string | undefined {
   const canonical = canonicalizeExistingPath(normalizeUserPath(cwd, inputPath));
   const canonicalCwd = canonicalizeExistingPath(cwd);
   if (!canonical.ok || !canonicalCwd.ok) return undefined;
@@ -265,7 +265,7 @@ export function denyReadMatch(config: ResolvedGuardConfig, cwd: string, inputPat
 }
 
 /** Which exemption condition applies ("in session cwd" / "matches allowRead '…'"), or undefined when the read is not exempt. */
-export function classifierExemptReadReason(config: ResolvedGuardConfig, cwd: string, inputPath: string): string | undefined {
+export function classifierExemptReadReason(config: ResolvedRailConfig, cwd: string, inputPath: string): string | undefined {
   const normalizedPath = normalizeUserPath(cwd, inputPath);
   const canonical = canonicalizeExistingPath(normalizedPath);
   if (!canonical.ok) return undefined;
@@ -281,7 +281,7 @@ function wildcardMatches(value: string, pattern: string): boolean {
   return globToRegex(pattern).test(value);
 }
 
-export function scrubEnvironment(env: NodeJS.ProcessEnv | undefined, config: ResolvedGuardConfig): Record<string, string> {
+export function scrubEnvironment(env: NodeJS.ProcessEnv | undefined, config: ResolvedRailConfig): Record<string, string> {
   const source = env ?? process.env;
   const result: Record<string, string> = {};
   const allow = config.environment.allow;
@@ -295,7 +295,7 @@ export function scrubEnvironment(env: NodeJS.ProcessEnv | undefined, config: Res
   return result;
 }
 
-export function summarizePolicy(config: ResolvedGuardConfig): string[] {
+export function summarizePolicy(config: ResolvedRailConfig): string[] {
   const network = !config.network.enabled
     ? "disabled (unrestricted)"
     : config.network.allowedDomains.length > 0

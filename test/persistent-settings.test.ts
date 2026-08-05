@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { GuardConfig } from "../src/config.ts";
+import type { RailConfig } from "../src/config.ts";
 import {
   getPersistentConfigPath,
   updatePersistentCapabilityClass,
@@ -22,13 +22,13 @@ const ENV_AGENT_DIR = "PI_CODING_AGENT_DIR";
  * ever stops being honoured, these tests must fail rather than quietly start
  * editing the developer's real guard.json.
  */
-function withTempAgentDir(fn: (read: () => GuardConfig) => void): void {
+function withTempAgentDir(fn: (read: () => RailConfig) => void): void {
   const fixture = makeFixtureDir();
   const previous = process.env[ENV_AGENT_DIR];
   process.env[ENV_AGENT_DIR] = fixture.dir;
   try {
     assert.equal(getAgentDir(), fixture.dir, "the agent dir redirect must hold before any write");
-    fn(() => JSON.parse(readFileSync(getPersistentConfigPath(), "utf8")) as GuardConfig);
+    fn(() => JSON.parse(readFileSync(getPersistentConfigPath(), "utf8")) as RailConfig);
   } finally {
     if (previous === undefined) delete process.env[ENV_AGENT_DIR];
     else process.env[ENV_AGENT_DIR] = previous;
