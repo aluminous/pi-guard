@@ -101,11 +101,11 @@ describe("formatGuardPolicy", () => {
     assert.match(policy, /# Pi Guard Policy Rules/);
     assert.match(policy, /\/guard policy opens it/);
     assert.doesNotMatch(policy, /## Capability dispositions/, "the table lives on the interactive page now");
-    assert.match(policy, /Legacy classifier rules \(parsed, no longer consulted\)/);
-    assert.match(policy, /Legacy allow rules \(\d+\)/);
-    assert.match(policy, /Local Validation/);
+    assert.match(policy, /## Filesystem/);
+    assert.match(policy, /## Network/);
+    assert.match(policy, /## Environment scrubbing/);
     assert.match(policy, /Config sources/);
-    assert.ok(policy.indexOf("## Filesystem") < policy.indexOf("Legacy classifier rules"));
+    assert.ok(policy.indexOf("## Filesystem") < policy.indexOf("## Config sources"));
   });
 
   it("notes that lists still route classifier exemptions when enforcement is off", () => {
@@ -116,34 +116,21 @@ describe("formatGuardPolicy", () => {
     assert.match(policy, /disabled \(lists still route classifier exemptions\)/);
   });
 
-  it("annotates provenance: legend, per-entry sources, rule overrides, and deletions", () => {
+  it("annotates provenance: legend and per-entry list sources", () => {
     const projectPath = path.join("/repo", CONFIG_DIR_NAME, "guard.json");
     const afterGlobal = mergeConfig(testConfig(), { filesystem: { denyRead: ["/secret/global"] } }, globalGuardConfigPath());
-    const config = mergeConfig(
-      afterGlobal,
-      {
-        environment: { allow: ["PATH", "HOME"] },
-        classifier: {
-          rules: {
-            soft_deny: [
-              "Git Push to Default Branch:",
-              "Production Deploy: staging deploys are routine.",
-              "My Custom Rule: never touch the vendor directory.",
-            ],
-          },
-        },
-      },
-      projectPath,
-    );
+    const config = mergeConfig(afterGlobal, { environment: { allow: ["PATH", "HOME"] } }, projectPath);
     const policy = formatGuardPolicy(createRuntimeState(), config);
     assert.match(policy, /unmarked entries are built-in defaults/);
     assert.match(policy, /• \/secret\/global \[global\]/);
     assert.match(policy, /Allow: PATH, HOME \[project\]/);
-    assert.match(policy, /• Production Deploy: staging deploys are routine\. \[project overrides default\]/);
-    assert.match(policy, /• My Custom Rule: never touch the vendor directory\. \[project\]/);
-    assert.match(policy, /removed by config: Git Push to Default Branch \[project\]/);
     assert.doesNotMatch(policy, /\[default\]/, "default entries stay unmarked");
-    assert.match(policy, /• Local Operations: [^\n[]+\n/, "untouched default rules carry no suffix");
+  });
+
+  it("no longer reports legacy classifier rule tiers", () => {
+    const policy = formatGuardPolicy(createRuntimeState(), testConfig());
+    assert.doesNotMatch(policy, /Legacy/i);
+    assert.doesNotMatch(policy, /soft-deny|hard-deny/i);
   });
 });
 

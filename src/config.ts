@@ -12,27 +12,12 @@ import {
   type CapabilityId,
   type Disposition,
 } from "./capabilities.ts";
-import { DEFAULT_CLASSIFIER_RULES } from "./classifier-rules.ts";
 import { DEFAULT_COMMAND_ALLOWLIST } from "./command-allowlist.ts";
 
 export type GuardBackendName = "seatbelt" | "none" | "container";
 
 /** When the guard statusline is visible: always, never, or auto (only when the guard is off/erroring or something was denied since the last user message). */
 export type StatusLineMode = "always" | "never" | "auto";
-
-export interface ClassifierRulesConfig {
-  allow?: string[];
-  soft_deny?: string[];
-  hard_deny?: string[];
-  environment?: string[];
-  /**
-   * When true, provided lists replace the merged base wholesale (profile
-   * semantics). Default is name-based merging: rules are "Name: text", a
-   * same-name entry overrides the base rule in place, "Name:" with an empty
-   * body deletes it, and new names append.
-   */
-  replace?: boolean;
-}
 
 export interface ClassifierConfig {
   enabled?: boolean;
@@ -43,8 +28,6 @@ export interface ClassifierConfig {
   failClosed?: boolean;
   /** Decision telemetry written to pi's session log: off, minimal (truncated), or full. */
   telemetry?: "off" | "minimal" | "full";
-  /** Legacy prose rule tiers. Parsed for compatibility; inert in capability mode. */
-  rules?: ClassifierRulesConfig;
 }
 
 export interface ResolvedClassifierConfig {
@@ -54,7 +37,6 @@ export interface ResolvedClassifierConfig {
   timeoutMs: number;
   failClosed: boolean;
   telemetry: "off" | "minimal" | "full";
-  rules: Required<Omit<ClassifierRulesConfig, "replace">>;
 }
 
 /** One persisted custom capability class. `definition` is prompt text the namer reads verbatim. */
@@ -115,23 +97,10 @@ export type ProvenanceListKey =
   | "network.deniedDomains"
   | "commands.allow";
 
-export type ClassifierRuleListKey = "allow" | "soft_deny" | "hard_deny" | "environment";
-
-export interface RuleProvenance {
-  /** "default" or the config file path that last set this rule. */
-  source: string;
-  /** For name-merged overrides: the source of the entry this one replaced. */
-  overrides?: string;
-}
-
 /** Where each effective config value came from ("default" or a config file path); last writer wins. */
 export interface ConfigProvenance {
   /** Entry text → source, per wholesale-replaced list. */
   lists: Record<ProvenanceListKey, Record<string, string>>;
-  /** Rule name (lowercased; full text for nameless rules) → provenance, per classifier rule list. */
-  rules: Record<ClassifierRuleListKey, Record<string, RuleProvenance>>;
-  /** Rules deleted by a "Name:" empty-body entry: original name → deleting source. */
-  deletedRules: Record<ClassifierRuleListKey, Record<string, string>>;
   /** Capability class id → source; "default" until a config file sets the row. */
   dispositions: Record<CapabilityId, string>;
   /** Custom class id → the config file that defined it. Per-id, like dispositions: classes merge by id, not wholesale. */
@@ -278,15 +247,6 @@ function listProvenance(entries: string[], source: string): Record<string, strin
   return Object.fromEntries(entries.map((entry) => [entry, source]));
 }
 
-/** Provenance map key for a classifier rule: its lowercased name, or the full text for nameless rules. */
-export function ruleProvenanceKey(rule: string): string {
-  return parseRuleName(rule)?.name.toLowerCase() ?? rule;
-}
-
-function ruleListProvenance(rules: string[], source: string): Record<string, RuleProvenance> {
-  return Object.fromEntries(rules.map((rule) => [ruleProvenanceKey(rule), { source }]));
-}
-
 function defaultProvenance(config: Omit<ResolvedGuardConfig, "provenance">): ConfigProvenance {
   return {
     lists: {
@@ -300,13 +260,6 @@ function defaultProvenance(config: Omit<ResolvedGuardConfig, "provenance">): Con
       "network.deniedDomains": listProvenance(config.network.deniedDomains, "default"),
       "commands.allow": listProvenance(config.commands.allow, "default"),
     },
-    rules: {
-      allow: ruleListProvenance(config.classifier.rules.allow, "default"),
-      soft_deny: ruleListProvenance(config.classifier.rules.soft_deny, "default"),
-      hard_deny: ruleListProvenance(config.classifier.rules.hard_deny, "default"),
-      environment: ruleListProvenance(config.classifier.rules.environment, "default"),
-    },
-    deletedRules: { allow: {}, soft_deny: {}, hard_deny: {}, environment: {} },
     dispositions: Object.fromEntries(BUILTIN_CAPABILITY_IDS.map((id) => [id, "default"])) as Record<CapabilityId, string>,
     capabilityClasses: {},
     capabilityDefinitions: {},
@@ -358,7 +311,6 @@ const DEFAULTS_SANS_PROVENANCE: Omit<ResolvedGuardConfig, "provenance"> = {
     timeoutMs: 8000,
     failClosed: true,
     telemetry: "minimal",
-    rules: DEFAULT_CLASSIFIER_RULES,
   },
   seatbelt: {},
   container: {},
@@ -394,56 +346,6 @@ function readJson(filePath: string, diagnostics: string[]): Partial<GuardConfig>
     diagnostics.push(`Ignoring ${filePath}: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
   }
-}
-
-function parseRuleName(entry: string): { name: string; body: string } | undefined {
-  const colon = entry.indexOf(":");
-  if (colon <= 0) return undefined;
-  return { name: entry.slice(0, colon).trim(), body: entry.slice(colon + 1).trim() };
-}
-
-/**
- * Merges a user rule list into the base by rule name ("Name: text"): a
- * same-name entry overrides the base rule in place (keeping its position, so
- * the classifier prompt prefix stays stable), "Name:" with an empty body
- * deletes it, and new or nameless entries append.
- */
-interface RuleMergeEvent {
-  kind: "append" | "override" | "delete";
-  /** Provenance-map key (ruleProvenanceKey form). */
-  key: string;
-  /** Original-case rule name (or full text for nameless entries), for the deletions note. */
-  name: string;
-}
-
-function mergeRuleList(base: string[], incoming: string[], listName: string, diagnostics: string[], onEvent?: (event: RuleMergeEvent) => void): string[] {
-  const result = [...base];
-  const indexOfName = (name: string) => result.findIndex((rule) => parseRuleName(rule)?.name.toLowerCase() === name.toLowerCase());
-  for (const entry of incoming) {
-    const parsed = parseRuleName(entry);
-    if (!parsed) {
-      result.push(entry);
-      onEvent?.({ kind: "append", key: entry, name: entry });
-      continue;
-    }
-    const at = indexOfName(parsed.name);
-    if (!parsed.body) {
-      if (at === -1) diagnostics.push(`${listName}: cannot delete unknown rule "${parsed.name}"`);
-      else {
-        result.splice(at, 1);
-        onEvent?.({ kind: "delete", key: parsed.name.toLowerCase(), name: parsed.name });
-      }
-      continue;
-    }
-    if (at === -1) {
-      result.push(entry);
-      onEvent?.({ kind: "append", key: parsed.name.toLowerCase(), name: parsed.name });
-    } else {
-      result[at] = entry;
-      onEvent?.({ kind: "override", key: parsed.name.toLowerCase(), name: parsed.name });
-    }
-  }
-  return result;
 }
 
 /**
@@ -633,39 +535,12 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
         diagnostics.push(`Ignoring ${source}.classifier.telemetry: expected "off", "minimal", or "full"`);
       }
     }
-    if (isObject(override.classifier.rules)) {
+    // Retired: the prose rule tiers are neither parsed nor merged. Old configs
+    // still load, with one diagnostic pointing at what replaced them.
+    if ((override.classifier as Record<string, unknown>).rules !== undefined) {
       diagnostics.push(
-        `${source}.classifier.rules is legacy: capability mode names actions from the class taxonomy and decides via the disposition table, so prose rule tiers no longer affect decisions. Use "dispositions" instead.`,
+        `Ignoring ${source}.classifier.rules: the prose rule tiers are gone. Capability mode names actions from the class taxonomy and decides via the disposition table — use "dispositions" and "capabilities.definitions" instead.`,
       );
-      const rulesOverride = override.classifier.rules;
-      const replace = rulesOverride.replace === true;
-      if (rulesOverride.replace !== undefined && typeof rulesOverride.replace !== "boolean") {
-        diagnostics.push(`Ignoring ${source}.classifier.rules.replace: expected a boolean`);
-      }
-      next.classifier.rules = { ...next.classifier.rules };
-      const lists = ["allow", "soft_deny", "hard_deny", "environment"] as const;
-      for (const list of lists) {
-        const incoming = asStringArray(rulesOverride[list], `${source}.classifier.rules.${list}`, diagnostics);
-        if (!incoming) continue;
-        if (replace) {
-          next.classifier.rules[list] = incoming;
-          next.provenance.rules[list] = ruleListProvenance(incoming, source);
-          next.provenance.deletedRules[list] = {};
-          continue;
-        }
-        const provRules = next.provenance.rules[list];
-        const provDeleted = next.provenance.deletedRules[list];
-        next.classifier.rules[list] = mergeRuleList(next.classifier.rules[list], incoming, `${source}.classifier.rules.${list}`, diagnostics, (event) => {
-          if (event.kind === "delete") {
-            delete provRules[event.key];
-            provDeleted[event.name] = source;
-            return;
-          }
-          delete provDeleted[event.name];
-          const previous = event.kind === "override" ? provRules[event.key] : undefined;
-          provRules[event.key] = previous ? { source, overrides: previous.source } : { source };
-        });
-      }
     }
   }
 

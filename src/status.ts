@@ -3,7 +3,7 @@ import { Text } from "@earendil-works/pi-tui";
 import type { EffectivePolicy } from "./backends/types.ts";
 import { capabilityRegistry, usedCapabilityStats } from "./capabilities.ts";
 import { classifierEnabled, resolveClassifierModel } from "./classifier.ts";
-import { configSourceLabel, ruleProvenanceKey, type ClassifierRuleListKey, type ProvenanceListKey, type ResolvedGuardConfig, type StatusLineMode } from "./config.ts";
+import { configSourceLabel, type ProvenanceListKey, type ResolvedGuardConfig, type StatusLineMode } from "./config.ts";
 import { getPersistentConfigPath } from "./persistent-settings.ts";
 import { resolveConfigPath } from "./policy.ts";
 import type { GuardEvent, GuardStats, RuntimeState } from "./state.ts";
@@ -255,10 +255,9 @@ export function registerGuardMessageRenderer(pi: ExtensionAPI): void {
   });
 }
 
-/** The resolved mechanism view for /guard policy rules: deterministic rules plus legacy classifier rules, provenance-annotated. */
+/** The resolved mechanism view for /guard policy rules: the deterministic filesystem/network/environment/command policy, provenance-annotated. */
 export function formatGuardPolicy(state: RuntimeState, config: ResolvedGuardConfig): string {
   const effective = state.backend?.describeEffectivePolicy(config);
-  const rules = config.classifier.rules;
 
   // Effective (backend) lists hold resolved literals while provenance is keyed
   // by config pattern, so each list's lookup also indexes the resolved form.
@@ -279,22 +278,6 @@ export function formatGuardPolicy(state: RuntimeState, config: ResolvedGuardConf
     return sources.length === 0 ? "" : ` [${sources.map(configSourceLabel).join(", ")}]`;
   };
   const annotateAll = (listKey: ProvenanceListKey, entries: string[], resolvePaths = true) => entries.map(listAnnotator(listKey, resolvePaths));
-
-  const ruleSection = (title: string, listKey: ClassifierRuleListKey, entries: string[]) => {
-    const annotate = (rule: string) => {
-      const provenance = config.provenance.rules[listKey][ruleProvenanceKey(rule)];
-      if (!provenance || provenance.source === "default") return rule;
-      const label = configSourceLabel(provenance.source);
-      return provenance.overrides ? `${rule} [${label} overrides ${configSourceLabel(provenance.overrides)}]` : `${rule} [${label}]`;
-    };
-    const deleted = Object.entries(config.provenance.deletedRules[listKey]);
-    return [
-      `## ${title} (${entries.length})`,
-      ...(entries.length > 0 ? entries.map((rule) => `  • ${annotate(rule)}`) : ["  (none)"]),
-      ...(deleted.length > 0 ? [`  removed by config: ${deleted.map(([name, source]) => `${name} [${configSourceLabel(source)}]`).join(", ")}`] : []),
-      "",
-    ];
-  };
 
   const lines = [
     "# Pi Guard Policy Rules",
@@ -328,13 +311,6 @@ export function formatGuardPolicy(state: RuntimeState, config: ResolvedGuardConf
     "## Reviewers",
     `  namer ${classifierEnabled(config, state.classifier) ? "enabled" : "disabled"} · model ${state.classifier.modelOverride ?? config.classifier.model} · judge model ${config.classifier.judgeModel} · fail ${config.classifier.failClosed ? "closed" : "open"}`,
     "",
-    "## Legacy classifier rules (parsed, no longer consulted)",
-    "  capability mode decides from the disposition table above; these lists are kept so old configs still load",
-    "",
-    ...ruleSection("Legacy allow rules", "allow", rules.allow),
-    ...ruleSection("Legacy soft-deny rules", "soft_deny", rules.soft_deny),
-    ...ruleSection("Legacy hard-deny rules", "hard_deny", rules.hard_deny),
-    ...ruleSection("Legacy environment assumptions", "environment", rules.environment),
     "## Config sources",
     ...config.sources.map((source) => `  • ${source}`),
   ];
