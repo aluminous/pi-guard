@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { CapabilityId, Disposition } from "../capabilities.ts";
 import { loadConfig, type StatusLineMode } from "../config.ts";
 import { formatDecisionTrace, formatEmptyTrace } from "../decision-trace.ts";
 import { updatePersistentStatusLine } from "../persistent-settings.ts";
@@ -7,6 +8,7 @@ import { classifierModelLabel, formatGuardPolicy, formatGuardStatus, networkPoli
 import { showGuardView, toggleGuardView } from "../live-view.ts";
 import { pickFromList, type SelectItem } from "../tui/select-list.ts";
 import { formatError } from "../util.ts";
+import { createDispositionCommands } from "./dispositions.ts";
 import { runModelCommand } from "./model.ts";
 import { createGuardTest } from "./test.ts";
 import { createGuardWhy } from "./why.ts";
@@ -17,11 +19,15 @@ export interface GuardCommandDeps {
   disableGuard(ctx: ExtensionContext, scope: "next-agent" | "session"): Promise<void>;
   runGuardSmoke(ctx: ExtensionContext): Promise<void>;
   runCritique(args: string, ctx: ExtensionContext): Promise<void>;
+  /** Disposition persist boundary; defaults to the global config writer, overridden in tests. */
+  persistDisposition?: (id: CapabilityId, disposition: Disposition | undefined) => void;
 }
 
 const SUBCOMMANDS: Array<{ value: string; description: string }> = [
   { value: "status", description: "Toggle the live status popup" },
-  { value: "policy", description: "Show the capability disposition table and the resolved policy" },
+  { value: "policy", description: "Open the capability disposition page (edit rows for this session; Ctrl+S saves)" },
+  { value: "policy rules", description: "Show the resolved mechanism policy: filesystem, network, environment, legacy rules" },
+  { value: "set", description: "Set one class for this session: set <class> [allow|judge|ask|deny]" },
   { value: "explain", description: "Show the newest decision trace (explain <n> for older ones)" },
   { value: "test", description: "Dry-run a shell command through the guard without executing it" },
   { value: "test read", description: "Dry-run a file read through the guard (test read <path>)" },
@@ -45,6 +51,8 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     if (!ctx.hasUI) console.log(message);
     ctx.ui.notify(message, level);
   };
+
+  const dispositions = createDispositionCommands({ state, persist: deps.persistDisposition, notify: show });
 
   async function enable(ctx: ExtensionContext): Promise<void> {
     try {
@@ -137,7 +145,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     }
   }
 
-  type PanelAction = "on" | "off-turn" | "off-session" | "readonly" | "model" | "statusline" | "smoke" | "critique" | "status" | "policy" | "explain";
+  type PanelAction = "on" | "off-turn" | "off-session" | "readonly" | "model" | "statusline" | "smoke" | "critique" | "status" | "dispositions" | "policy-rules" | "explain";
 
   async function openPanel(ctx: ExtensionContext): Promise<void> {
     const items: SelectItem<PanelAction>[] = [];
@@ -156,7 +164,8 @@ export function createGuardCommand(deps: GuardCommandDeps) {
       { value: "smoke", label: "Run smoke tests", searchText: "smoke test verify sandbox namer classifier", description: "Verify sandboxed execution and capability naming end to end" },
       { value: "critique", label: "Critique capabilities", searchText: "critique capabilities classes screen rules review improve", description: "Have Pi's current model review the class definitions, table, and screen" },
       { value: "status", label: "Status popup", searchText: "status report details approvals live popup overlay", description: "Live status popup: decisions, approvals, guidance — updates while the agent works" },
-      { value: "policy", label: "Policy view", searchText: "policy dispositions capabilities rules allow deny ask judge filesystem network show", description: "Capability disposition table, then filesystem/network/env rules" },
+      { value: "dispositions", label: "Dispositions…", searchText: "dispositions policy capabilities classes allow deny ask judge edit table page", description: "Edit the capability disposition table: arrows cycle a row for this session, Ctrl+S saves" },
+      { value: "policy-rules", label: "Policy rules", searchText: "policy rules filesystem network environment provenance mechanism show", description: "Resolved filesystem/network/environment rules with their config provenance" },
       { value: "explain", label: "Explain last decision", searchText: "explain trace decision why last chain stages", description: "Show the decision chain the guard ran for the most recent tool call" },
     );
 
@@ -184,7 +193,9 @@ export function createGuardCommand(deps: GuardCommandDeps) {
         return deps.runCritique("", ctx);
       case "status":
         return showView(ctx, "status");
-      case "policy":
+      case "dispositions":
+        return dispositions.openSettings(ctx);
+      case "policy-rules":
         return showView(ctx, "policy");
       case "explain":
         return showExplain(ctx, "");
@@ -208,7 +219,16 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     // Headless modes have no user to drive these; the seam modules turn them
     // into a clean no-op (pickFromList resolves undefined) or stderr error.
     if (!sub) return openPanel(ctx);
-    if (sub === "status" || sub === "policy") return showView(ctx, sub);
+    if (sub === "status") return showView(ctx, "status");
+    // /guard policy IS the disposition page now; the mechanism report moved one level down.
+    if (sub === "policy") {
+      const target = rest.trim().toLowerCase();
+      if (!target) return dispositions.openSettings(ctx);
+      if (target === "rules") return showView(ctx, "policy");
+      show(ctx, "Usage: /guard policy [rules]", "warning");
+      return;
+    }
+    if (sub === "set") return dispositions.runSet(rest, ctx);
     if (sub === "explain") return showExplain(ctx, rest);
     if (sub === "test") return runGuardTest(rest, ctx);
     if (sub === "why" && !rest) return runGuardWhy(ctx);
@@ -222,11 +242,13 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     if (sub === "smoke" && !rest) return deps.runGuardSmoke(ctx);
     if (sub === "critique") return deps.runCritique(rest, ctx);
 
-    show(ctx, "Usage: /guard [status|policy|explain [n]|test …|why|on|off|off session|readonly|model …|smoke|critique …]", "warning");
+    show(ctx, "Usage: /guard [status|policy [rules]|set <class> [disposition]|explain [n]|test …|why|on|off|off session|readonly|model …|smoke|critique …]", "warning");
   }
 
   function getArgumentCompletions(argumentPrefix: string) {
     const prefix = argumentPrefix.replace(/^\s+/, "");
+    const setMatch = prefix.match(/^set\s+(.*)$/i);
+    if (setMatch) return dispositions.setCompletions(setMatch[1]!);
     const modelMatch = prefix.match(/^(model|critique)\s+(.*)$/i);
     if (modelMatch) {
       const sub = modelMatch[1]!.toLowerCase();

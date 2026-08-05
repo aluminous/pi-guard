@@ -1,7 +1,7 @@
 /**
  * LEGACY. The prose rule tiers from the pre-capability classifier. They are
  * still parsed and merged so existing configs load without error, and
- * /guard policy still shows them, but nothing consults them for a decision:
+ * /guard policy rules still shows them, but nothing consults them for a decision:
  * capability mode names actions from the taxonomy in src/capabilities.ts and
  * resolves them through the disposition table. Read-only mode is now a
  * session disposition preset (READ_ONLY_PRESET_DENY), not a ruleset swap.

@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import { CONFIG_DIR_NAME, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { recordCapabilityOutcome, recordScreenVerdict } from "../src/capabilities.ts";
 import { globalGuardConfigPath, mergeConfig } from "../src/config.ts";
-import { createRuntimeState, recordCapabilityDecision, resetTurnStats, syncCapabilityPreset } from "../src/state.ts";
+import { createRuntimeState, recordCapabilityDecision, resetTurnStats } from "../src/state.ts";
 import { formatGuardPolicy, formatGuardStatus, statusLineVisible } from "../src/status.ts";
 import { showGuardView, toggleGuardView } from "../src/live-view.ts";
 import { testConfig } from "./helpers.ts";
@@ -95,30 +95,17 @@ describe("guard status token cache reporting", () => {
 });
 
 describe("formatGuardPolicy", () => {
-  it("leads with the disposition table and keeps the legacy rule lists marked", () => {
+  it("is the mechanism report: rules, not the disposition table", () => {
     const config = testConfig();
     const policy = formatGuardPolicy(createRuntimeState(), config);
-    assert.match(policy, /# Pi Guard Policy/);
-    assert.match(policy, /## Capability dispositions/);
-    assert.match(policy, /read-project\s+allow/);
-    assert.match(policy, /off-machine-effects\s+ask/);
-    assert.match(policy, /credentials\s+judge/);
+    assert.match(policy, /# Pi Guard Policy Rules/);
+    assert.match(policy, /\/guard policy opens it/);
+    assert.doesNotMatch(policy, /## Capability dispositions/, "the table lives on the interactive page now");
     assert.match(policy, /Legacy classifier rules \(parsed, no longer consulted\)/);
     assert.match(policy, /Legacy allow rules \(\d+\)/);
     assert.match(policy, /Local Validation/);
     assert.match(policy, /Config sources/);
-    assert.ok(policy.indexOf("## Capability dispositions") < policy.indexOf("Legacy classifier rules"));
-  });
-
-  it("annotates disposition provenance and the read-only preset", () => {
-    const config = mergeConfig(testConfig(), { dispositions: { "install-dependencies": "ask" } }, globalGuardConfigPath());
-    const state = createRuntimeState();
-    state.readOnly = true;
-    syncCapabilityPreset(state);
-    const policy = formatGuardPolicy(state, config);
-    assert.match(policy, /install-dependencies\s+ask \[global\]/);
-    assert.match(policy, /modify-project\s+deny \[read-only preset\]/);
-    assert.match(policy, /read-project\s+allow\n/, "defaults stay unmarked");
+    assert.ok(policy.indexOf("## Filesystem") < policy.indexOf("Legacy classifier rules"));
   });
 
   it("notes that lists still route classifier exemptions when enforcement is off", () => {

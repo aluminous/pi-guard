@@ -79,7 +79,9 @@ Commands — everything lives under `/guard`, with argument autocomplete:
 
 - `/guard`: open the control panel (searchable actions with a live status header; a plain select dialog over RPC).
 - `/guard status`: toggle the live status view — a bordered panel docked where the editor sits (like the model chooser), updating while the agent streams above it (decisions, approvals, session guidance). Esc closes it, arrows/page keys scroll. Over RPC it toggles a live widget.
-- `/guard policy`: show the resolved policy — the capability disposition table first, then filesystem/network/environment rules, then the legacy classifier rule lists. Same popup/widget behavior.
+- `/guard policy`: open the **disposition settings page** — the editable capability table with live per-class stats (see [Dispositions](#dispositions)). Over RPC it degrades to select dialogs; toggling the same command closes it.
+- `/guard policy rules`: show the resolved mechanism policy — filesystem/network/environment rules and the legacy classifier rule lists, provenance-annotated. Same popup/widget behavior as `/guard status`.
+- `/guard set <class> [allow|judge|ask|deny]`: set one class for this session from the command line (completions offer class ids, then dispositions). Without a disposition it prints the current effective value and where it came from.
 - `/guard on`: enable Pi Guard.
 - `/guard off`: disable for the next agent turn, then re-enable automatically.
 - `/guard off session`: disable until the session ends.
@@ -211,8 +213,35 @@ construction.
 
 Set rows in `dispositions` (global or project config). Omitted classes keep
 their defaults — the table merges **per row**, so setting one class never
-resets the others. `/guard policy` shows the resolved table with each row's
-source.
+resets the others.
+
+### Dispositions
+
+`/guard policy` opens the table as an interactive page (docked panel, agent
+still streaming above it): one row per class with its disposition and this
+session's stats — `off-machine-effects  ask  3 hits · 1 allowed · 1 asked · 1
+denied`. The highlighted row's definition shows underneath.
+
+| key | effect |
+|---|---|
+| ↑ / ↓ | move the highlight |
+| ← / → / Enter | cycle the row: allow → judge → ask → deny |
+| Ctrl+S | save every session change to the global config |
+| Esc | close (session changes stay in effect) |
+
+Every edit applies **immediately, for this session** — that is the point of
+the page: `local-destructive` and friends are meant to be re-scoped per
+session, and closing the page does not undo anything. Rows that differ from
+the persisted value are coloured; **Ctrl+S** persists them to
+`~/.pi/agent/extensions/guard.json` and the colouring clears. Stats update
+live while the agent works.
+
+In read-only mode a banner names the active preset and its rows render as
+`allow → deny*`: the preset tightens the effective value, cycling still edits
+the row underneath it. Over RPC the page degrades to select dialogs (pick a
+class, pick a disposition, repeat; "Save persistently" is the Ctrl+S
+equivalent), and `/guard set <class> <disposition>` does the same thing in one
+line.
 
 ### How an action gets named
 
@@ -261,8 +290,8 @@ unreviewed, exactly as before.
 ### Legacy classifier rule overrides
 
 The prose rule tiers (`classifier.rules` with `allow`/`soft_deny`/`hard_deny`/
-`environment`) are **legacy**. They still parse and merge, and `/guard policy`
-still lists them, but nothing consults them for a decision; loading a config
+`environment`) are **legacy**. They still parse and merge, and `/guard policy
+rules` still lists them, but nothing consults them for a decision; loading a config
 that sets them emits a diagnostic saying so. Their successor is the
 disposition table plus the class definitions in `src/capabilities.ts`.
 
@@ -403,11 +432,12 @@ authorization process.
   degrades to protocol dialogs there: approval prompts become select+input,
   and the `/guard` control panel, reviewer model picker, and statusline
   chooser become plain select dialogs (search and live headers are TUI-only).
-  `/guard status` and `/guard policy` toggle live *widgets* (fire-and-forget
-  `setWidget` requests keyed `guard-status`/`guard-policy`, refreshed on every
-  guard event) — user-visible in any client that renders widgets, and never
-  part of agent context. Smoke and critique results arrive the same way,
-  keyed `guard-report`.
+  `/guard status` and `/guard policy rules` toggle live *widgets*
+  (fire-and-forget `setWidget` requests keyed `guard-status`/`guard-policy`,
+  refreshed on every guard event) — user-visible in any client that renders
+  widgets, and never part of agent context. `/guard policy` (the disposition
+  page) degrades to select dialogs. Smoke and critique results arrive the same
+  way, keyed `guard-report`.
 - **json / print modes** — truly headless: there is no one to ask. Ask
   decisions and out-of-roots path approvals become blocks whose reason states
   exactly that ("headless session with no user to ask"), so the agent — or a
@@ -502,10 +532,12 @@ npm run test:tui  # tmux-driven TUI integration test (skips without tmux + pi)
 Three seam modules own every run-mode branch; feature code never inspects
 `ctx.mode` to pick a presentation:
 
-- `src/live-view.ts` — display surfaces (status, policy, smoke/critique
-  reports): custom overlay in the TUI, `setWidget` over RPC, a stderr error
+- `src/live-view.ts` — display surfaces (status, policy rules, smoke/critique
+  reports): docked panel in the TUI, `setWidget` over RPC, a stderr error
   headless. `showGuardView` replaces any open view; `toggleGuardView` adds
-  toggle semantics for the recurring status/policy views.
+  toggle semantics for the recurring views; `toggleGuardPanel` hosts an
+  interactive panel (the disposition page) and returns false where custom
+  components do not exist, so the caller degrades.
 - `src/approvals.ts` — response dialogs (approval prompts): a custom dialog
   with inline comment input in the TUI, `select`+`input` protocol dialogs
   over RPC. Callers gate on `ctx.hasUI` first because headless approval
@@ -515,6 +547,11 @@ Three seam modules own every run-mode branch; feature code never inspects
   statusline chooser): searchable list in the TUI, plain `select` dialog
   elsewhere; resolves `undefined` where no dialog capability exists, which
   callers already treat as cancel.
+
+The disposition page follows the same rule: `src/dispositions.ts` holds the
+row model (values, provenance, stats, save) with no UI in it, and the two
+surfaces — `src/tui/disposition-page.ts` and the RPC select loop in
+`src/commands/dispositions.ts` — render it.
 
 Transient signals (`notify`, `setStatus`) work in TUI and RPC and no-op
 headless. New UI belongs in one of these seams — extend them rather than

@@ -1,8 +1,20 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 import type { GuardViewKind, RuntimeState } from "./state.ts";
 import { styleGuardLine } from "./status.ts";
-import { GuardReportPanel } from "./tui/report-panel.ts";
+import { GuardReportPanel, type PanelTheme, type PanelTui } from "./tui/report-panel.ts";
+import type { Keybindings } from "./tui/select-list.ts";
+
+/** What ctx.ui.custom hands a docked panel, narrowed to the structural slices the guard panels use. */
+export interface GuardPanelHost {
+  tui: PanelTui;
+  theme: PanelTheme;
+  keybindings: Keybindings;
+  done(value: undefined): void;
+}
+
+/** A docked panel the live view can refresh in place. */
+export type GuardPanelFactory = (host: GuardPanelHost) => Container & { refresh(): void };
 
 /**
  * TUI presentation: a bordered panel docked in the editor area, exactly like
@@ -10,8 +22,8 @@ import { GuardReportPanel } from "./tui/report-panel.ts";
  * it and content refreshes live from updateGuardStatus; typing resumes when
  * it closes.
  */
-function openPanel(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, lines: () => string[]): void {
-  let panel: GuardReportPanel | undefined;
+function openPanel(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, factory: GuardPanelFactory): void {
+  let panel: (Container & { refresh(): void }) | undefined;
   let doneFn: ((value: undefined) => void) | undefined;
   let closed = false;
   const close = () => {
@@ -29,7 +41,7 @@ function openPanel(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKi
         done(undefined);
         return new Text("", 0, 0);
       }
-      panel = new GuardReportPanel({ tui, theme, keybindings, lines, styleLine: styleGuardLine, done });
+      panel = factory({ tui, theme, keybindings, done });
       return panel;
     })
     .finally(() => {
@@ -37,6 +49,11 @@ function openPanel(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKi
       if (state.liveView === entry) state.liveView = undefined;
     })
     .catch(() => undefined);
+}
+
+/** The read-only report panel, as a panel factory. */
+function reportPanel(lines: () => string[]): GuardPanelFactory {
+  return (host) => new GuardReportPanel({ ...host, lines, styleLine: styleGuardLine });
 }
 
 /**
@@ -89,7 +106,7 @@ function openWidget(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewK
  */
 export function showGuardView(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, lines: () => string[]): void {
   state.liveView?.close();
-  if (ctx.mode === "tui" && ctx.hasUI) return openPanel(ctx, state, kind, lines);
+  if (ctx.mode === "tui" && ctx.hasUI) return openPanel(ctx, state, kind, reportPanel(lines));
   if (ctx.hasUI) return openWidget(ctx, state, kind, lines);
   console.error("Guard views require an interactive session (TUI or RPC).");
 }
@@ -101,4 +118,20 @@ export function toggleGuardView(ctx: ExtensionContext, state: RuntimeState, kind
     return;
   }
   showGuardView(ctx, state, kind, lines);
+}
+
+/**
+ * Toggles an interactive docked panel as the live view. Custom components are
+ * TUI-only, so this returns false everywhere else and the caller degrades
+ * (the disposition page falls back to select dialogs over RPC).
+ */
+export function toggleGuardPanel(ctx: ExtensionContext, state: RuntimeState, kind: GuardViewKind, factory: GuardPanelFactory): boolean {
+  if (ctx.mode !== "tui" || !ctx.hasUI) return false;
+  if (state.liveView?.kind === kind) {
+    state.liveView.close();
+    return true;
+  }
+  state.liveView?.close();
+  openPanel(ctx, state, kind, factory);
+  return true;
 }
