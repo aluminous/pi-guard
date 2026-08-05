@@ -71,6 +71,18 @@ describe("parseNamerResult", () => {
     assert.deepEqual(parseStock('{"labels":["credentials","credentials"]}').labels, ["credentials"]);
   });
 
+  it("accepts a custom class the registry knows about", () => {
+    const withCustom = new Set([...BUILTIN_IDS, "touches-customer-data"]);
+    assert.deepEqual(parseNamerResult('{"labels":["touches-customer-data"]}', withCustom).labels, ["touches-customer-data"]);
+    // The same label against the stock registry is not vocabulary, so it drops.
+    assert.deepEqual(parseStock('{"labels":["touches-customer-data"]}').labels, ["unclassified"]);
+  });
+
+  it("drops a label whose class was deleted out from under the call", () => {
+    const shrunk = new Set([...BUILTIN_IDS].filter((id) => id !== "network-fetch"));
+    assert.deepEqual(parseNamerResult('{"labels":["network-fetch","read-project"]}', shrunk).labels, ["read-project"]);
+  });
+
   it("fails closed on schema violations", () => {
     assert.throws(() => parseStock('{"labels":"read-project"}'), /invalid namer labels/);
     assert.throws(() => parseStock('{"labels":[1,2]}'), /invalid namer labels/);

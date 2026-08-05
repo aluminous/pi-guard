@@ -85,6 +85,17 @@ interface Component {
 }
 
 /**
+ * Seeds an Input with existing text and leaves the caret after it. setValue
+ * alone would park the caret at column 0 (it only ever clamps the cursor down),
+ * so a prefilled edit form would type backwards; a bracketed paste is the
+ * public API that both inserts and advances.
+ */
+function prefill(input: Input, text: string): void {
+  input.setValue("");
+  input.handleInput(`\x1b[200~${text}\x1b[201~`);
+}
+
+/**
  * The disposition settings page: THE policy surface. Two tabs — the editable
  * capability table, and the read-only mechanism policy that `/guard policy
  * rules` used to render as its own view. Docked in the editor area like the
@@ -356,7 +367,7 @@ export class DispositionPage extends Container {
     // Definition only, for built-ins and custom classes alike: the id is the
     // namer's vocabulary and the name is cosmetic, while the definition is the
     // thing that actually changes how actions get labelled.
-    this.definitionInput.setValue(row.fullDefinition);
+    prefill(this.definitionInput, row.fullDefinition);
     this.definitionInput.focused = true;
     this.refresh();
   }

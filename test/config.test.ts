@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEFAULT_CONFIG, mergeConfig } from "../src/config.ts";
+import { DEFAULT_CONFIG, globalGuardConfigPath, mergeConfig } from "../src/config.ts";
+import { getEffectiveDisposition } from "../src/capabilities.ts";
 import { testConfig } from "./helpers.ts";
 
 describe("mergeConfig", () => {
@@ -198,5 +199,95 @@ describe("config provenance", () => {
     const afterAdd = mergeConfig(afterDelete, { classifier: { rules: { hard_deny: ["Data Exfiltration: back again."] } } }, "project.json");
     assert.deepEqual(afterAdd.provenance.rules.hard_deny["data exfiltration"], { source: "project.json" });
     assert.deepEqual(afterAdd.provenance.deletedRules.hard_deny, {});
+  });
+});
+
+describe("capabilities config", () => {
+  const globalPath = globalGuardConfigPath();
+  const projectPath = "/repo/.pi/guard.json";
+
+  it("parses custom classes, defaulting name to the id and disposition to ask", () => {
+    const config = mergeConfig(
+      testConfig(),
+      { capabilities: { classes: [{ id: "touches-customer-data", definition: "Customer records." }] } },
+      globalPath,
+    );
+    assert.deepEqual(config.capabilities.classes, [
+      { id: "touches-customer-data", name: "touches-customer-data", definition: "Customer records.", default: "ask" },
+    ]);
+    assert.equal(config.provenance.capabilityClasses["touches-customer-data"], globalPath);
+  });
+
+  it("skips invalid class entries with a diagnostic and still loads the rest", () => {
+    const config = mergeConfig(
+      testConfig(),
+      {
+        capabilities: {
+          classes: [
+            { id: "Not Kebab", definition: "x" },
+            { id: "read-project", definition: "shadowing a built-in" },
+            { id: "no-definition" },
+            { id: "bad-disposition", definition: "x", disposition: "maybe" },
+            { id: "good-one", definition: "A real class." },
+          ],
+        },
+      },
+      globalPath,
+    );
+    assert.deepEqual(config.capabilities.classes.map((entry) => entry.id), ["good-one"]);
+    const diagnostics = config.diagnostics.join("\n");
+    assert.match(diagnostics, /classes\[0\]: id must be kebab-case/);
+    assert.match(diagnostics, /classes\[1\]: "read-project" is a built-in class/);
+    assert.match(diagnostics, /classes\[2\]: definition must be a non-empty string/);
+    assert.match(diagnostics, /classes\[3\]: disposition must be/);
+  });
+
+  it("merges classes by id across layers, keeping position so the namer prefix does not shuffle", () => {
+    const base = mergeConfig(
+      testConfig(),
+      {
+        capabilities: {
+          classes: [
+            { id: "alpha", definition: "Global alpha." },
+            { id: "beta", definition: "Global beta." },
+          ],
+        },
+      },
+      globalPath,
+    );
+    const merged = mergeConfig(base, { capabilities: { classes: [{ id: "alpha", definition: "Project alpha." }] } }, projectPath);
+    assert.deepEqual(merged.capabilities.classes.map((entry) => entry.id), ["alpha", "beta"], "position is preserved");
+    assert.equal(merged.capabilities.classes[0]!.definition, "Project alpha.", "project wins per id");
+    assert.equal(merged.provenance.capabilityClasses.alpha, projectPath);
+    assert.equal(merged.provenance.capabilityClasses.beta, globalPath, "untouched classes keep their source");
+  });
+
+  it("accepts built-in definition overrides and rejects unknown keys", () => {
+    const config = mergeConfig(
+      testConfig(),
+      { capabilities: { definitions: { "read-project": "New wording.", "made-up": "nope" } } },
+      globalPath,
+    );
+    assert.deepEqual(config.capabilities.definitions, { "read-project": "New wording." });
+    assert.equal(config.provenance.capabilityDefinitions["read-project"], globalPath);
+    assert.match(config.diagnostics.join("\n"), /definitions\.made-up: not a built-in capability class/);
+  });
+
+  it("lets a config set a disposition for a class it defines in the same file", () => {
+    const config = mergeConfig(
+      testConfig(),
+      {
+        capabilities: { classes: [{ id: "touches-customer-data", definition: "Customer records." }] },
+        dispositions: { "touches-customer-data": "deny" },
+      },
+      globalPath,
+    );
+    assert.equal(config.dispositions["touches-customer-data"], "deny");
+    assert.equal(getEffectiveDisposition(config, undefined, "touches-customer-data").disposition, "deny");
+  });
+
+  it("still rejects a disposition for a class nobody declared", () => {
+    const config = mergeConfig(testConfig(), { dispositions: { "never-declared": "deny" } }, globalPath);
+    assert.match(config.diagnostics.join("\n"), /dispositions\.never-declared: unknown capability class/);
   });
 });

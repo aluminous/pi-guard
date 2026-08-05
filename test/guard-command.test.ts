@@ -3,7 +3,8 @@ import { describe, it } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { BUILTIN_CAPABILITY_IDS, type CapabilityId, type Disposition } from "../src/capabilities.ts";
 import { createGuardCommand } from "../src/commands/guard.ts";
-import { setRowDisposition } from "../src/dispositions.ts";
+import { addClass, setRowDisposition } from "../src/dispositions.ts";
+import { addSessionGuidance } from "../src/classifier.ts";
 import { createRuntimeState, type RuntimeState } from "../src/state.ts";
 import { DispositionPage } from "../src/tui/disposition-page.ts";
 import { testConfig } from "./helpers.ts";
@@ -41,6 +42,8 @@ interface FakeCtx {
   asked: Array<{ title: string; labels: string[] }>;
   notes: string[];
   widgets: Array<{ key: string; lines: string[] | undefined }>;
+  /** Titles passed to ctx.ui.input, in order. */
+  inputs: string[];
 }
 
 /** RPC-shaped context: select answers are matched against the offered labels by substring; undefined cancels. */
@@ -48,6 +51,7 @@ function rpcCtx(answers: Array<string | undefined> = []): FakeCtx {
   const asked: FakeCtx["asked"] = [];
   const notes: string[] = [];
   const widgets: FakeCtx["widgets"] = [];
+  const inputs: string[] = [];
   let next = 0;
   const ctx = {
     mode: "rpc",
@@ -63,9 +67,14 @@ function rpcCtx(answers: Array<string | undefined> = []): FakeCtx {
         const want = answers[next++];
         return want === undefined ? undefined : labels.find((label) => label.includes(want));
       },
+      // ctx.ui.input draws from the same scripted answer queue as select.
+      input: async (title: string) => {
+        inputs.push(title);
+        return answers[next++];
+      },
     },
   };
-  return { ctx: ctx as unknown as ExtensionContext, asked, notes, widgets };
+  return { ctx: ctx as unknown as ExtensionContext, asked, notes, widgets, inputs };
 }
 
 /** TUI-shaped context that runs the custom-component factory and resolves when the panel closes. */
@@ -226,6 +235,36 @@ describe("/guard policy routing", () => {
     assert.doesNotMatch(widgets.at(-1)?.lines?.join("\n") ?? "", /## Capability dispositions/);
   });
 
+  it("opens the page on the rules tab in the TUI, and switches instead of closing", async () => {
+    const { command, state } = makeDispositionCommand();
+    const tui = tuiCtx();
+    await command.handler("policy rules", tui.ctx);
+    const page = tui.panel();
+    assert.ok(page instanceof DispositionPage);
+    assert.equal(page.activeTab(), "rules", "/guard policy rules lands on the rules tab");
+
+    // The other tab is the same panel: it retargets rather than toggling shut.
+    await command.handler("policy", tui.ctx);
+    assert.equal(state.liveView?.kind, "policy", "the panel stayed open");
+    assert.equal(page.activeTab(), "dispositions");
+
+    await command.handler("policy rules", tui.ctx);
+    assert.equal(page.activeTab(), "rules");
+
+    // Re-invoking the tab already showing is the toggle.
+    await command.handler("policy rules", tui.ctx);
+    await settled();
+    assert.equal(state.liveView, undefined, "same-tab invocation closes the panel");
+  });
+
+  it("renders the mechanism report on the page's rules tab", async () => {
+    const { command } = makeDispositionCommand();
+    const tui = tuiCtx();
+    await command.handler("policy rules", tui.ctx);
+    const page = tui.panel() as DispositionPage;
+    assert.match(page.render(200).join("\n"), /Pi Guard Policy Rules/);
+  });
+
   it("warns on an unknown policy argument", async () => {
     const { command } = makeDispositionCommand();
     const { ctx, notes } = rpcCtx();
@@ -267,5 +306,114 @@ describe("/guard policy routing", () => {
     }
     assert.equal(errors.length, 1);
     assert.match(errors[0]!, /requires an interactive session/);
+  });
+});
+
+describe("/guard guide", () => {
+  it("adds guidance from inline text and reports the ring position", async () => {
+    const { command, state } = makeDispositionCommand();
+    const { ctx, notes } = rpcCtx();
+    await command.handler("guide staging deploys are expected here", ctx);
+
+    assert.deepEqual(state.classifier.sessionGuidance, ["User guidance: staging deploys are expected here"]);
+    assert.match(notes.at(-1)!, /^Guidance added for this session \(1\/12\)\.$/);
+  });
+
+  it("prompts when bare in an interactive session", async () => {
+    const { command, state } = makeDispositionCommand();
+    const { ctx, notes, inputs } = rpcCtx(["the deploy script is meant to push"]);
+    await command.handler("guide", ctx);
+
+    assert.deepEqual(inputs, ["Guidance for the guard this session"]);
+    assert.deepEqual(state.classifier.sessionGuidance, ["User guidance: the deploy script is meant to push"]);
+    assert.match(notes.at(-1)!, /Guidance added for this session \(1\/12\)\./);
+  });
+
+  it("is a no-op when the prompt is cancelled or empty", async () => {
+    const { command, state } = makeDispositionCommand();
+    const { ctx } = rpcCtx([undefined]);
+    await command.handler("guide", ctx);
+    assert.equal(state.classifier.sessionGuidance, undefined);
+
+    const empty = rpcCtx(["   "]);
+    await command.handler("guide", empty.ctx);
+    assert.equal(state.classifier.sessionGuidance, undefined);
+  });
+
+  it("shares the ring and the cap with approval-comment guidance", async () => {
+    const { command, state } = makeDispositionCommand();
+    const { ctx, notes } = rpcCtx();
+    addSessionGuidance(state.classifier, "allowed", "bash", "npm test", "tests are fine");
+    await command.handler("guide and so are builds", ctx);
+
+    assert.equal(state.classifier.sessionGuidance!.length, 2);
+    assert.match(state.classifier.sessionGuidance![0]!, /^User allowed bash/);
+    assert.match(state.classifier.sessionGuidance![1]!, /^User guidance: and so are builds/);
+    assert.match(notes.at(-1)!, /\(2\/12\)/);
+
+    for (let i = 0; i < 20; i++) await command.handler(`guide entry ${i}`, ctx);
+    assert.equal(state.classifier.sessionGuidance!.length, 12, "the ring is capped");
+    assert.match(notes.at(-1)!, /\(12\/12\)/);
+  });
+
+  it("clears every entry and says how many went", async () => {
+    const { command, state } = makeDispositionCommand();
+    const { ctx, notes } = rpcCtx();
+    await command.handler("guide one", ctx);
+    await command.handler("guide two", ctx);
+    await command.handler("guide clear", ctx);
+
+    assert.equal(state.classifier.sessionGuidance, undefined);
+    assert.match(notes.at(-1)!, /^Cleared 2 guidance entries\.$/);
+
+    await command.handler("guide clear", ctx);
+    assert.match(notes.at(-1)!, /^No session guidance to clear\.$/);
+  });
+
+  it("warns instead of prompting when bare and headless", async () => {
+    const { command, state } = makeDispositionCommand();
+    const notes: string[] = [];
+    const logs: string[] = [];
+    const ctx = {
+      mode: "print",
+      hasUI: false,
+      isIdle: () => true,
+      ui: { notify: (message: string) => notes.push(message), setStatus: () => {}, theme: { fg: (_n: string, t: string) => t } },
+    } as unknown as ExtensionContext;
+    const original = console.log;
+    console.log = (message: string) => void logs.push(message);
+    try {
+      await command.handler("guide", ctx);
+    } finally {
+      console.log = original;
+    }
+    assert.match(notes.at(-1)!, /^Usage: \/guard guide <text>$/);
+    assert.equal(state.classifier.sessionGuidance, undefined);
+  });
+});
+
+describe("/guard set with a custom class", () => {
+  it("accepts a class added this session and completes it", async () => {
+    const { command, state } = makeDispositionCommand();
+    const { ctx, notes } = rpcCtx();
+    addClass(state.config, state, { id: "touches-customer-data", definition: "Customer records." });
+
+    await command.handler("set touches-customer-data deny", ctx);
+    assert.match(notes.at(-1)!, /touches-customer-data → deny for this session/);
+    assert.equal(state.capabilities.overrides["touches-customer-data"], "deny");
+
+    await command.handler("set touches-customer-data", ctx);
+    assert.match(notes.at(-1)!, /touches-customer-data: deny — this session/);
+
+    const completions = command.getArgumentCompletions("set touches");
+    assert.deepEqual(completions?.map((item) => item.label), ["touches-customer-data"]);
+  });
+
+  it("still rejects an id no layer declares, listing the registry", async () => {
+    const { command } = makeDispositionCommand();
+    const { ctx, notes } = rpcCtx();
+    await command.handler("set invented-class deny", ctx);
+    assert.match(notes.at(-1)!, /Unknown capability class: invented-class/);
+    assert.match(notes.at(-1)!, /read-project/, "the message lists what is known");
   });
 });

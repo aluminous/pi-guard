@@ -6,8 +6,14 @@ import { describe, it } from "node:test";
 import {
   BUILTIN_CAPABILITY_CLASSES,
   BUILTIN_CAPABILITY_IDS,
-  capabilityRegistry,
+  addSessionClass,
   applyReadOnlyPreset,
+  capabilityDefinitionsForPrompt,
+  capabilityRegistry,
+  deleteSessionClass,
+  recordCapabilityHits,
+  setSessionDefinition,
+  type CapabilityClass,
   capabilityStats,
   clearSessionDisposition,
   createCapabilityState,
@@ -149,5 +155,100 @@ describe("per-class stats", () => {
     assert.equal(capabilityStats(state, "modify-project").screenTripped, 1);
     assert.equal(capabilityStats(state, "modify-project").screenClean, 1);
     assert.deepEqual(usedCapabilityStats(state, capabilityRegistry(undefined, state)).map((entry) => entry.id), ["modify-project", "persistence"]);
+  });
+});
+
+describe("capability registry", () => {
+  const customConfig = (classes: CapabilityClass[], definitions: Record<string, string> = {}) =>
+    testConfig((config) => {
+      config.capabilities = { classes, definitions };
+    });
+
+  const touchesData: CapabilityClass = {
+    id: "touches-customer-data",
+    name: "Touches customer data",
+    definition: "Reading or writing records in the customer database.",
+    default: "ask",
+  };
+
+  it("orders built-ins first, then config classes, then session additions", () => {
+    const state = createCapabilityState();
+    addSessionClass(state, { id: "session-only", name: "Session only", definition: "Added this session.", default: "ask" });
+    const registry = capabilityRegistry(customConfig([touchesData]), state);
+    assert.deepEqual(registry.slice(0, 12).map((entry) => entry.id), [...BUILTIN_CAPABILITY_IDS]);
+    assert.deepEqual(registry.slice(12).map((entry) => entry.id), ["touches-customer-data", "session-only"]);
+  });
+
+  it("layers definition edits session over config over built-in", () => {
+    const config = customConfig([], { "read-project": "Config wording." });
+    assert.equal(capabilityRegistry(config, undefined).find((e) => e.id === "read-project")!.definition, "Config wording.");
+
+    const state = createCapabilityState();
+    setSessionDefinition(state, "read-project", "Session wording.");
+    assert.equal(capabilityRegistry(config, state).find((e) => e.id === "read-project")!.definition, "Session wording.");
+    // The built-in text is untouched: the registry layers, it does not mutate.
+    assert.match(BUILTIN_CAPABILITY_CLASSES.find((e) => e.id === "read-project")!.definition, /Reading, listing, or searching/);
+  });
+
+  it("drops config classes the session deleted, and forgets session ones outright", () => {
+    const state = createCapabilityState();
+    addSessionClass(state, { id: "session-only", name: "Session only", definition: "Added.", default: "ask" });
+    deleteSessionClass(state, "session-only");
+    deleteSessionClass(state, "touches-customer-data");
+    const ids = capabilityRegistry(customConfig([touchesData]), state).map((entry) => entry.id);
+    assert.equal(ids.includes("session-only"), false);
+    assert.equal(ids.includes("touches-customer-data"), false);
+    assert.deepEqual(state.deletedCustom, ["touches-customer-data"], "only the persisted one needs removing on save");
+  });
+
+  it("is byte-stable while the registry is unchanged, and moves when it is not", () => {
+    const config = customConfig([touchesData]);
+    const a = JSON.stringify(capabilityDefinitionsForPrompt(capabilityRegistry(config, createCapabilityState())));
+    const b = JSON.stringify(capabilityDefinitionsForPrompt(capabilityRegistry(config, createCapabilityState())));
+    assert.equal(a, b, "same registry, same bytes — the cacheable prefix holds");
+
+    const edited = createCapabilityState();
+    setSessionDefinition(edited, "read-project", "Changed.");
+    assert.notEqual(a, JSON.stringify(capabilityDefinitionsForPrompt(capabilityRegistry(config, edited))));
+  });
+
+  it("resolves a custom class to its own default, and a deleted one to ask", () => {
+    const config = customConfig([{ ...touchesData, default: "deny" }]);
+    const state = createCapabilityState();
+    assert.equal(getEffectiveDisposition(config, state, "touches-customer-data").disposition, "deny");
+    assert.equal(getEffectiveDisposition(config, state, "touches-customer-data").scope, "default");
+
+    // A session override still wins while the class exists.
+    setSessionDisposition(state, "touches-customer-data", "allow");
+    assert.equal(getEffectiveDisposition(config, state, "touches-customer-data").disposition, "allow");
+
+    // Once deleted, an in-flight label resolves to ask rather than the stale override.
+    deleteSessionClass(state, "touches-customer-data");
+    const orphaned = getEffectiveDisposition(config, state, "touches-customer-data");
+    assert.equal(orphaned.disposition, "ask");
+    assert.equal(orphaned.scope, "default");
+  });
+
+  it("resolves an id no layer has ever heard of to ask", () => {
+    assert.equal(getEffectiveDisposition(testConfig(), createCapabilityState(), "invented-by-the-model").disposition, "ask");
+  });
+
+  it("severity-maxes custom classes alongside built-ins", () => {
+    const config = customConfig([{ ...touchesData, default: "deny" }]);
+    const resolution = resolveCapabilities(config, createCapabilityState(), ["read-project", "touches-customer-data"]);
+    assert.equal(resolution.disposition, "deny");
+    assert.equal(resolution.decidedBy.id, "touches-customer-data");
+  });
+
+  it("keeps stats for classes that outlived their definition, at the end of the list", () => {
+    const config = customConfig([touchesData]);
+    const state = createCapabilityState();
+    recordCapabilityHits(state, ["touches-customer-data", "read-project"]);
+    deleteSessionClass(state, "touches-customer-data");
+    assert.deepEqual(
+      usedCapabilityStats(state, capabilityRegistry(config, state)).map((entry) => entry.id),
+      ["read-project", "touches-customer-data"],
+      "the hits happened, so they stay visible after the class is gone",
+    );
   });
 });

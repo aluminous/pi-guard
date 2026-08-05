@@ -37,7 +37,8 @@ const keybindings = {
       (keyId === "tui.select.up" && keyData === "<up>") ||
       (keyId === "tui.select.down" && keyData === "<down>") ||
       (keyId === "tui.select.confirm" && keyData === "<enter>") ||
-      (keyId === "tui.select.cancel" && keyData === "<esc>")
+      (keyId === "tui.select.cancel" && keyData === "<esc>") ||
+      (keyId === "tui.input.tab" && keyData === "\t")
     );
   },
 };
@@ -45,6 +46,7 @@ const keybindings = {
 const LEFT = "\x1b[D";
 const RIGHT = "\x1b[C";
 const CTRL_S = "\x13";
+const TAB = "\t";
 
 /**
  * Persistence spy in the shape saveDispositions writes through. Disposition
@@ -71,7 +73,13 @@ function openPage(state: RuntimeState, config: ResolvedGuardConfig, initialTab?:
   const persisted: Array<[CapabilityId, Disposition | undefined]> = [];
   const closes: undefined[] = [];
   const notes: Array<{ message: string; level?: string }> = [];
-  const policy = ["# Pi Guard Policy Rules", "## Filesystem", "  Allow write:", "  • /repo"];
+  // Long enough to scroll: the rules pane shows terminal.rows - 13 lines.
+  const policy = [
+    "# Pi Guard Policy Rules",
+    "## Filesystem",
+    "  Allow write:",
+    ...Array.from({ length: 40 }, (_, i) => `  • /repo/path-${i}`),
+  ];
   const page = new DispositionPage({
     tui,
     theme,
@@ -313,5 +321,277 @@ describe("DispositionPage", () => {
     page.handleInput(RIGHT);
     assert.match(line("modify-project"), /judge → deny\*/);
     assert.deepEqual(state.capabilities.overrides, { "modify-project": "judge" });
+  });
+});
+
+describe("class editing at session scope", () => {
+  it("adds a class the registry and the table both see immediately", () => {
+    const config = testConfig();
+    const state = createRuntimeState();
+    assert.equal(addClass(config, state, { id: "touches-customer-data", definition: "Customer records." }), undefined);
+
+    const row = dispositionRows(config, state).find((entry) => entry.id === "touches-customer-data");
+    assert.ok(row, "the new class has a table row");
+    assert.equal(row.value, "ask", "new classes default to ask");
+    assert.equal(row.sessionNew, true);
+    assert.equal(row.builtin, false);
+    assert.equal(hasUnsavedChanges(state), true);
+  });
+
+  it("rejects malformed, duplicate, and built-in-shadowing ids", () => {
+    const config = testConfig();
+    const state = createRuntimeState();
+    assert.match(addClass(config, state, { id: "Not Kebab", definition: "x" })!, /kebab-case/);
+    assert.match(addClass(config, state, { id: "read-project", definition: "x" })!, /built-in class/);
+    assert.match(addClass(config, state, { id: "fine-id", definition: "  " })!, /definition is required/);
+    assert.equal(addClass(config, state, { id: "fine-id", definition: "Real." }), undefined);
+    assert.match(addClass(config, state, { id: "fine-id", definition: "Again." })!, /already exists/);
+  });
+
+  it("edits any class definition, built-ins included, without touching the shipped text", () => {
+    const config = testConfig();
+    const state = createRuntimeState();
+    assert.equal(editClassDefinition(config, state, "read-project", "Reads, rephrased."), undefined);
+    const row = dispositionRow(config, state, "read-project");
+    assert.equal(row.fullDefinition, "Reads, rephrased.");
+    assert.equal(row.sessionEdited, true);
+    assert.equal(row.builtin, true);
+    assert.match(editClassDefinition(config, state, "not-a-class", "x")!, /Unknown capability class/);
+  });
+
+  it("refuses to delete a built-in and points at the alternatives", () => {
+    const state = createRuntimeState();
+    assert.match(deleteClass(state, "credentials")!, /built-in and cannot be deleted/);
+    assert.match(deleteClass(state, "credentials")!, /set it to deny, or edit its definition/);
+  });
+
+  it("deletes a custom class and drops its row", () => {
+    const config = testConfig();
+    const state = createRuntimeState();
+    addClass(config, state, { id: "touches-customer-data", definition: "Customer records." });
+    assert.equal(deleteClass(state, "touches-customer-data"), undefined);
+    assert.equal(dispositionRows(config, state).some((row) => row.id === "touches-customer-data"), false);
+  });
+});
+
+describe("saveDispositions with class changes", () => {
+  it("persists adds, edits, and deletions alongside disposition rows", () => {
+    const config = mergeConfig(
+      testConfig(),
+      { capabilities: { classes: [{ id: "legacy-class", definition: "On its way out." }] } },
+      globalGuardConfigPath(),
+    );
+    const state = createRuntimeState();
+    addClass(config, state, { id: "touches-customer-data", definition: "Customer records." });
+    editClassDefinition(config, state, "read-project", "Reads, rephrased.");
+    deleteClass(state, "legacy-class");
+    setRowDisposition(config, state, "modify-project", "ask");
+
+    const rows: Array<[CapabilityId, Disposition | undefined]> = [];
+    const persistence = spyPersistence(rows);
+    const result = saveDispositions(config, state, persistence);
+
+    assert.deepEqual(result.added, ["touches-customer-data"]);
+    assert.deepEqual(result.edited, ["read-project"]);
+    assert.deepEqual(result.removed, ["legacy-class"]);
+    assert.deepEqual(result.saved, ["modify-project"]);
+
+    assert.deepEqual(persistence.classes, [
+      ["touches-customer-data", { id: "touches-customer-data", definition: "Customer records.", disposition: "ask" }],
+      ["legacy-class", undefined],
+    ]);
+    assert.deepEqual(persistence.definitions, [["read-project", "Reads, rephrased."]]);
+    assert.deepEqual(rows, [["modify-project", "ask"]]);
+
+    // The session layer is empty afterwards, so no marker survives the save.
+    assert.equal(hasUnsavedChanges(state), false);
+    const after = dispositionRows(config, state);
+    const added = after.find((row) => row.id === "touches-customer-data")!;
+    assert.equal(added.sessionNew, false, "a saved class is no longer session-new");
+    assert.equal(added.value, "ask", "and its effective value does not move");
+    assert.equal(after.some((row) => row.id === "legacy-class"), false, "the deletion stuck");
+    assert.equal(after.find((row) => row.id === "read-project")!.sessionEdited, false);
+  });
+
+  it("rewrites a persisted custom class in place when its definition is edited", () => {
+    const config = mergeConfig(
+      testConfig(),
+      { capabilities: { classes: [{ id: "touches-customer-data", definition: "Old wording." }] } },
+      globalGuardConfigPath(),
+    );
+    const state = createRuntimeState();
+    editClassDefinition(config, state, "touches-customer-data", "New wording.");
+    const persistence = spyPersistence([]);
+    const result = saveDispositions(config, state, persistence);
+
+    assert.deepEqual(result.edited, ["touches-customer-data"]);
+    assert.deepEqual(persistence.definitions, [], "custom classes store the definition inline, not as an override");
+    assert.deepEqual(persistence.classes, [
+      ["touches-customer-data", { id: "touches-customer-data", definition: "New wording.", disposition: "ask" }],
+    ]);
+  });
+});
+
+describe("DispositionPage tabs", () => {
+  it("renders both tab names with the active one accented", () => {
+    const { text } = openPage(createRuntimeState(), testConfig());
+    assert.match(text(), /<muted>Tab:<\/muted> <accent>dispositions<\/accent><muted> \| <\/muted><muted>rules<\/muted>/);
+  });
+
+  it("cycles tabs with tui.input.tab and renders formatGuardPolicy on the rules tab", () => {
+    const { page, text } = openPage(createRuntimeState(), testConfig());
+    assert.equal(page.activeTab(), "dispositions");
+    assert.match(text(), /read-project/);
+
+    page.handleInput(TAB);
+    assert.equal(page.activeTab(), "rules");
+    const rules = text();
+    assert.match(rules, /Pi Guard Policy Rules/, "the rules tab shows the mechanism report");
+    assert.match(rules, /Filesystem/);
+    assert.doesNotMatch(rules, /↑↓ row · ←→\/Enter cycle/, "the table's key hints are gone");
+    assert.match(rules, /Tab switches view/);
+
+    page.handleInput(TAB);
+    assert.equal(page.activeTab(), "dispositions", "two presses wrap back");
+  });
+
+  it("opens directly on the rules tab when asked", () => {
+    const { page, text } = openPage(createRuntimeState(), testConfig(), "rules");
+    assert.equal(page.activeTab(), "rules");
+    assert.match(text(), /Pi Guard Policy Rules/);
+  });
+
+  it("scrolls the rules tab with up and down rather than moving a selection", () => {
+    const { page, text } = openPage(createRuntimeState(), testConfig(), "rules");
+    const before = text();
+    page.handleInput("<down>");
+    assert.notEqual(text(), before, "down scrolls the report");
+    page.handleInput("<up>");
+    assert.equal(text(), before, "and up scrolls back");
+  });
+
+  it("closes from either tab", () => {
+    const { page, closes } = openPage(createRuntimeState(), testConfig(), "rules");
+    page.handleInput("<esc>");
+    assert.deepEqual(closes, [undefined]);
+  });
+});
+
+describe("DispositionPage class editing", () => {
+  it("adds a class through the form and tags the new row", () => {
+    const state = createRuntimeState();
+    const { page, text, notes } = openPage(state, testConfig());
+    page.handleInput("a");
+    assert.match(text(), /New capability class/);
+    assert.match(text(), /Enter or Ctrl\+S commits \(session scope\) · Esc cancels/);
+
+    type(page, "touches-customer-data");
+    page.handleInput(TAB);
+    type(page, "Customer records.");
+    page.handleInput("<enter>");
+
+    assert.match(text(), /touches-customer-data/);
+    assert.match(text(), /<warning> \(new\)<\/warning>/);
+    assert.equal(state.capabilities.customClasses.length, 1);
+    assert.match(notes.at(-1)!.message, /touches-customer-data added for this session, default ask/);
+  });
+
+  it("reaches the same form from Enter on the add row", () => {
+    const { page, text } = openPage(createRuntimeState(), testConfig());
+    for (let i = 0; i < 12; i++) page.handleInput("<down>");
+    assert.equal(page.selectedId(), undefined, "the add row is past the last class");
+    page.handleInput("<enter>");
+    assert.match(text(), /New capability class/);
+  });
+
+  it("keeps the user in the form on a validation error", () => {
+    const state = createRuntimeState();
+    const { page, text } = openPage(state, testConfig());
+    page.handleInput("a");
+    type(page, "read-project");
+    page.handleInput(TAB);
+    type(page, "Shadowing a built-in.");
+    page.handleInput("<enter>");
+
+    assert.match(text(), /New capability class/, "still in the form");
+    assert.match(text(), /<error>.*built-in class/);
+    assert.equal(state.capabilities.customClasses.length, 0);
+  });
+
+  it("edits a definition with e, prefilled with the current text", () => {
+    const state = createRuntimeState();
+    const config = testConfig();
+    const { page, text } = openPage(state, config);
+    page.handleInput("e");
+    assert.match(text(), /Edit read-project/);
+    // The field is seeded with the current definition and the caret sits after
+    // it, so the Input has scrolled to show the tail rather than the head.
+    assert.match(text(), /is credentials instead\./, "the field starts from the current definition");
+
+    // Clear the prefill, then type the replacement.
+    for (let i = 0; i < 400; i++) page.handleInput("\x7f");
+    type(page, "Reads, rephrased.");
+    page.handleInput(CTRL_S);
+
+    assert.equal(dispositionRow(config, state, "read-project").fullDefinition, "Reads, rephrased.");
+    assert.match(text(), /<warning> \(edited\)<\/warning>/);
+  });
+
+  it("cancels a form with Esc, leaving the session untouched", () => {
+    const state = createRuntimeState();
+    const { page, text } = openPage(state, testConfig());
+    page.handleInput("a");
+    type(page, "abandoned");
+    page.handleInput("<esc>");
+    assert.match(text(), /↑↓ row/, "back in list mode");
+    assert.equal(state.capabilities.customClasses.length, 0);
+    assert.equal(hasUnsavedChanges(state), false);
+  });
+
+  it("deletes a custom class with d and refuses on a built-in", () => {
+    const state = createRuntimeState();
+    const config = testConfig();
+    const { page, text, notes } = openPage(state, config);
+
+    page.handleInput("d");
+    assert.match(notes.at(-1)!.message, /read-project is built-in and cannot be deleted/);
+    assert.equal(notes.at(-1)!.level, "warning");
+
+    addClass(config, state, { id: "touches-customer-data", definition: "Customer records." });
+    page.refresh();
+    for (let i = 0; i < 12; i++) page.handleInput("<down>");
+    assert.equal(page.selectedId(), "touches-customer-data");
+    page.handleInput("d");
+    assert.doesNotMatch(text(), /touches-customer-data/, "the row disappears");
+    assert.match(notes.at(-1)!.message, /touches-customer-data removed for this session/);
+  });
+
+  it("routes Ctrl+S to the form in form mode and to the save in list mode", () => {
+    const state = createRuntimeState();
+    const { page, persisted } = openPage(state, testConfig());
+    page.handleInput("a");
+    type(page, "touches-customer-data");
+    page.handleInput(TAB);
+    type(page, "Customer records.");
+    page.handleInput(CTRL_S);
+    assert.deepEqual(persisted, [], "Ctrl+S committed the form, it did not persist");
+    assert.equal(state.capabilities.customClasses.length, 1);
+
+    setRowDisposition(testConfig(), state, "modify-project", "deny");
+    page.handleInput(CTRL_S);
+    assert.deepEqual(persisted, [["modify-project", "deny"]], "in list mode it persists");
+  });
+
+  it("does not treat letter keys as commands while a form is open", () => {
+    const state = createRuntimeState();
+    const { page, text } = openPage(state, testConfig());
+    page.handleInput("a");
+    // "d" and "e" are plain characters inside the id field, not delete/edit.
+    type(page, "deed");
+    assert.match(text(), /New capability class/);
+    page.handleInput(TAB);
+    type(page, "Definition.");
+    page.handleInput("<enter>");
+    assert.deepEqual(state.capabilities.customClasses.map((entry) => entry.id), ["deed"]);
   });
 });
