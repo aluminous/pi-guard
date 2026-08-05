@@ -13,6 +13,7 @@ import {
   type CapabilityOutcome,
   type CapabilityResolution,
 } from "./capabilities.ts";
+import { classifierFailureContext, classifyClassifierFailure, describeClassifierFailure } from "./classifier-protocol.ts";
 import {
   addSessionGuidance,
   classifierEnabled,
@@ -27,7 +28,6 @@ import {
   type JudgeResult,
   type NamerResult,
 } from "./classifier.ts";
-import { classifierFailureContext, classifyClassifierFailure, describeClassifierFailure } from "./classifier-protocol.ts";
 import { allowlistCapabilities, explainCommandAllowlist } from "./command-allowlist.ts";
 import { configSourceLabel, type ResolvedRailConfig } from "./config.ts";
 import { screenToolCall, type ContentScreenVerdict } from "./content-screen.ts";
@@ -456,6 +456,7 @@ function handleNamerFailure(
   // failed" is exactly the report nobody can act on.
   const reason = describeClassifierFailure(error, { model });
   const failure = classifyClassifierFailure(error);
+  const attempted = classifierFailureContext(error);
   state.classifier.lastError = reason;
   recordClassifierError(state, event.toolName, reason, failure.category);
   addTraceStage(trace, "namer", "error", `naming failed: ${reason}`);
@@ -464,9 +465,9 @@ function handleNamerFailure(
     tool: event.toolName,
     reason,
     failureKind: failure.category,
-    attempts: classifierFailureContext(error)?.attempts,
+    attempts: attempted?.attempts,
     latencyMs,
-    model: classifierFailureContext(error)?.model ?? model,
+    model: attempted?.model ?? model,
   });
   if (isClassifierModelUnavailable(error)) {
     ctx.ui.notify(`Rail classifier unavailable: ${reason}. Stopping this turn for user intervention.`, "error");
@@ -706,6 +707,7 @@ async function runJudgeStage(
     // stats.errors entirely.
     const reason = describeClassifierFailure(error, { model });
     const failure = classifyClassifierFailure(error);
+    const attempted = classifierFailureContext(error);
     state.classifier.lastError = reason;
     recordClassifierError(state, event.toolName, `judge: ${reason}`, failure.category);
     addTraceStage(trace, "judge", "error", `judge failed: ${reason} — falling back to ask`);
@@ -714,9 +716,9 @@ async function runJudgeStage(
       tool: event.toolName,
       reason: `judge: ${reason}`,
       failureKind: failure.category,
-      attempts: classifierFailureContext(error)?.attempts,
+      attempts: attempted?.attempts,
       latencyMs: Math.round(performance.now() - startedAt),
-      model: classifierFailureContext(error)?.model ?? model,
+      model: attempted?.model ?? model,
     });
     return { disposition: "ask", fallbackReason: `the escalation reviewer could not run (${reason})` };
   }
