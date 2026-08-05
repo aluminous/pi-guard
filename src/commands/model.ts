@@ -91,11 +91,14 @@ export async function runModelCommand(args: string, ctx: ExtensionContext, state
   const selected = resolveClassifierModel(ctx, config, state.classifier);
   const available = ctx.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`).slice(0, 30);
   show([
-    `Classifier: ${classifierEnabled(config, state.classifier) ? "enabled" : "disabled"}`,
-    `Configured model: ${state.classifier.modelOverride ?? config.classifier.model}`,
-    `Resolved model: ${selected ? `${selected.provider}/${selected.id}` : "(none)"}`,
+    `Reviewers: ${classifierEnabled(config, state.classifier) ? "enabled" : "disabled"}`,
+    `Configured namer model: ${state.classifier.modelOverride ?? config.classifier.model}`,
+    `Resolved namer model: ${selected ? `${selected.provider}/${selected.id}` : "(none)"}`,
+    `Judge model: ${config.classifier.judgeModel}`,
     `Persistent config: ${getPersistentConfigPath()}`,
-    state.classifier.lastDecision ? `Last decision: ${state.classifier.lastDecision.decision} ${state.classifier.lastDecision.reason}` : undefined,
+    state.classifier.lastDecision
+      ? `Last decision: ${state.classifier.lastDecision.decision} (${state.classifier.lastDecision.labels.join(", ")}) ${state.classifier.lastDecision.reason}`
+      : undefined,
     state.classifier.lastError ? `Last error: ${state.classifier.lastError}` : undefined,
     "",
     "Available models:",

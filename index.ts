@@ -212,7 +212,7 @@ export default function (pi: ExtensionAPI) {
   const guardCommand = createGuardCommand({ state, enableGuard, disableGuard, runGuardSmoke, runCritique });
 
   pi.registerCommand("guard", {
-    description: "Pi Guard control panel; or: status|on|off|off session|readonly|model|smoke|critique",
+    description: "Pi Guard control panel; or: status|policy|explain|test|why|on|off|off session|readonly|model|smoke|critique",
     getArgumentCompletions: guardCommand.getArgumentCompletions,
     handler: guardCommand.handler,
   });

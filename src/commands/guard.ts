@@ -21,7 +21,7 @@ export interface GuardCommandDeps {
 
 const SUBCOMMANDS: Array<{ value: string; description: string }> = [
   { value: "status", description: "Toggle the live status popup" },
-  { value: "policy", description: "Show the resolved policy and classifier rules" },
+  { value: "policy", description: "Show the capability disposition table and the resolved policy" },
   { value: "explain", description: "Show the newest decision trace (explain <n> for older ones)" },
   { value: "test", description: "Dry-run a shell command through the guard without executing it" },
   { value: "test read", description: "Dry-run a file read through the guard (test read <path>)" },
@@ -31,9 +31,9 @@ const SUBCOMMANDS: Array<{ value: string; description: string }> = [
   { value: "off", description: "Disable for the next agent turn, then re-enable" },
   { value: "off session", description: "Disable until the session ends (unguarded!)" },
   { value: "readonly", description: "Toggle read-only mode: write/edit blocked, bash restricted" },
-  { value: "model", description: "Choose the classifier model (auto|current|off|provider/model)" },
-  { value: "smoke", description: "Run sandbox and classifier smoke tests" },
-  { value: "critique", description: "Critique the classifier rules with a model" },
+  { value: "model", description: "Choose the namer model (auto|current|off|provider/model)" },
+  { value: "smoke", description: "Run sandbox and namer smoke tests" },
+  { value: "critique", description: "Critique the capability classes and content screen with a model" },
 ];
 
 export function createGuardCommand(deps: GuardCommandDeps) {
@@ -106,7 +106,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     const s = state.stats;
     return [
       `${state.backend?.name ?? config.backend} · ${health} · ${networkPolicyLabel(config)} · ${classifier}`,
-      `R${s.ruleHits} rule hits · C${s.classifierHits} reviews · D${s.classifierDenials} denials · ${s.blocked} blocked · ${s.errors} errors · ↑${s.classifierInputTokens} ↓${s.classifierOutputTokens} tokens`,
+      `R${s.ruleHits} deterministic · C${s.classifierHits} reviews · D${s.classifierDenials} denials · ${s.blocked} blocked · ${s.errors} errors · ↑${s.classifierInputTokens} ↓${s.classifierOutputTokens} tokens`,
     ];
   }
 
@@ -151,12 +151,12 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     }
     items.push(
       { value: "readonly", label: `Read-only mode: ${state.readOnly ? "on" : "off"}`, searchText: "readonly read only ro toggle mode", description: "Block write/edit and restrict bash to read-only commands" },
-      { value: "model", label: "Classifier model…", searchText: "model classifier auto choose select", description: "Pick auto, the current model, a specific model, or turn review off" },
+      { value: "model", label: "Namer model…", searchText: "model namer classifier auto choose select", description: "Pick auto, the current model, a specific model, or turn review off" },
       { value: "statusline", label: "Statusline visibility…", searchText: "statusline status line visibility always never auto hide show", description: "Show the guard statusline always, never, or only when notable" },
-      { value: "smoke", label: "Run smoke tests", searchText: "smoke test verify sandbox classifier", description: "Verify sandboxed execution and classifier decisions end to end" },
-      { value: "critique", label: "Critique rules", searchText: "critique rules review improve", description: "Have Pi's current model review the classifier rules for gaps" },
+      { value: "smoke", label: "Run smoke tests", searchText: "smoke test verify sandbox namer classifier", description: "Verify sandboxed execution and capability naming end to end" },
+      { value: "critique", label: "Critique capabilities", searchText: "critique capabilities classes screen rules review improve", description: "Have Pi's current model review the class definitions, table, and screen" },
       { value: "status", label: "Status popup", searchText: "status report details approvals live popup overlay", description: "Live status popup: decisions, approvals, guidance — updates while the agent works" },
-      { value: "policy", label: "Policy view", searchText: "policy rules classifier allow deny filesystem network show", description: "Resolved policy: filesystem/network/env rules and classifier rule lists" },
+      { value: "policy", label: "Policy view", searchText: "policy dispositions capabilities rules allow deny ask judge filesystem network show", description: "Capability disposition table, then filesystem/network/env rules" },
       { value: "explain", label: "Explain last decision", searchText: "explain trace decision why last chain stages", description: "Show the decision chain the guard ran for the most recent tool call" },
     );
 
