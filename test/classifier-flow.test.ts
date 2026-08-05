@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai/compat";
-import { ClassifierModelUnavailableError } from "../src/classifier-protocol.ts";
+import { ClassifierModelUnavailableError, describeClassifierFailure } from "../src/classifier-protocol.ts";
 import { runJudging, runNaming, type ClassifierIO, type CompleteFn } from "../src/classifier.ts";
 import { testConfig } from "./helpers.ts";
 
@@ -136,6 +136,54 @@ describe("retry behavior", () => {
     assert.equal(calls.length, 3);
     assert.deepEqual(sleeps, [250, 500]);
     assert.equal(notifications.filter((n) => n.includes("Retrying")).length, 2);
+  });
+
+  it("notifies once per failed attempt, with the kind, the cause, and the backoff", async () => {
+    const buried = new TypeError("fetch failed", { cause: Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }) });
+    const { io, notifications } = makeIO([buried, NAME_READ]);
+    await name(io);
+    assert.deepEqual(notifications, [
+      "Rail classifier attempt 1/5 failed (connection: ECONNRESET): fetch failed ← read ECONNRESET. Retrying in 250ms.",
+    ]);
+  });
+
+  it("names the timeout budget on a timed-out attempt", async () => {
+    const { io, notifications } = makeIO(["hang", NAME_READ]);
+    await name(io, { timeoutMs: 30 });
+    assert.equal(notifications.length, 1);
+    assert.match(notifications[0]!, /^Rail classifier attempt 1\/5 failed \(timeout after 30ms\): reviewer timed out after 30ms\. Retrying in 250ms\.$/);
+  });
+
+  it("retries provider 5xx instead of giving up on one attempt", async () => {
+    const { io, calls, notifications } = makeIO([{ errorMessage: "503 Service Unavailable" }, { errorMessage: "Overloaded" }, NAME_READ]);
+    const result = await name(io);
+    assert.deepEqual(result.labels, ["read-project"]);
+    assert.equal(calls.length, 3);
+    assert.ok(notifications[0]?.includes("(server error (503))"), notifications[0]);
+    assert.ok(notifications[1]?.includes("(server error)"), notifications[1]);
+  });
+
+  it("tags a terminal failure with the attempts it burned and the model it called", async () => {
+    const failures = Array.from({ length: 5 }, () => new Error("503 Service Unavailable"));
+    const { io } = makeIO(failures);
+    await assert.rejects(
+      () => name(io),
+      (error: unknown) => {
+        assert.equal(describeClassifierFailure(error), "server error (503) on test/fake-model after 5 attempts: 503 Service Unavailable");
+        return true;
+      },
+    );
+  });
+
+  it("tags a protocol violation with the same attempt context", async () => {
+    const { io } = makeIO(["not json at all"]);
+    await assert.rejects(
+      () => name(io),
+      (error: unknown) => {
+        assert.equal(describeClassifierFailure(error), "invalid response on test/fake-model after 1 attempt: reviewer did not return JSON");
+        return true;
+      },
+    );
   });
 
   it("does not retry non-transport errors", async () => {

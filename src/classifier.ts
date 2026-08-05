@@ -21,6 +21,7 @@ import {
   parseNamerResult,
   projectToolCall,
   retryFailureKind,
+  tagClassifierFailure,
   type ClassifierTokenUsage,
   type RailDecision,
   type JudgeResult,
@@ -217,7 +218,7 @@ async function completeTextOnce(params: {
       { apiKey: auth.apiKey, headers: auth.headers, signal: controller.signal },
     );
     if (response.stopReason === "aborted") {
-      if (didTimeout) throw new ClassifierRetryableError(`reviewer timed out after ${params.timeoutMs}ms`);
+      if (didTimeout) throw new ClassifierRetryableError(`reviewer timed out after ${params.timeoutMs}ms`, params.timeoutMs);
       throw new Error("classifier review aborted");
     }
     if (response.stopReason === "error") {
@@ -230,7 +231,7 @@ async function completeTextOnce(params: {
       usage: response.usage,
     };
   } catch (error) {
-    if (didTimeout) throw new ClassifierRetryableError(`reviewer timed out after ${params.timeoutMs}ms`);
+    if (didTimeout) throw new ClassifierRetryableError(`reviewer timed out after ${params.timeoutMs}ms`, params.timeoutMs);
     if (params.io.signal?.aborted) throw new Error("classifier review aborted");
     if (isModelUnavailableError(error)) throw new ClassifierModelUnavailableError(formatError(error));
     throw error;
@@ -245,6 +246,19 @@ interface RetryBudget {
   maxAttempts: number;
 }
 
+export function modelSpec(model: Model<Api>): string {
+  return `${model.provider}/${model.id}`;
+}
+
+/**
+ * One notification per failed attempt, carrying the kind, the cause-enriched
+ * detail, and the backoff — there used to be a second, contentless "retry N/5"
+ * line, which told the user a retry was happening without ever saying why.
+ *
+ * Every error that leaves this function is tagged with how many attempts it
+ * burned and against which model, because the surfaces that report it (the
+ * block reason, lastError, telemetry) are frames away from the budget.
+ */
 async function completeText(params: {
   model: Model<Api>;
   io: ClassifierIO;
@@ -257,16 +271,24 @@ async function completeText(params: {
     params.budget.attempts++;
     const attempt = params.budget.attempts;
     try {
-      if (attempt > 1) params.io.notify(`Rail classifier retry ${attempt}/${params.budget.maxAttempts}...`, "warning");
       return await completeTextOnce(params);
     } catch (error) {
-      if (error instanceof ClassifierModelUnavailableError || !isRetryableClassifierError(error) || params.budget.attempts >= params.budget.maxAttempts) throw error;
+      const terminal = error instanceof ClassifierModelUnavailableError || !isRetryableClassifierError(error) || attempt >= params.budget.maxAttempts;
+      if (terminal) throw tagClassifierFailure(error, { attempts: attempt, maxAttempts: params.budget.maxAttempts, model: modelSpec(params.model) });
       const delayMs = 250 * 2 ** (attempt - 1);
-      params.io.notify(`Rail classifier attempt ${attempt}/${params.budget.maxAttempts} failed (${retryFailureKind(error)}): ${formatError(error)}. Retrying in ${delayMs}ms.`, "warning");
+      params.io.notify(
+        `Rail classifier attempt ${attempt}/${params.budget.maxAttempts} failed (${retryFailureKind(error)}): ${formatError(error)}. Retrying in ${delayMs}ms.`,
+        "warning",
+      );
       await params.io.sleep(delayMs, params.io.signal);
     }
   }
   throw new Error("classifier retry loop exhausted");
+}
+
+/** Tags a post-response failure (a protocol violation) with the same attempt context transport failures get. */
+function tagParseFailure<T>(error: T, model: Model<Api>, budget: RetryBudget): T {
+  return tagClassifierFailure(error, { attempts: budget.attempts, maxAttempts: budget.maxAttempts, model: modelSpec(model) });
 }
 
 function addUsage(total: ClassifierTokenUsage, part: ClassifierTokenUsage | undefined): void {
@@ -304,8 +326,12 @@ export async function runNaming(params: {
     budget,
   });
   addUsage(usage, response.usage);
-  const named = parseNamerResult(response.text, capabilityRegistryIds(registry));
-  return { ...named, tokenUsage: usage, attempts: budget.attempts };
+  try {
+    const named = parseNamerResult(response.text, capabilityRegistryIds(registry));
+    return { ...named, tokenUsage: usage, attempts: budget.attempts };
+  } catch (error) {
+    throw tagParseFailure(error, params.model, budget);
+  }
 }
 
 /** The judge: the escalation review the `judge` disposition delegates to. */
@@ -341,7 +367,11 @@ export async function runJudging(params: {
     budget,
   });
   addUsage(usage, response.usage);
-  return { ...parseJudgeResult(response.text), tokenUsage: usage, attempts: budget.attempts };
+  try {
+    return { ...parseJudgeResult(response.text), tokenUsage: usage, attempts: budget.attempts };
+  } catch (error) {
+    throw tagParseFailure(error, params.model, budget);
+  }
 }
 
 export async function nameToolCall(params: {
