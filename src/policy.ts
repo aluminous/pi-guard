@@ -197,8 +197,13 @@ function matchingRoot(cwd: string, candidate: string, roots: string[]): string |
   return roots.find((root) => patternMatches(cwd, candidate, root));
 }
 
-function isDenied(cwd: string, candidate: string, patterns: string[]): string | undefined {
+/** The first configured pattern that matches the candidate path under policy-engine semantics, if any. */
+export function findMatchingPattern(cwd: string, candidate: string, patterns: string[]): string | undefined {
   return patterns.find((pattern) => patternMatches(cwd, candidate, pattern));
+}
+
+function isDenied(cwd: string, candidate: string, patterns: string[]): string | undefined {
+  return findMatchingPattern(cwd, candidate, patterns);
 }
 
 export function decidePathAccess(config: ResolvedGuardConfig, cwd: string, inputPath: string, kind: AccessKind): PolicyDecision {

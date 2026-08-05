@@ -46,6 +46,13 @@ export default function (pi: ExtensionAPI) {
       enabled: () => state.enabled,
       initialized: () => state.initialized,
       lastError: () => state.lastError,
+      recordCommand: (command) => {
+        const record = { command, startedAt: Date.now(), endedAt: undefined as number | undefined };
+        state.lastBashCommand = record;
+        return () => {
+          record.endedAt = Date.now();
+        };
+      },
     });
   }
 

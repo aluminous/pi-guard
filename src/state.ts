@@ -69,6 +69,8 @@ export interface RuntimeState {
   recent: GuardEvent[];
   /** Per-call decision traces for /guard explain, newest first (last TRACE_LIMIT). */
   traces: DecisionTrace[];
+  /** Most recent guarded bash execution, for the /guard why sandbox-denial window. */
+  lastBashCommand?: { command: string; startedAt: number; endedAt?: number };
   /** provider/id specs with configured auth, cached at session start for argument completions (which get no ctx). */
   availableModelSpecs: string[];
   /** Child identities (session file/transcript) already warned about running without guard acknowledgement. */
@@ -134,6 +136,7 @@ export function resetSessionState(state: RuntimeState): void {
   state.approvals = { read: [], write: [] };
   state.stats = createGuardStats();
   state.traces = [];
+  state.lastBashCommand = undefined;
   state.subagentAckWarned = new Set();
 }
 

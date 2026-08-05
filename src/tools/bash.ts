@@ -11,6 +11,8 @@ export function createGuardedBashOps(params: {
   enabled: () => boolean;
   initialized: () => boolean;
   lastError: () => string | undefined;
+  /** Called as a sandboxed command starts; the returned function marks its end (for /guard why's log window). */
+  recordCommand?: (command: string) => () => void;
 }): BashOperations {
   return {
     async exec(command, cwd, { onData, signal, timeout, env }) {
@@ -20,6 +22,7 @@ export function createGuardedBashOps(params: {
 
       const scrubbedEnv = scrubEnvironment(env, params.config);
       const wrapped = await params.backend.wrapBash(command, cwd, scrubbedEnv);
+      const recordEnd = params.recordCommand?.(command);
 
       return new Promise((resolve, reject) => {
         const child = spawn(wrapped.command, wrapped.args, {
@@ -60,6 +63,7 @@ export function createGuardedBashOps(params: {
           settled = true;
           if (timeoutHandle) clearTimeout(timeoutHandle);
           signal?.removeEventListener("abort", onAbort);
+          recordEnd?.();
           reject(error);
         });
 
@@ -68,6 +72,7 @@ export function createGuardedBashOps(params: {
           settled = true;
           if (timeoutHandle) clearTimeout(timeoutHandle);
           signal?.removeEventListener("abort", onAbort);
+          recordEnd?.();
 
           if (signal?.aborted) reject(new Error("aborted"));
           else if (timedOut) reject(new Error(`timeout:${timeout}`));
