@@ -21,7 +21,7 @@ export interface SelectItem<V> {
 
 /**
  * Searchable single-select list with optional static header lines. Generic
- * over the item value; used by the guard control panel and the classifier
+ * over the item value; used by the rail control panel and the classifier
  * model selector.
  */
 interface SelectListParams<V> {

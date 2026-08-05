@@ -202,7 +202,7 @@ describe("saveDispositions", () => {
   });
 
   it("reports rows a project config will win back", () => {
-    const config = mergeConfig(testConfig(), { dispositions: { "network-fetch": "allow" } }, "/repo/.pi/guard.json");
+    const config = mergeConfig(testConfig(), { dispositions: { "network-fetch": "allow" } }, "/repo/.pi/rail.json");
     const state = createRuntimeState();
     setRowDisposition(config, state, "network-fetch", "deny");
     const result = saveDispositions(config, state, spyPersistence([]));

@@ -9,7 +9,7 @@ import { formatRailPolicy, formatRailStatus, statusLineVisible } from "../src/st
 import { showRailView, toggleRailView } from "../src/live-view.ts";
 import { testConfig } from "./helpers.ts";
 
-describe("guard status restriction labels", () => {
+describe("rail status restriction labels", () => {
   it("distinguishes unrestricted policies from disabled networking", () => {
     const config = testConfig((c) => {
       c.filesystem.enabled = false;
@@ -32,7 +32,7 @@ describe("guard status restriction labels", () => {
   });
 });
 
-describe("guard status session sections", () => {
+describe("rail status session sections", () => {
   it("shows session guidance entries and the exempt counter", () => {
     const state = createRuntimeState();
     state.classifier.sessionGuidance = ["User allowed bash (npm run deploy) with comment: staging deploys are fine"];
@@ -55,7 +55,7 @@ describe("guard status session sections", () => {
   });
 });
 
-describe("guard status token cache reporting", () => {
+describe("rail status token cache reporting", () => {
   it("shows the hit rate when cache reads were reported", () => {
     const state = createRuntimeState();
     state.stats.classifierHits = 5;
@@ -99,7 +99,7 @@ describe("formatRailPolicy", () => {
     const config = testConfig();
     const policy = formatRailPolicy(createRuntimeState(), config);
     assert.match(policy, /# Pi Rail Policy Rules/);
-    assert.match(policy, /\/guard policy opens it/);
+    assert.match(policy, /\/rail policy opens it/);
     assert.doesNotMatch(policy, /## Capability dispositions/, "the table lives on the interactive page now");
     assert.match(policy, /## Filesystem/);
     assert.match(policy, /## Network/);
@@ -117,7 +117,7 @@ describe("formatRailPolicy", () => {
   });
 
   it("annotates provenance: legend and per-entry list sources", () => {
-    const projectPath = path.join("/repo", CONFIG_DIR_NAME, "guard.json");
+    const projectPath = path.join("/repo", CONFIG_DIR_NAME, "rail.json");
     const afterGlobal = mergeConfig(testConfig(), { filesystem: { denyRead: ["/secret/global"] } }, globalRailConfigPath());
     const config = mergeConfig(afterGlobal, { environment: { allow: ["PATH", "HOME"] } }, projectPath);
     const policy = formatRailPolicy(createRuntimeState(), config);
@@ -134,7 +134,7 @@ describe("formatRailPolicy", () => {
   });
 });
 
-describe("guard live views over RPC", () => {
+describe("rail live views over RPC", () => {
   function widgetCtx() {
     const calls: Array<{ key: string; lines: string[] | undefined }> = [];
     const ctx = {
@@ -150,7 +150,7 @@ describe("guard live views over RPC", () => {
     const state = createRuntimeState();
     let content = ["line one"];
     toggleRailView(ctx, state, "status", () => content);
-    assert.deepEqual(calls, [{ key: "guard-status", lines: ["line one"] }]);
+    assert.deepEqual(calls, [{ key: "rail-status", lines: ["line one"] }]);
     assert.equal(state.liveView?.kind, "status");
 
     state.liveView?.refresh();
@@ -158,11 +158,11 @@ describe("guard live views over RPC", () => {
 
     content = ["line two"];
     state.liveView?.refresh();
-    assert.deepEqual(calls.at(-1), { key: "guard-status", lines: ["line two"] });
+    assert.deepEqual(calls.at(-1), { key: "rail-status", lines: ["line two"] });
     assert.equal(calls.length, 2);
 
     toggleRailView(ctx, state, "status", () => content);
-    assert.deepEqual(calls.at(-1), { key: "guard-status", lines: undefined });
+    assert.deepEqual(calls.at(-1), { key: "rail-status", lines: undefined });
     assert.equal(state.liveView, undefined);
   });
 
@@ -173,7 +173,7 @@ describe("guard live views over RPC", () => {
     toggleRailView(ctx, state, "policy", () => ["policy"]);
     assert.deepEqual(
       calls.map((c) => `${c.key}:${c.lines ? "set" : "clear"}`),
-      ["guard-status:set", "guard-status:clear", "guard-policy:set"],
+      ["rail-status:set", "rail-status:clear", "rail-policy:set"],
     );
     assert.equal(state.liveView?.kind, "policy");
   });
@@ -183,7 +183,7 @@ describe("guard live views over RPC", () => {
     const state = createRuntimeState();
     showRailView(ctx, state, "report", () => ["first critique"]);
     showRailView(ctx, state, "report", () => ["second critique"]);
-    assert.deepEqual(calls.at(-1), { key: "guard-report", lines: ["second critique"] });
+    assert.deepEqual(calls.at(-1), { key: "rail-report", lines: ["second critique"] });
     assert.equal(state.liveView?.kind, "report");
   });
 
@@ -222,11 +222,11 @@ describe("statusLineVisible", () => {
     assert.equal(statusLineVisible("never", state), false);
   });
 
-  it("auto mode hides a healthy quiet guard", () => {
+  it("auto mode hides a healthy quiet rail", () => {
     assert.equal(statusLineVisible("auto", enforcingState()), false);
   });
 
-  it("auto mode shows when the guard is disabled or erroring", () => {
+  it("auto mode shows when the rail is disabled or erroring", () => {
     const disabled = enforcingState();
     disabled.enabled = false;
     assert.equal(statusLineVisible("auto", disabled), true);

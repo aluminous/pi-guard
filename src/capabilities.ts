@@ -27,7 +27,7 @@ export const BUILTIN_CAPABILITY_IDS = [
   "unclassified",
 ] as const;
 
-/** The twelve classes that ship with the guard; deterministic code paths reference these ids as literals. */
+/** The twelve classes that ship with the rail; deterministic code paths reference these ids as literals. */
 export type BuiltinCapabilityId = (typeof BUILTIN_CAPABILITY_IDS)[number];
 
 /**
@@ -296,7 +296,7 @@ export function clearSessionDisposition(state: CapabilityState, id: CapabilityId
 // ── The class registry ───────────────────────────────────────────────────────
 
 /**
- * Every class the guard currently knows, in a deterministic order: the twelve
+ * Every class the rail currently knows, in a deterministic order: the twelve
  * built-ins in tuple order, then config-defined custom classes, then classes
  * this session added. Definition edits layer session-over-config-over-built-in;
  * custom classes this session deleted are dropped.

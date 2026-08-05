@@ -97,7 +97,7 @@ async function askPathApproval(params: {
     appendRailTelemetry(params.state, { kind: "approval", tool: params.toolName, access: params.kind, path: params.path, approved: false, reason: params.reason });
     return {
       block: true,
-      reason: `${params.kind} requires approval for ${params.path}: ${params.reason}. This is a headless session with no user to ask; rerun interactively or pre-approve the path in guard config.`,
+      reason: `${params.kind} requires approval for ${params.path}: ${params.reason}. This is a headless session with no user to ask; rerun interactively or pre-approve the path in rail config.`,
     };
   }
   const answer = await askRailApproval(
@@ -126,7 +126,7 @@ async function askPathApproval(params: {
   }
   recordApprovalDenied(params.state);
   const commentSuffix = answer.comment ? ` User comment: ${answer.comment}` : "";
-  return { block: true, reason: `${params.kind} approval denied for ${params.path}.${commentSuffix} Do not work around the guard; ask the user.` };
+  return { block: true, reason: `${params.kind} approval denied for ${params.path}.${commentSuffix} Do not work around the rail; ask the user.` };
 }
 
 /** An out-of-roots write: the label goes to the table, and an `ask` reuses the path dialog and its session memory. */
@@ -173,7 +173,7 @@ async function enforcePathPolicy(
   const block = (reason: string): ToolCallBlock => {
     recordPolicyBlock(state, event.toolName, reason);
     appendRailTelemetry(state, { kind: "block", tool: event.toolName, reason });
-    return { block: true, reason: `${reason}. Do not work around the guard; choose an allowed path or ask the user.` };
+    return { block: true, reason: `${reason}. Do not work around the rail; choose an allowed path or ask the user.` };
   };
 
   let allowedReadPath: string | undefined;
@@ -287,7 +287,7 @@ function classifyCommand(input: Record<string, unknown>, state: RuntimeState, co
 }
 
 /**
- * Session read-only mode (/guard readonly): write and edit are blocked
+ * Session read-only mode (/rail readonly): write and edit are blocked
  * deterministically; bash must be reviewed and is blocked outright when the
  * classifier is disabled — the sandbox still permits writes inside the
  * configured roots, so letting bash run unreviewed would silently break the
@@ -302,13 +302,13 @@ function enforceReadOnlyMode(toolName: string, input: Record<string, unknown>, s
     recordPolicyBlock(state, toolName, reason);
     addTraceStage(trace, "readonly", "block", reason);
     appendRailTelemetry(state, { kind: "block", tool: toolName, reason });
-    return { block: true, reason: `${reason}. Do not work around the guard; ask the user to toggle read-only mode off (/guard readonly) if changes are wanted.` };
+    return { block: true, reason: `${reason}. Do not work around the rail; ask the user to toggle read-only mode off (/rail readonly) if changes are wanted.` };
   };
-  if (spec.access.includes("write")) return block(`${toolName} blocked: guard is in read-only mode`);
+  if (spec.access.includes("write")) return block(`${toolName} blocked: rail is in read-only mode`);
   // Scratch trace: the real allowlist stage is recorded once, in the main flow.
   const scratch: DecisionTrace = { at: 0, toolName, action: "", final: "allowed", stages: [] };
   if (toolName === "bash" && !classifierEnabled(config, state.classifier) && classifyCommand(input, state, config, scratch).needsNaming) {
-    return block("bash blocked: guard is in read-only mode and the classifier is off, so commands cannot be reviewed for writes");
+    return block("bash blocked: rail is in read-only mode and the classifier is off, so commands cannot be reviewed for writes");
   }
   addTraceStage(trace, "readonly", "pass", toolName === "bash" ? "bash permitted pending capability review" : `${toolName} permitted in read-only mode`);
   return undefined;
@@ -596,7 +596,7 @@ async function enforceCapabilities(params: EnforceParams): Promise<ToolCallBlock
     addTraceStage(trace, "ask", "unanswerable", "approval needed but the session is headless");
     return finish("deny", "ask-denied", {
       block: true,
-      reason: `Rail needs approval, but this headless session has no user to ask: ${reason}. Rerun interactively, or set ${resolution.decidedBy.id} to allow in guard config.`,
+      reason: `Rail needs approval, but this headless session has no user to ask: ${reason}. Rerun interactively, or set ${resolution.decidedBy.id} to allow in rail config.`,
     });
   }
 
@@ -635,7 +635,7 @@ function totalUsage(named: NamerResult | undefined, judge: JudgeResult | undefin
   };
 }
 
-/** The last few guard decisions, as the judge sees them: a retry after a denial is signal. */
+/** The last few rail decisions, as the judge sees them: a retry after a denial is signal. */
 function recentDecisionsForJudge(state: RuntimeState): string[] {
   return state.recent
     .slice(0, 8)

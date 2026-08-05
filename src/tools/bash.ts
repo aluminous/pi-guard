@@ -11,7 +11,7 @@ export function createSandboxedBashOps(params: {
   enabled: () => boolean;
   initialized: () => boolean;
   lastError: () => string | undefined;
-  /** Called as a sandboxed command starts; the returned function marks its end (for /guard why's log window). */
+  /** Called as a sandboxed command starts; the returned function marks its end (for /rail why's log window). */
   recordCommand?: (command: string) => () => void;
 }): BashOperations {
   return {

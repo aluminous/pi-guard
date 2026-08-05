@@ -1,4 +1,4 @@
-// /guard why tests: unified-log fixture parsing, denied-path → guard-rule
+// /rail why tests: unified-log fixture parsing, denied-path → rail-rule
 // mapping (including a degraded pattern), empty-result handling, and the
 // command flow with an injectable log runner. No live `log show` anywhere.
 import assert from "node:assert/strict";
@@ -96,7 +96,7 @@ describe("formatRailWhy", () => {
       command: { command: "cat server.pem", startedAt: Date.now() - 5000, endedAt: Date.now() - 4000 },
       attributions: [attributeDenial(compiled, cwd, denial)],
     });
-    assert.match(report, /last guarded command: cat server\.pem/);
+    assert.match(report, /last sandboxed command: cat server\.pem/);
     assert.match(report, /ran 1000ms/);
     assert.match(report, /\[BLOCK\] deny file-read-data .*server\.pem \(openssl\) → denyRead '\*\.pem'/);
     assert.match(report, /degraded in the sandbox: Seatbelt holds the literal/);
@@ -112,7 +112,7 @@ describe("formatRailWhy", () => {
   });
 });
 
-describe("/guard why command flow", () => {
+describe("/rail why command flow", () => {
   function makeCtx() {
     const widgets: Array<{ key: string; lines: string[] | undefined }> = [];
     const notifications: string[] = [];
@@ -130,7 +130,7 @@ describe("/guard why command flow", () => {
     return { ctx: ctx as unknown as ExtensionContext, widgets, notifications };
   }
 
-  it("warns when no guarded command has run yet", async () => {
+  it("warns when no sandboxed command has run yet", async () => {
     const state = createRuntimeState();
     const { ctx, widgets, notifications } = makeCtx();
     await createRailWhy({ state, logRunner: async () => "" })(ctx);
@@ -157,7 +157,7 @@ describe("/guard why command flow", () => {
     assert.ok(notifications.some((n) => n.includes("can take a few seconds")));
     const report = (widgets.at(-1)?.lines ?? []).join("\n");
     assert.match(report, /deny file-read-data .*id_rsa \(cat\) → denyRead '~\/\.ssh'/);
-    assert.match(report, /mach-lookup.* → no matching guard rule \(system profile\)/);
+    assert.match(report, /mach-lookup.* → no matching rail rule \(system profile\)/);
   });
 
   it("reports an empty window instead of failing", async () => {

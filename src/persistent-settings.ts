@@ -13,7 +13,7 @@ export interface PersistedCapabilityClass {
 }
 
 function configPath(): string {
-  return path.join(getAgentDir(), "extensions", "guard.json");
+  return path.join(getAgentDir(), "extensions", "rail.json");
 }
 
 function lockPath(filePath: string): string {

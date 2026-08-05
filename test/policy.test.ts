@@ -142,7 +142,7 @@ describe("decidePathAccess write", () => {
   });
 
   it("canonicalizes symlinks so they cannot escape allowed roots", () => {
-    const escapeTarget = path.join(cwd, "..", `pi-guard-escape-${process.pid}`);
+    const escapeTarget = path.join(cwd, "..", `pi-rail-escape-${process.pid}`);
     mkdirSync(escapeTarget, { recursive: true });
     symlinkSync(escapeTarget, path.join(cwd, "sneaky"));
     // Only cwd is writable, so the sibling dir the symlink points at is out of

@@ -7,7 +7,7 @@ export type { RailApprovalAnswer } from "./tui/approval-dialog.ts";
 const OPTION_LABELS = ["Allow", "Allow with comment", "Deny", "Deny with comment"] as const;
 
 /**
- * Asks the user to approve a guard-gated action, with optional comment.
+ * Asks the user to approve a rail-gated action, with optional comment.
  * In the TUI this is a single dialog with an inline comment input; over RPC it
  * degrades to a select (and an input when a comment option is chosen), which
  * the driving client answers via the extension-UI sub-protocol. Callers must
@@ -26,7 +26,7 @@ export async function askRailApproval(ctx: ExtensionContext, state: RuntimeState
   const picked = await ctx.ui.select(`${title}\n\n${message}`, [...OPTION_LABELS]);
   if (picked === "Allow") return { approved: true };
   if (picked === "Allow with comment" || picked === "Deny with comment") {
-    const comment = (await ctx.ui.input("Comment for the guard (kept as session guidance)"))?.trim();
+    const comment = (await ctx.ui.input("Comment for the rail (kept as session guidance)"))?.trim();
     return { approved: picked === "Allow with comment", comment: comment || undefined };
   }
   return { approved: false };

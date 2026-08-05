@@ -16,7 +16,7 @@ import { DEFAULT_COMMAND_ALLOWLIST } from "./command-allowlist.ts";
 
 export type RailBackendName = "seatbelt" | "none" | "container";
 
-/** When the guard statusline is visible: always, never, or auto (only when the guard is off/erroring or something was denied since the last user message). */
+/** When the rail statusline is visible: always, never, or auto (only when the rail is off/erroring or something was denied since the last user message). */
 export type StatusLineMode = "always" | "never" | "auto";
 
 export interface ClassifierConfig {
@@ -351,7 +351,7 @@ function readJson(filePath: string, diagnostics: string[]): Partial<RailConfig> 
 /**
  * Validates one custom class entry. Invalid entries are skipped with a
  * diagnostic rather than failing the load: a typo in one class must not cost
- * the user their whole guard config.
+ * the user their whole rail config.
  */
 function parseCapabilityClass(entry: unknown, index: number, source: string, diagnostics: string[]): CapabilityClass | undefined {
   const where = `${source}.capabilities.classes[${index}]`;
@@ -551,14 +551,14 @@ export function mergeConfig(base: ResolvedRailConfig, override: Partial<RailConf
 }
 
 export function globalRailConfigPath(): string {
-  return path.join(getAgentDir(), "extensions", "guard.json");
+  return path.join(getAgentDir(), "extensions", "rail.json");
 }
 
 /** Short display label for a provenance source: "default", "global", "project", or the raw path when unrecognized. */
 export function configSourceLabel(source: string): string {
   if (source === "default") return "default";
   if (source === globalRailConfigPath()) return "global";
-  if (source.endsWith(path.join(CONFIG_DIR_NAME, "guard.json"))) return "project";
+  if (source.endsWith(path.join(CONFIG_DIR_NAME, "rail.json"))) return "project";
   return source;
 }
 
@@ -569,7 +569,7 @@ export function loadConfig(ctx: ExtensionContext): ResolvedRailConfig {
   config.sources = ["defaults"];
 
   const globalPath = globalRailConfigPath();
-  const projectPath = path.join(ctx.cwd, CONFIG_DIR_NAME, "guard.json");
+  const projectPath = path.join(ctx.cwd, CONFIG_DIR_NAME, "rail.json");
 
   const globalConfig = readJson(globalPath, diagnostics);
   if (globalConfig) config = mergeConfig(config, globalConfig, globalPath);

@@ -1,6 +1,7 @@
-// Aggregates guard decision telemetry from pi's own session logs. Scans all
+// Aggregates rail decision telemetry from pi's own session logs. Scans all
 // session files under the pi agent dir for `custom` entries written by the
-// guard extension (customType "guard") and reports decision rates, fast-path
+// rail extension (customType "rail", or "guard" before the rename) and
+// reports decision rates, fast-path
 // usage, latency, token cost, retries, and errors across real sessions.
 //
 // Usage:
@@ -15,7 +16,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { RailTelemetryRecord } from "../src/telemetry.ts";
+import { RAIL_TELEMETRY_TYPES, type RailTelemetryRecord } from "../src/telemetry.ts";
 
 interface SessionEntry {
   type?: string;
@@ -62,7 +63,7 @@ function commandOf(record: RailTelemetryRecord): string | undefined {
 
 function laterExecuted(entries: SessionEntry[], fromIndex: number, command: string): boolean {
   // A later assistant tool call containing the exact command string means the
-  // denied/rejected command eventually ran (approved on retry, guard disabled,
+  // denied/rejected command eventually ran (approved on retry, rail disabled,
   // or another agent step) — a false-positive candidate.
   const needle = JSON.stringify(command).slice(1, -1);
   for (let i = fromIndex + 1; i < entries.length; i++) {
@@ -86,7 +87,9 @@ for (const file of files) {
   const entries = parseEntries(file);
   fileEntries.set(file, entries);
   entries.forEach((entry, index) => {
-    if (entry.type === "custom" && entry.customType === "guard" && entry.data && typeof entry.data === "object") {
+    // Both customTypes: sessions recorded before the pi-guard → pi-rail rename
+    // still carry "guard", and the corpus is the point of this script.
+    if (entry.type === "custom" && RAIL_TELEMETRY_TYPES.includes(entry.customType ?? "") && entry.data && typeof entry.data === "object") {
       records.push({ file, index, record: entry.data as RailTelemetryRecord });
     }
   });
@@ -190,7 +193,7 @@ if (asJson) {
 }
 
 const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
-console.log(`Sessions scanned: ${summary.sessionsScanned} (${summary.sessionsWithTelemetry} with guard telemetry)`);
+console.log(`Sessions scanned: ${summary.sessionsScanned} (${summary.sessionsWithTelemetry} with rail telemetry)`);
 console.log(`Records: ${summary.records}`);
 console.log("");
 console.log(`Reviews: ${summary.reviews.total}  (allow ${decisions.allow}, deny ${decisions.deny}, ask ${decisions.ask})`);
@@ -208,5 +211,5 @@ console.log(`Path approvals: ${summary.pathApprovals.total} (${summary.pathAppro
 console.log(`Classifier errors: ${summary.errors}`);
 if (summary.records === 0 || summary.reviews.total === 0) {
   console.log("");
-  console.log("No guard telemetry found yet. Telemetry is written once classifier.telemetry (default \"minimal\") records decisions in session logs.");
+  console.log("No rail telemetry found yet. Telemetry is written once classifier.telemetry (default \"minimal\") records decisions in session logs.");
 }

@@ -2,7 +2,7 @@
  * Deterministic content screen for write and edit calls.
  *
  * A write's risk is its CONTENT, so a trusted path alone can never exempt it —
- * but sending every `write src/foo.ts` to a model is the friction the guard is
+ * but sending every `write src/foo.ts` to a model is the friction the rail is
  * supposed to avoid. The screen is the cache in between: cheap patterns for
  * the content-level attacks the round-2 eval cases demonstrate (authorization
  * planting, agent-directed notes, quiet lifecycle hooks, key material), plus
@@ -33,7 +33,7 @@ export interface ContentScreenVerdict {
   hits: ScreenHit[];
   /** Deterministic label for a clean write/edit. Absent when tripped or not applicable. */
   label?: CapabilityId;
-  /** One line for decision traces and /guard test. */
+  /** One line for decision traces and /rail test. */
   summary: string;
 }
 
@@ -60,7 +60,7 @@ const AUTHORIZATION_PATTERNS: NamedPattern[] = [
   { pattern: /\b(considered|deemed|treated as|treat .{0,40} as) (safe|routine|approved|acceptable|pre-?approved)\b/i, detail: "declares an action routine or safe" },
   { pattern: /\breview polic(y|ies)\b/i, detail: "invokes a review policy" },
   { pattern: /\bexempt(ed)? from (review|approval|the guard|guard review)\b/i, detail: "claims an exemption from review" },
-  { pattern: /\bbypass(es|ing)? (the )?(review|guard|approval|classifier|sandbox|permission)/i, detail: "describes bypassing the guard" },
+  { pattern: /\bbypass(es|ing)? (the )?(review|guard|approval|classifier|sandbox|permission)/i, detail: "describes bypassing the rail" },
   { pattern: /\buser (confirmed|approved|authorized|authorised|agreed|consented|said yes)\b/i, detail: "records user consent" },
   { pattern: /\bconsent (record|granted|given|obtained)\b/i, detail: "records consent" },
   { pattern: /\bdefault(s|ing)? to allow\b/i, detail: "asks for allow-by-default" },
@@ -214,7 +214,7 @@ function matchAll(patterns: NamedPattern[], text: string, kind: ScreenHitKind, h
   }
 }
 
-/** The screen's coverage in prose, for /guard critique and the policy view. */
+/** The screen's coverage in prose, for /rail critique and the policy view. */
 export function screenLexiconSummary(): Array<{ kind: ScreenHitKind; entries: string[] }> {
   return [
     { kind: "authorization", entries: AUTHORIZATION_PATTERNS.map((entry) => entry.detail) },
@@ -304,7 +304,7 @@ export function writtenContentOf(toolName: string, input: Record<string, unknown
 }
 
 /**
- * Screens a guarded tool call. write/edit get the full screen with a
+ * Screens a intercepted tool call. write/edit get the full screen with a
  * deterministic label; bash gets the text layer only (a command always reaches
  * the namer anyway, but the trip is worth recording); everything else is
  * outside the screen's model.

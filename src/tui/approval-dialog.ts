@@ -50,7 +50,7 @@ class InlineCommentRow implements Component {
 }
 
 /**
- * Two-way approval dialog for guard prompts: Allow / Deny, with a shared
+ * Two-way approval dialog for rail prompts: Allow / Deny, with a shared
  * inline comment. Typing while either option is highlighted edits a comment
  * rendered directly on that row; arrowing between the options keeps the
  * typed text. Enter resolves the highlighted option (attaching the trimmed

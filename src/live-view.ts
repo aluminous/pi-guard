@@ -5,7 +5,7 @@ import { styleRailLine } from "./status.ts";
 import { RailReportPanel, type PanelTheme, type PanelTui } from "./tui/report-panel.ts";
 import type { Keybindings } from "./tui/select-list.ts";
 
-/** What ctx.ui.custom hands a docked panel, narrowed to the structural slices the guard panels use. */
+/** What ctx.ui.custom hands a docked panel, narrowed to the structural slices the rail panels use. */
 export interface RailPanelHost {
   tui: PanelTui;
   theme: PanelTheme;
@@ -63,8 +63,8 @@ function reportPanel(lines: () => string[]): RailPanelFactory {
  * events since there is no client-side timer); clearing the key closes it.
  */
 function openWidget(ctx: ExtensionContext, state: RuntimeState, kind: RailViewKind, lines: () => string[]): void {
-  const key = `guard-${kind}`;
-  // refresh() fires on every guard event while the view is open; skip the
+  const key = `rail-${kind}`;
+  // refresh() fires on every rail event while the view is open; skip the
   // protocol round-trip when content is unchanged (also collapses the
   // open-then-updateRailStatus double send into one setWidget).
   let lastSent: string | undefined;
@@ -78,7 +78,7 @@ function openWidget(ctx: ExtensionContext, state: RuntimeState, kind: RailViewKi
         lastSent = joined;
         ctx.ui.setWidget(key, next);
       } catch {
-        // Widget updates are cosmetic; never let a stale UI context break a guard event.
+        // Widget updates are cosmetic; never let a stale UI context break a rail event.
       }
     },
     close: () => {
@@ -95,10 +95,10 @@ function openWidget(ctx: ExtensionContext, state: RuntimeState, kind: RailViewKi
 }
 
 /**
- * Shows a guard report, replacing any open view: an overlay popup in the TUI,
- * a live widget over RPC. This is the ONLY output path for guard reports —
+ * Shows a rail report, replacing any open view: an overlay popup in the TUI,
+ * a live widget over RPC. This is the ONLY output path for rail reports —
  * they are never posted into the conversation, because pi delivers custom
- * messages to the LLM as user messages and guard reports map the guard's
+ * messages to the LLM as user messages and rail reports map the rail's
  * rules, approvals, and guidance for a possibly compromised agent. The agent
  * only ever sees tool-call block reasons. Headless modes have no user to
  * show a view to (or to invoke these commands); that is an error, not a

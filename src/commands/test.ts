@@ -1,4 +1,4 @@
-// /guard test: dry-runs a shell command or file read/write through the guard
+// /rail test: dry-runs a shell command or file read/write through the rail
 // stack — readonly gate, path policy, allowlist labels, content screen, a REAL
 // namer call when one is needed, the disposition table, and a REAL judge when
 // the table escalates — without executing anything and without touching stats,
@@ -280,7 +280,7 @@ export function createRailTest(deps: RailTestDeps) {
   return async function runRailTest(args: string, ctx: ExtensionContext): Promise<void> {
     const subject = parseSubject(args);
     if (!subject) {
-      const message = "Usage: /guard test <shell command> | test read <path> | test write <path>";
+      const message = "Usage: /rail test <shell command> | test read <path> | test write <path>";
       if (!ctx.hasUI) console.log(message);
       ctx.ui.notify(message, "warning");
       return;

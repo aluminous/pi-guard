@@ -1,6 +1,6 @@
 // Decision traces: a structured record of the stages the interceptor
-// consulted for each guarded tool call, kept in RuntimeState (newest first)
-// for /guard explain. Standalone module — state.ts imports these types, so
+// consulted for each intercepted tool call, kept in RuntimeState (newest first)
+// for /rail explain. Standalone module — state.ts imports these types, so
 // this file must not import from state.ts or status.ts.
 
 export type TraceStageName =
@@ -68,5 +68,5 @@ export function formatDecisionTrace(trace: DecisionTrace, index: number, total: 
 }
 
 export function formatEmptyTrace(): string {
-  return ["# Rail Decision Trace", "", "  (no guarded tool calls traced yet this session)"].join("\n");
+  return ["# Rail Decision Trace", "", "  (no intercepted tool calls traced yet this session)"].join("\n");
 }

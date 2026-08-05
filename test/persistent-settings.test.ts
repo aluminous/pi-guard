@@ -1,6 +1,6 @@
 // The Ctrl+S write path. These exercise the real file writers, so every test
 // redirects the agent dir to a temp fixture first — nothing here may touch the
-// developer's own ~/.pi/agent/extensions/guard.json.
+// developer's own ~/.pi/agent/extensions/rail.json.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
@@ -20,7 +20,7 @@ const ENV_AGENT_DIR = "PI_CODING_AGENT_DIR";
  * Runs fn with the agent dir pointed at a throwaway fixture, then restores the
  * environment. The redirect is asserted before anything writes: if the env var
  * ever stops being honoured, these tests must fail rather than quietly start
- * editing the developer's real guard.json.
+ * editing the developer's real rail.json.
  */
 function withTempAgentDir(fn: (read: () => RailConfig) => void): void {
   const fixture = makeFixtureDir();

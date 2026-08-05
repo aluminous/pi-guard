@@ -24,7 +24,7 @@ export interface DispositionPageParams {
   tui: PanelTui;
   theme: PanelTheme;
   keybindings: Keybindings;
-  /** Which tab to open on: `/guard policy` lands on the table, `/guard policy rules` on the rules view. */
+  /** Which tab to open on: `/rail policy` lands on the table, `/rail policy rules` on the rules view. */
   initialTab?: DispositionTab;
   /** Current rows, re-read on every refresh so live stats and preset changes land. */
   rows(): DispositionRow[];
@@ -110,9 +110,9 @@ function createDefinitionEditor(tui: PanelTui, theme: PanelTheme): Editor {
 
 /**
  * The disposition settings page: THE policy surface. Two tabs — the editable
- * capability table, and the read-only mechanism policy that `/guard policy
+ * capability table, and the read-only mechanism policy that `/rail policy
  * rules` used to render as its own view. Docked in the editor area like the
- * other guard views (DynamicBorder chrome, non-overlay custom UI, agent
+ * other rail views (DynamicBorder chrome, non-overlay custom UI, agent
  * streaming above).
  *
  * Every edit — a disposition, a new class, a definition rewrite, a deletion —
@@ -161,7 +161,7 @@ export class DispositionPage extends Container {
     return this.tab;
   }
 
-  /** Switches tabs from outside (a second `/guard policy rules` while the table tab is up). */
+  /** Switches tabs from outside (a second `/rail policy rules` while the table tab is up). */
   selectTab(tab: DispositionTab): void {
     if (this.tab === tab) return;
     this.tab = tab;

@@ -47,7 +47,7 @@ describe("acknowledgeRailInSubagentChild", () => {
     assert.equal(pi.emitted.length, 0);
   });
 
-  it("does not emit when the guard is disabled or uninitialized", () => {
+  it("does not emit when the rail is disabled or uninitialized", () => {
     const env = { [SUBAGENT_CHILD_ENV]: "1" };
     const disabled = enforcingState();
     disabled.enabled = false;
@@ -83,7 +83,7 @@ describe("findUnacknowledgedSubagents", () => {
     }
   });
 
-  it("reports finished children without the guard id, including from subagent_wait", () => {
+  it("reports finished children without the rail id, including from subagent_wait", () => {
     const details = { results: [finished({ runtimeAcknowledgedExtensions: { version: 1, source: "child-runtime", ids: ["other-ext"] } })] };
     for (const tool of ["subagent", "subagent_wait"]) {
       assert.deepEqual(findUnacknowledgedSubagents(tool, details), [
@@ -133,7 +133,7 @@ describe("warnUnacknowledgedSubagents", () => {
     assert.equal(ctx.notifications.length, 1);
     assert.equal(ctx.notifications[0]?.type, "warning");
     assert.match(ctx.notifications[0]?.message ?? "", /worker/);
-    assert.match(ctx.notifications[0]?.message ?? "", /ran unguarded/);
+    assert.match(ctx.notifications[0]?.message ?? "", /ran without the rail/);
   });
 
   it("names the --no-extensions cause when the launch restricted extensions", () => {
@@ -146,7 +146,7 @@ describe("warnUnacknowledgedSubagents", () => {
     assert.match(ctx.notifications[0]?.message ?? "", /ambient extensions disabled/);
   });
 
-  it("stays quiet when the guard is disabled or children acknowledged", () => {
+  it("stays quiet when the rail is disabled or children acknowledged", () => {
     const ctx = fakeCtx();
     const disabled = enforcingState();
     disabled.enabled = false;

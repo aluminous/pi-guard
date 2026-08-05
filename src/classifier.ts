@@ -55,14 +55,14 @@ export interface ClassifierState {
   lastError?: string;
   /**
    * Session-scoped, user-authored guidance collected from allow/deny-with-
-   * comment answers to guard prompts. Injected into the namer and the judge.
+   * comment answers to rail prompts. Injected into the namer and the judge.
    */
   sessionGuidance?: string[];
 }
 
 const SESSION_GUIDANCE_LIMIT = 12;
 
-/** Records an allow/deny comment from a guard prompt as classifier guidance for the rest of the session. */
+/** Records an allow/deny comment from a rail prompt as classifier guidance for the rest of the session. */
 export function addSessionGuidance(state: ClassifierState, decision: "allowed" | "denied", toolName: string, subject: string, comment: string): void {
   const entry = `User ${decision} ${toolName} (${textPrefix(subject, 120)}) with comment: ${textPrefix(comment.trim(), 400)}`;
   state.sessionGuidance = [...(state.sessionGuidance ?? []), entry].slice(-SESSION_GUIDANCE_LIMIT);
@@ -70,8 +70,8 @@ export function addSessionGuidance(state: ClassifierState, decision: "allowed" |
 
 /**
  * Guidance the user volunteered rather than one collected from an approval
- * answer (`/guard guide`). Same ring and same limit, so a session that talks a
- * lot to the guard still cannot grow the payload without bound.
+ * answer (`/rail guide`). Same ring and same limit, so a session that talks a
+ * lot to the rail still cannot grow the payload without bound.
  */
 export function addUserGuidance(state: ClassifierState, text: string): void {
   const entry = `User guidance: ${textPrefix(text.trim(), 400)}`;
@@ -394,7 +394,7 @@ export async function judgeToolCall(params: {
   });
 }
 
-/** What /guard critique reviews: the prompts, the class definitions, the table, and the screen's coverage. */
+/** What /rail critique reviews: the prompts, the class definitions, the table, and the screen's coverage. */
 export function buildCapabilityPromptForCritique(config: ResolvedRailConfig, capabilities: CapabilityState | undefined): string {
   const table = capabilityRegistry(config, capabilities).map((entry) => {
     const effective = getEffectiveDisposition(config, capabilities, entry.id);

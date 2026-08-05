@@ -21,7 +21,7 @@ function makeCommand(specs: string[] = []) {
   });
 }
 
-/** A command wired to a preloaded config (never reads the user's real guard.json) and a persist spy. */
+/** A command wired to a preloaded config (never reads the user's real rail.json) and a persist spy. */
 function makeDispositionCommand() {
   const state = createRuntimeState();
   state.config = testConfig();
@@ -109,7 +109,7 @@ function overrides(state: RuntimeState) {
   return state.capabilities.overrides;
 }
 
-describe("guard argument completions", () => {
+describe("rail argument completions", () => {
   it("lists all subcommands for an empty prefix", () => {
     const items = makeCommand().getArgumentCompletions("");
     assert.ok(items);
@@ -161,14 +161,14 @@ describe("guard argument completions", () => {
   });
 });
 
-describe("/guard set", () => {
+describe("/rail set", () => {
   it("applies a disposition at session scope", async () => {
     const { command, state, persisted } = makeDispositionCommand();
     const { ctx, notes } = rpcCtx();
     await command.handler("set off-machine-effects deny", ctx);
     assert.deepEqual(overrides(state), { "off-machine-effects": "deny" });
     assert.deepEqual(persisted, [], "session scope writes nothing to disk");
-    assert.match(notes.at(-1)!, /off-machine-effects → deny for this session\. \/guard policy then Ctrl\+S persists it\./);
+    assert.match(notes.at(-1)!, /off-machine-effects → deny for this session\. \/rail policy then Ctrl\+S persists it\./);
   });
 
   it("reports the current value and its source when no disposition is given", async () => {
@@ -202,14 +202,14 @@ describe("/guard set", () => {
     await command.handler("set credentials maybe", ctx);
     assert.match(notes.at(-1)!, /Unknown disposition: maybe/);
     await command.handler("set", ctx);
-    assert.match(notes.at(-1)!, /Usage: \/guard set <class>/);
+    assert.match(notes.at(-1)!, /Usage: \/rail set <class>/);
     await command.handler("set credentials deny please", ctx);
-    assert.match(notes.at(-1)!, /Usage: \/guard set <class>/);
+    assert.match(notes.at(-1)!, /Usage: \/rail set <class>/);
     assert.deepEqual(overrides(state), {});
   });
 });
 
-describe("/guard policy routing", () => {
+describe("/rail policy routing", () => {
   it("opens the interactive page in the TUI and toggles it closed", async () => {
     const { command, state } = makeDispositionCommand();
     const tui = tuiCtx();
@@ -222,15 +222,15 @@ describe("/guard policy routing", () => {
 
     await command.handler("policy", tui.ctx);
     await settled();
-    assert.equal(state.liveView, undefined, "a second /guard policy closes the page");
+    assert.equal(state.liveView, undefined, "a second /rail policy closes the page");
   });
 
-  it("routes /guard policy rules to the mechanism report", async () => {
+  it("routes /rail policy rules to the mechanism report", async () => {
     const { command, state } = makeDispositionCommand();
     const { ctx, widgets } = rpcCtx();
     await command.handler("policy rules", ctx);
     assert.equal(state.liveView?.kind, "policy");
-    assert.equal(widgets.at(-1)?.key, "guard-policy");
+    assert.equal(widgets.at(-1)?.key, "rail-policy");
     assert.match(widgets.at(-1)?.lines?.join("\n") ?? "", /# Pi Rail Policy Rules/);
     assert.doesNotMatch(widgets.at(-1)?.lines?.join("\n") ?? "", /## Capability dispositions/);
   });
@@ -241,7 +241,7 @@ describe("/guard policy routing", () => {
     await command.handler("policy rules", tui.ctx);
     const page = tui.panel();
     assert.ok(page instanceof DispositionPage);
-    assert.equal(page.activeTab(), "rules", "/guard policy rules lands on the rules tab");
+    assert.equal(page.activeTab(), "rules", "/rail policy rules lands on the rules tab");
 
     // The other tab is the same panel: it retargets rather than toggling shut.
     await command.handler("policy", tui.ctx);
@@ -269,7 +269,7 @@ describe("/guard policy routing", () => {
     const { command } = makeDispositionCommand();
     const { ctx, notes } = rpcCtx();
     await command.handler("policy nonsense", ctx);
-    assert.match(notes.at(-1)!, /Usage: \/guard policy \[rules\]/);
+    assert.match(notes.at(-1)!, /Usage: \/rail policy \[rules\]/);
   });
 
   it("degrades to a select flow over RPC: pick a class, pick a disposition, repeat, save", async () => {
@@ -309,7 +309,7 @@ describe("/guard policy routing", () => {
   });
 });
 
-describe("/guard guide", () => {
+describe("/rail guide", () => {
   it("adds guidance from inline text and reports the ring position", async () => {
     const { command, state } = makeDispositionCommand();
     const { ctx, notes } = rpcCtx();
@@ -324,7 +324,7 @@ describe("/guard guide", () => {
     const { ctx, notes, inputs } = rpcCtx(["the deploy script is meant to push"]);
     await command.handler("guide", ctx);
 
-    assert.deepEqual(inputs, ["Guidance for the guard this session"]);
+    assert.deepEqual(inputs, ["Guidance for the rail this session"]);
     assert.deepEqual(state.classifier.sessionGuidance, ["User guidance: the deploy script is meant to push"]);
     assert.match(notes.at(-1)!, /Guidance added for this session \(1\/12\)\./);
   });
@@ -387,12 +387,12 @@ describe("/guard guide", () => {
     } finally {
       console.log = original;
     }
-    assert.match(notes.at(-1)!, /^Usage: \/guard guide <text>$/);
+    assert.match(notes.at(-1)!, /^Usage: \/rail guide <text>$/);
     assert.equal(state.classifier.sessionGuidance, undefined);
   });
 });
 
-describe("/guard set with a custom class", () => {
+describe("/rail set with a custom class", () => {
   it("accepts a class added this session and completes it", async () => {
     const { command, state } = makeDispositionCommand();
     const { ctx, notes } = rpcCtx();

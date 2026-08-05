@@ -113,7 +113,7 @@ describe("config provenance", () => {
 
 describe("capabilities config", () => {
   const globalPath = globalRailConfigPath();
-  const projectPath = "/repo/.pi/guard.json";
+  const projectPath = "/repo/.pi/rail.json";
 
   it("parses custom classes, defaulting name to the id and disposition to ask", () => {
     const config = mergeConfig(

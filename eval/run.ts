@@ -1,4 +1,4 @@
-// Offline eval for the guard's capability pipeline. Runs the real production
+// Offline eval for the rail's capability pipeline. Runs the real production
 // path — namer → disposition table (built-in defaults) → judge when the table
 // escalates — against live models and scores decision agreement plus latency,
 // so models can be compared for the quality/latency/cost tradeoff. This never

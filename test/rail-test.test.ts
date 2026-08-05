@@ -1,4 +1,4 @@
-// /guard test dry-run tests: per-stage verdicts for commands and file ops
+// /rail test dry-run tests: per-stage verdicts for commands and file ops
 // (allowlist labels, screen, namer, disposition table, judge), the
 // disabled-classifier path, and the no-mutation guarantee (stats, telemetry,
 // recent decisions, traces, lastDecision all untouched).
@@ -72,11 +72,11 @@ function fakeComplete(script: string[]): CompleteFn {
 
 function reportOf(widgets: Array<{ key: string; lines: string[] | undefined }>): string {
   const last = widgets.at(-1);
-  assert.equal(last?.key, "guard-report");
+  assert.equal(last?.key, "rail-report");
   return (last?.lines ?? []).join("\n");
 }
 
-describe("/guard test dry runs", () => {
+describe("/rail test dry runs", () => {
   it("reports per-segment rules, capability tags, and the table for an allowlisted command", async () => {
     const { state } = railState(testConfig(), "seatbelt");
     const { ctx, widgets } = fakeCtx();
@@ -214,6 +214,6 @@ describe("/guard test dry runs", () => {
     const { ctx, widgets, notifications } = fakeCtx();
     await createRailTest({ state })("", ctx);
     assert.equal(widgets.length, 0);
-    assert.match(notifications.at(-1) ?? "", /Usage: \/guard test/);
+    assert.match(notifications.at(-1) ?? "", /Usage: \/rail test/);
   });
 });

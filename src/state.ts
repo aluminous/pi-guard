@@ -41,7 +41,7 @@ export interface RailStats {
 export type RailViewKind = "status" | "policy" | "report";
 
 /**
- * An open live guard view — a TUI overlay popup or an RPC widget.
+ * An open live rail view — a TUI overlay popup or an RPC widget.
  * refresh() re-renders content from current state, close() dismisses it.
  */
 export interface RailLiveView {
@@ -50,7 +50,7 @@ export interface RailLiveView {
   close(): void;
   /**
    * Tabbed panels only (the policy page): retarget the open panel instead of
-   * closing it, so `/guard policy rules` with the dispositions tab up switches
+   * closing it, so `/rail policy rules` with the dispositions tab up switches
    * tabs rather than toggling the whole panel away.
    */
   selectTab?(tab: string): void;
@@ -78,13 +78,13 @@ export interface RuntimeState {
   };
   stats: RailStats;
   recent: RailEvent[];
-  /** Per-call decision traces for /guard explain, newest first (last TRACE_LIMIT). */
+  /** Per-call decision traces for /rail explain, newest first (last TRACE_LIMIT). */
   traces: DecisionTrace[];
-  /** Most recent guarded bash execution, for the /guard why sandbox-denial window. */
+  /** Most recent sandboxed bash execution, for the /rail why sandbox-denial window. */
   lastBashCommand?: { command: string; startedAt: number; endedAt?: number };
   /** provider/id specs with configured auth, cached at session start for argument completions (which get no ctx). */
   availableModelSpecs: string[];
-  /** Child identities (session file/transcript) already warned about running without guard acknowledgement. */
+  /** Child identities (session file/transcript) already warned about running without rail acknowledgement. */
   subagentAckWarned: Set<string>;
   /** Writes a custom entry to pi's session log (pi.appendEntry). Undefined in tests without session wiring. */
   appendEntry?: (customType: string, data: unknown) => void;

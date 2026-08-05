@@ -176,7 +176,7 @@ describe("review payloads", () => {
     assert.equal("userSessionGuidance" in JSON.parse(buildNamerText(REGISTRY, [], projection)), false);
   });
 
-  it("gives the judge the guard's recent decisions and the namer's labels", () => {
+  it("gives the judge the rail's recent decisions and the namer's labels", () => {
     const projection = projectToolCall("bash", { command: "git push --force origin main" }, "/repo", testConfig());
     const payload = JSON.parse(
       buildJudgeText({

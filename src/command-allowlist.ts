@@ -205,7 +205,7 @@ function segmentVerdict(command: ShellCommand, rules: Array<{ text: string; toke
   return { command: text, rule: matched.text, capability: capabilityForTemplate(matched.text) };
 }
 
-/** Full allowlist verdict with per-segment detail, for decision traces and /guard test. */
+/** Full allowlist verdict with per-segment detail, for decision traces and /rail test. */
 export function explainCommandAllowlist(command: string, rules: string[]): CommandAllowlistExplanation {
   const parsedRules = rules
     .map((rule) => ({ text: rule.trim(), tokens: rule.trim().split(/\s+/) }))

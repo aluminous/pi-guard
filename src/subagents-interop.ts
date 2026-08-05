@@ -4,14 +4,14 @@
 // - Child side: pi-subagents' runtime listens on the child's extension event
 //   bus for `subagent:acknowledge-extension` and reports collected ids back to
 //   the parent as `runtimeAcknowledgedExtensions` on the run result. Emitting
-//   there proves the guard actually loaded (and enforced) inside the child.
+//   there proves the rail actually loaded (and enforced) inside the child.
 // - Parent side: the `subagent`/`subagent_wait` tool results carry those
-//   acknowledgements per child. A finished child without the guard's id ran
-//   with no guard — most commonly because pi-subagents launched it with
+//   acknowledgements per child. A finished child without the rail's id ran
+//   with no rail — most commonly because pi-subagents launched it with
 //   `--no-extensions` (agent `extensions:` frontmatter,
 //   `subagents.defaultExtensions`, or a capability ceiling) or because it was
 //   an external-CLI runner. That is worth a user-facing warning, since the
-//   parent statusline shows an active guard while children run unguarded.
+//   parent statusline shows an active rail while children run with no rail.
 //
 // Everything here is observability, never enforcement: failures are swallowed
 // and no tool call is blocked or altered.
@@ -23,16 +23,23 @@ export const SUBAGENT_CHILD_ENV = "PI_SUBAGENT_CHILD";
 /** Child event bus channel pi-subagents collects extension acknowledgements on. */
 export const SUBAGENT_ACK_EVENT = "subagent:acknowledge-extension";
 /** Id acknowledged with; the parent-side check also accepts an "@version" suffix. */
-export const RAIL_ACK_ID = "pi-extension-guard";
+export const RAIL_ACK_ID = "pi-rail";
+/**
+ * The id acknowledged with before the pi-guard → pi-rail rename. Never emitted
+ * again, but still accepted parent-side: a new parent will meet children that
+ * loaded an older install, and reading their ack as "no rail" would fire a
+ * false unguarded-child warning.
+ */
+export const LEGACY_RAIL_ACK_ID = "pi-extension-guard";
 
 /** pi-subagents tools whose results carry per-child acknowledgement data. */
 const SUBAGENT_RESULT_TOOLS = new Set(["subagent", "subagent_wait"]);
 
 /**
- * Acknowledges the guard on the child's event bus when this session is a
- * pi-subagents child and the guard is actually enforcing. Deliberately not
- * emitted when the guard is disabled or failed to initialize: the
- * acknowledgement means "bash here is guarded", not merely "the extension
+ * Acknowledges the rail on the child's event bus when this session is a
+ * pi-subagents child and the rail is actually enforcing. Deliberately not
+ * emitted when the rail is disabled or failed to initialize: the
+ * acknowledgement means "bash here is on the rail", not merely "the extension
  * loaded", so the parent-side warning fires for those children too.
  */
 export function acknowledgeRailInSubagentChild(pi: ExtensionAPI, state: RuntimeState, env: NodeJS.ProcessEnv = process.env): boolean {
@@ -61,11 +68,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function hasRailAck(entry: Record<string, unknown>): boolean {
   const ack = entry.runtimeAcknowledgedExtensions;
   if (!isRecord(ack) || !Array.isArray(ack.ids)) return false;
-  return ack.ids.some((id) => id === RAIL_ACK_ID || (typeof id === "string" && id.startsWith(`${RAIL_ACK_ID}@`)));
+  const matches = (id: unknown, known: string) => id === known || (typeof id === "string" && id.startsWith(`${known}@`));
+  return ack.ids.some((id) => matches(id, RAIL_ACK_ID) || matches(id, LEGACY_RAIL_ACK_ID));
 }
 
 /**
- * Extracts finished child runs that never acknowledged the guard from a
+ * Extracts finished child runs that never acknowledged the rail from a
  * subagent tool result. Non-terminal entries (still running or detached) are
  * skipped: their acknowledgement file is only read once the child exits.
  */
@@ -103,7 +111,7 @@ function agentList(entries: UnacknowledgedSubagent[]): string {
 
 /**
  * Parent-side check for a tool_result event: warns once per child when a
- * subagent finished without acknowledging the guard. Old pi-subagents
+ * subagent finished without acknowledging the rail. Old pi-subagents
  * versions (no acknowledgement channel) and external-CLI runners cannot
  * acknowledge, so the generic wording stays a "was not active" observation
  * rather than a claim about why.
@@ -121,6 +129,6 @@ export function warnUnacknowledgedSubagents(event: { toolName: string; details?:
   const other = fresh.filter((entry) => !entry.extensionsRestricted);
   const parts: string[] = [];
   if (restricted.length > 0) parts.push(`${agentList(restricted)} (launched with ambient extensions disabled, e.g. agent 'extensions:' frontmatter or subagents.defaultExtensions)`);
-  if (other.length > 0) parts.push(`${agentList(other)} (guard not loaded or not enforcing there — disabled config, an external runner, or an older pi-subagents)`);
-  ctx.ui.notify(`Pi Rail was not active in finished subagent children: ${parts.join("; ")}. Their bash and file actions ran unguarded.`, "warning");
+  if (other.length > 0) parts.push(`${agentList(other)} (rail not loaded or not enforcing there — disabled config, an external runner, or an older pi-subagents)`);
+  ctx.ui.notify(`Pi Rail was not active in finished subagent children: ${parts.join("; ")}. Their bash and file actions ran without the rail.`, "warning");
 }

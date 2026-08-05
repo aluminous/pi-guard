@@ -1,6 +1,6 @@
 // Read-only mode tests: deterministic write/edit blocks, bash fail-closed
 // behavior when the classifier cannot review, the read-only disposition
-// preset, and the /guard readonly toggle.
+// preset, and the /rail readonly toggle.
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -218,7 +218,7 @@ describe("read-only disposition preset", () => {
   });
 });
 
-describe("/guard readonly toggle", () => {
+describe("/rail readonly toggle", () => {
   function makeCommand() {
     const state = createRuntimeState();
     const command = createRailCommand({

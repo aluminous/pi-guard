@@ -24,8 +24,8 @@ function makeBackend(config: ResolvedRailConfig): RailBackend {
 export default function (pi: ExtensionAPI) {
   registerRailMessageRenderer(pi);
 
-  pi.registerFlag("no-guard", {
-    description: "Disable the Pi Rail extension and run bash unguarded",
+  pi.registerFlag("no-rail", {
+    description: "Disable the Pi Rail extension and run bash without the rail",
     type: "boolean",
     default: false,
   });
@@ -35,7 +35,7 @@ export default function (pi: ExtensionAPI) {
   const localBashOps = createLocalBashOperations();
   const state = createRuntimeState();
   // Decision telemetry lands in pi's own session log as custom entries
-  // (user-approved feature: guard decision records via pi.appendEntry).
+  // (user-approved feature: rail decision records via pi.appendEntry).
   state.appendEntry = (customType, data) => pi.appendEntry(customType, data);
 
   function sandboxedOps() {
@@ -58,7 +58,7 @@ export default function (pi: ExtensionAPI) {
 
   // Statusline convention: the statusline is a pure projection of RuntimeState.
   // Mutators (enableRail, record* helpers, commands) never refresh it themselves;
-  // instead every entry point — each event handler below and the /guard command
+  // instead every entry point — each event handler below and the /rail command
   // dispatch — ends with a single updateRailStatus call, usually in a finally.
   async function enableRail(ctx: ExtensionContext): Promise<void> {
     const config = state.config ?? loadConfig(ctx);
@@ -108,7 +108,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   // pi-subagents interop: warn when a finished subagent child never acknowledged
-  // the guard on its event bus — that child ran with no guard (see subagents-interop.ts).
+  // the rail on its event bus — that child ran with no rail (see subagents-interop.ts).
   pi.on("tool_result", (event, ctx) => {
     warnUnacknowledgedSubagents(event, ctx, state);
   });
@@ -132,7 +132,7 @@ export default function (pi: ExtensionAPI) {
     try {
       resetSessionState(state);
 
-      const disabledByFlag = pi.getFlag("no-guard") as boolean;
+      const disabledByFlag = pi.getFlag("no-rail") as boolean;
       const config = loadConfig(ctx);
       state.config = config;
       state.warnings.push(...config.diagnostics);
@@ -148,7 +148,7 @@ export default function (pi: ExtensionAPI) {
         state.enabled = false;
         state.disabledForNextAgent = false;
         state.backend = new NoneBackend();
-        ctx.ui.notify("Pi Rail disabled by --no-guard; bash will run unguarded.", "warning");
+        ctx.ui.notify("Pi Rail disabled by --no-rail; bash will run without the rail.", "warning");
         return;
       }
 
@@ -156,14 +156,14 @@ export default function (pi: ExtensionAPI) {
         state.enabled = false;
         state.disabledForNextAgent = false;
         state.backend = new NoneBackend();
-        ctx.ui.notify("Rail disabled by config; bash will run unguarded.", "info");
+        ctx.ui.notify("Rail disabled by config; bash will run without the rail.", "info");
         return;
       }
 
       try {
         await enableRail(ctx);
         ctx.ui.notify(`Rail initialized with ${state.backend?.name ?? config.backend} backend.`, "info");
-        // In a pi-subagents child, prove to the parent that the guard is enforcing here.
+        // In a pi-subagents child, prove to the parent that the rail is enforcing here.
         acknowledgeRailInSubagentChild(pi, state);
       } catch (error) {
         state.initialized = false;
@@ -182,7 +182,7 @@ export default function (pi: ExtensionAPI) {
       if (!state.config?.enabled) return;
       try {
         await enableRail(ctx);
-        ctx.ui.notify("Pi Rail re-enabled after one unguarded turn.", "info");
+        ctx.ui.notify("Pi Rail re-enabled after one turn without the rail.", "info");
       } catch (error) {
         state.enabled = false;
         state.initialized = false;
@@ -204,23 +204,23 @@ export default function (pi: ExtensionAPI) {
       }
     }
     state.initialized = false;
-    ctx.ui.setStatus("guard", undefined);
+    ctx.ui.setStatus("rail", undefined);
   });
 
   const runRailSmoke = createRailSmoke({ state, sandboxedOps });
   const runCritique = createCritiqueRunner({ state });
-  const guardCommand = createRailCommand({ state, enableRail, disableRail, runRailSmoke, runCritique });
+  const railCommand = createRailCommand({ state, enableRail, disableRail, runRailSmoke, runCritique });
 
-  pi.registerCommand("guard", {
+  pi.registerCommand("rail", {
     description: "Pi Rail control panel; or: status|policy [rules]|set <class> [disposition]|explain|test|why|on|off|off session|readonly|model|smoke|critique",
-    getArgumentCompletions: guardCommand.getArgumentCompletions,
-    handler: guardCommand.handler,
+    getArgumentCompletions: railCommand.getArgumentCompletions,
+    handler: railCommand.handler,
   });
 
   // No built-in binding uses ctrl+alt+r; conflicts with other extensions are
   // reported by pi's extension runner as shortcut diagnostics.
   pi.registerShortcut("ctrl+alt+r", {
-    description: "Toggle guard read-only mode",
-    handler: (ctx) => guardCommand.handler("readonly", ctx),
+    description: "Toggle rail read-only mode",
+    handler: (ctx) => railCommand.handler("readonly", ctx),
   });
 }

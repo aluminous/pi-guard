@@ -32,13 +32,13 @@ const SUBCOMMANDS: Array<{ value: string; description: string }> = [
   { value: "guide", description: "Add classifier guidance for this session: guide <text> (or bare to be prompted)" },
   { value: "guide clear", description: "Drop every guidance entry collected this session" },
   { value: "explain", description: "Show the newest decision trace (explain <n> for older ones)" },
-  { value: "test", description: "Dry-run a shell command through the guard without executing it" },
-  { value: "test read", description: "Dry-run a file read through the guard (test read <path>)" },
-  { value: "test write", description: "Dry-run a file write through the guard (test write <path>)" },
-  { value: "why", description: "Map sandbox denials from the last guarded command to guard rules" },
-  { value: "on", description: "Enable the guard" },
+  { value: "test", description: "Dry-run a shell command through the rail without executing it" },
+  { value: "test read", description: "Dry-run a file read through the rail (test read <path>)" },
+  { value: "test write", description: "Dry-run a file write through the rail (test write <path>)" },
+  { value: "why", description: "Map sandbox denials from the last sandboxed command to rail rules" },
+  { value: "on", description: "Enable the rail" },
   { value: "off", description: "Disable for the next agent turn, then re-enable" },
-  { value: "off session", description: "Disable until the session ends (unguarded!)" },
+  { value: "off session", description: "Disable until the session ends (no rail!)" },
   { value: "readonly", description: "Toggle read-only mode: write/edit blocked, bash restricted" },
   { value: "model", description: "Choose the namer model (auto|current|off|provider/model)" },
   { value: "smoke", description: "Run sandbox and namer smoke tests" },
@@ -65,7 +65,7 @@ export function createRailCommand(deps: RailCommandDeps) {
   });
 
   /**
-   * `/guard guide`: volunteer classifier guidance instead of waiting to be
+   * `/rail guide`: volunteer classifier guidance instead of waiting to be
    * asked. Entries join the same session ring approval comments feed, so the
    * namer and judge see them on the next action.
    */
@@ -79,11 +79,11 @@ export function createRailCommand(deps: RailCommandDeps) {
     let text = trimmed;
     if (!text) {
       if (!ctx.hasUI) {
-        show(ctx, "Usage: /guard guide <text>", "warning");
+        show(ctx, "Usage: /rail guide <text>", "warning");
         return;
       }
       // Cancel and empty submit both resolve falsy here, and both mean no-op.
-      text = (await ctx.ui.input("Guidance for the guard this session", "e.g. this repo's deploy script is expected to push")) ?? "";
+      text = (await ctx.ui.input("Guidance for the rail this session", "e.g. this repo's deploy script is expected to push")) ?? "";
       if (!text.trim()) return;
     }
     addUserGuidance(state.classifier, text);
@@ -110,7 +110,7 @@ export function createRailCommand(deps: RailCommandDeps) {
 
   async function disableSession(ctx: ExtensionContext): Promise<void> {
     await deps.disableRail(ctx, "session");
-    show(ctx, "Pi Rail disabled for this session; bash and file-tool policy checks are unguarded.", "warning");
+    show(ctx, "Pi Rail disabled for this session; bash and file-tool policy checks run without the rail.", "warning");
   }
 
   function toggleReadOnly(ctx: ExtensionContext): void {
@@ -128,7 +128,7 @@ export function createRailCommand(deps: RailCommandDeps) {
     }
     const n = args.trim() === "" ? 1 : Number.parseInt(args.trim(), 10);
     if (!Number.isInteger(n) || n < 1 || n > total) {
-      show(ctx, `Usage: /guard explain [n] with n between 1 (newest) and ${total}.`, "warning");
+      show(ctx, `Usage: /rail explain [n] with n between 1 (newest) and ${total}.`, "warning");
       return;
     }
     const trace = state.traces[n - 1]!;
@@ -156,9 +156,9 @@ export function createRailCommand(deps: RailCommandDeps) {
   }
 
   const STATUS_LINE_MODES: Array<{ value: StatusLineMode; description: string }> = [
-    { value: "always", description: "Show the guard statusline at all times" },
-    { value: "auto", description: "Show only when the guard is off or erroring, or something was denied since your last message" },
-    { value: "never", description: "Hide the guard statusline entirely" },
+    { value: "always", description: "Show the rail statusline at all times" },
+    { value: "auto", description: "Show only when the rail is off or erroring, or something was denied since your last message" },
+    { value: "never", description: "Hide the rail statusline entirely" },
   ];
 
   async function chooseStatusLine(ctx: ExtensionContext): Promise<void> {
@@ -187,23 +187,23 @@ export function createRailCommand(deps: RailCommandDeps) {
   async function openPanel(ctx: ExtensionContext): Promise<void> {
     const items: SelectItem<PanelAction>[] = [];
     if (!state.enabled) {
-      items.push({ value: "on", label: "Enable guard", searchText: "enable on start guard", description: "Initialize the sandbox backend and enforce policy" });
+      items.push({ value: "on", label: "Enable rail", searchText: "enable on start rail", description: "Initialize the sandbox backend and enforce policy" });
     } else {
       items.push(
-        { value: "off-turn", label: "Disable for next turn", searchText: "disable off next turn pause", description: "One unguarded agent turn, then the guard re-enables itself" },
-        { value: "off-session", label: "Disable for session", searchText: "disable off session unguarded", description: "Unguarded until Pi restarts — asks for confirmation" },
+        { value: "off-turn", label: "Disable for next turn", searchText: "disable off next turn pause", description: "One agent turn with no rail, then the rail re-enables itself" },
+        { value: "off-session", label: "Disable for session", searchText: "disable off session no rail", description: "No rail until Pi restarts — asks for confirmation" },
       );
     }
     items.push(
       { value: "readonly", label: `Read-only mode: ${state.readOnly ? "on" : "off"}`, searchText: "readonly read only ro toggle mode", description: "Block write/edit and restrict bash to read-only commands" },
       { value: "model", label: "Namer model…", searchText: "model namer classifier auto choose select", description: "Pick auto, the current model, a specific model, or turn review off" },
-      { value: "statusline", label: "Statusline visibility…", searchText: "statusline status line visibility always never auto hide show", description: "Show the guard statusline always, never, or only when notable" },
+      { value: "statusline", label: "Statusline visibility…", searchText: "statusline status line visibility always never auto hide show", description: "Show the rail statusline always, never, or only when notable" },
       { value: "smoke", label: "Run smoke tests", searchText: "smoke test verify sandbox namer classifier", description: "Verify sandboxed execution and capability naming end to end" },
       { value: "critique", label: "Critique capabilities", searchText: "critique capabilities classes screen rules review improve", description: "Have Pi's current model review the class definitions, table, and screen" },
       { value: "status", label: "Status popup", searchText: "status report details approvals live popup overlay", description: "Live status popup: decisions, approvals, guidance — updates while the agent works" },
       { value: "dispositions", label: "Dispositions…", searchText: "dispositions policy capabilities classes allow deny ask judge edit table page", description: "Edit the capability disposition table: arrows cycle a row for this session, Ctrl+S saves" },
       { value: "policy-rules", label: "Policy rules", searchText: "policy rules filesystem network environment provenance mechanism show", description: "Resolved filesystem/network/environment rules with their config provenance" },
-      { value: "explain", label: "Explain last decision", searchText: "explain trace decision why last chain stages", description: "Show the decision chain the guard ran for the most recent tool call" },
+      { value: "explain", label: "Explain last decision", searchText: "explain trace decision why last chain stages", description: "Show the decision chain the rail ran for the most recent tool call" },
     );
 
     const picked = await pickFromList<PanelAction>(ctx, { title: "Pi Rail", headerLines: panelHeader(ctx), items });
@@ -214,7 +214,7 @@ export function createRailCommand(deps: RailCommandDeps) {
       case "off-turn":
         return disableTurn(ctx);
       case "off-session": {
-        const ok = await ctx.ui.confirm("Disable Pi Rail for this session?", "Bash and file-tool policy checks will run unguarded until Pi restarts.");
+        const ok = await ctx.ui.confirm("Disable Pi Rail for this session?", "Bash and file-tool policy checks will run without the rail until Pi restarts.");
         if (ok) return disableSession(ctx);
         return;
       }
@@ -233,7 +233,7 @@ export function createRailCommand(deps: RailCommandDeps) {
       case "dispositions":
         return dispositions.openSettings(ctx, "dispositions");
       case "policy-rules":
-        // Same routing as `/guard policy rules`: a tab of the page in the TUI.
+        // Same routing as `/rail policy rules`: a tab of the page in the TUI.
         if (ctx.mode === "tui" && ctx.hasUI) return dispositions.openSettings(ctx, "rules");
         return showView(ctx, "policy");
       case "explain":
@@ -259,7 +259,7 @@ export function createRailCommand(deps: RailCommandDeps) {
     // into a clean no-op (pickFromList resolves undefined) or stderr error.
     if (!sub) return openPanel(ctx);
     if (sub === "status") return showView(ctx, "status");
-    // /guard policy IS the disposition page now; the mechanism report is its
+    // /rail policy IS the disposition page now; the mechanism report is its
     // second tab in the TUI, and still a standalone widget everywhere else.
     if (sub === "policy") {
       const target = rest.trim().toLowerCase();
@@ -268,7 +268,7 @@ export function createRailCommand(deps: RailCommandDeps) {
         if (ctx.mode === "tui" && ctx.hasUI) return dispositions.openSettings(ctx, "rules");
         return showView(ctx, "policy");
       }
-      show(ctx, "Usage: /guard policy [rules]", "warning");
+      show(ctx, "Usage: /rail policy [rules]", "warning");
       return;
     }
     if (sub === "set") return dispositions.runSet(rest, ctx);
@@ -286,7 +286,7 @@ export function createRailCommand(deps: RailCommandDeps) {
     if (sub === "smoke" && !rest) return deps.runRailSmoke(ctx);
     if (sub === "critique") return deps.runCritique(rest, ctx);
 
-    show(ctx, "Usage: /guard [status|policy [rules]|set <class> [disposition]|guide <text>|guide clear|explain [n]|test …|why|on|off|off session|readonly|model …|smoke|critique …]", "warning");
+    show(ctx, "Usage: /rail [status|policy [rules]|set <class> [disposition]|guide <text>|guide clear|explain [n]|test …|why|on|off|off session|readonly|model …|smoke|critique …]", "warning");
   }
 
   function getArgumentCompletions(argumentPrefix: string) {

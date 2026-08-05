@@ -28,7 +28,7 @@ interface ReportPanelParams {
 }
 
 /**
- * Bordered read-only report panel for the guard status and policy views,
+ * Bordered read-only report panel for the rail status and policy views,
  * docked in the editor area like pi's model chooser (non-overlay custom UI):
  * DynamicBorder rules top and bottom to match the native dialog style. The
  * agent keeps streaming above it; content refreshes live via refresh()

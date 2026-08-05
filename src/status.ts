@@ -90,7 +90,7 @@ export function classifierModelLabel(ctx: ExtensionContext, config: ResolvedRail
   return spec === "auto" ? `auto (${model.provider}/${model.id})` : `${model.provider}/${model.id}`;
 }
 
-/** In "auto" mode the statusline appears only when something needs attention: the guard is off or erroring, or a call was denied/blocked since the last user message. */
+/** In "auto" mode the statusline appears only when something needs attention: the rail is off or erroring, or a call was denied/blocked since the last user message. */
 export function statusLineVisible(mode: StatusLineMode, state: RuntimeState): boolean {
   if (mode === "never") return false;
   if (mode === "always") return true;
@@ -100,7 +100,7 @@ export function statusLineVisible(mode: StatusLineMode, state: RuntimeState): bo
 export function updateRailStatus(ctx: ExtensionContext, state: RuntimeState): void {
   state.liveView?.refresh();
   if (!statusLineVisible(state.config?.statusLine ?? "always", state)) {
-    ctx.ui.setStatus("guard", undefined);
+    ctx.ui.setStatus("rail", undefined);
     return;
   }
   const theme = ctx.ui.theme;
@@ -117,21 +117,21 @@ export function updateRailStatus(ctx: ExtensionContext, state: RuntimeState): vo
     `↓${formatCompactTokens(stats.classifierOutputTokens)}`,
   ].join(" ");
   if (state.lastError) {
-    ctx.ui.setStatus("guard", error(`Rail: error ${compact}`));
+    ctx.ui.setStatus("rail", error(`Rail: error ${compact}`));
     return;
   }
   if (!state.enabled) {
     const label = state.disabledForNextAgent && !ctx.isIdle() ? "off this turn" : state.disabledForNextAgent ? "off next turn" : "disabled";
-    ctx.ui.setStatus("guard", warning(`Rail: ${label} ${compact}`));
+    ctx.ui.setStatus("rail", warning(`Rail: ${label} ${compact}`));
     return;
   }
   const backend = `${state.backend?.name ?? config?.backend ?? "unknown"}${state.readOnly ? " RO" : ""}`;
   const network = config ? networkPolicyLabel(config) : "network unknown";
   const hasImportantStats = stats.classifierDenials > 0 || stats.blocked > 0 || stats.errors > 0;
-  ctx.ui.setStatus("guard", `${muted(`Rail: ${backend}, ${network}, ${classifierModelLabel(ctx, config, state)} `)}${hasImportantStats ? warning(compact) : muted(compact)}`);
+  ctx.ui.setStatus("rail", `${muted(`Rail: ${backend}, ${network}, ${classifierModelLabel(ctx, config, state)} `)}${hasImportantStats ? warning(compact) : muted(compact)}`);
 }
 
-/** Per-class hits and outcomes, for classes actually seen; the editable table is the /guard policy page. */
+/** Per-class hits and outcomes, for classes actually seen; the editable table is the /rail policy page. */
 function capabilityStatLines(state: RuntimeState): string[] {
   const used = usedCapabilityStats(state.capabilities, capabilityRegistry(state.config, state.capabilities));
   if (used.length === 0) return ["  (none yet)"];
@@ -226,7 +226,7 @@ interface RailLineTheme {
   bold(text: string): string;
 }
 
-/** Styles one line of a guard report (status or policy) for terminal display. */
+/** Styles one line of a rail report (status or policy) for terminal display. */
 export function styleRailLine(line: string, theme: RailLineTheme): string {
   if (line.startsWith("# ")) return theme.fg("accent", theme.bold(line.slice(2)));
   if (line.startsWith("## ")) return theme.fg("toolTitle", theme.bold(`─ ${line.slice(3)} `));
@@ -239,23 +239,28 @@ export function styleRailLine(line: string, theme: RailLineTheme): string {
 }
 
 /**
- * Renders pi-guard custom messages in the transcript. Nothing posts new
- * guard messages anymore (reports were dropped from the conversation because
+ * Renders pi-rail custom messages in the transcript. Nothing posts new
+ * rail messages anymore (reports were dropped from the conversation because
  * custom messages enter agent context); this stays registered so sessions
- * recorded before that change still render their guard reports.
+ * recorded before that change still render their reports. "pi-guard" is the
+ * renderer name those older sessions recorded, so it is registered too — the
+ * name is a lookup key baked into session files, not something the rename can
+ * reach back and change.
  */
 export function registerRailMessageRenderer(pi: ExtensionAPI): void {
-  pi.registerMessageRenderer("pi-guard", (message, _options, theme) => {
+  const render = (message: { content?: unknown }, _options: unknown, theme: RailLineTheme) => {
     const raw = String(message.content ?? "");
     const rendered = raw
       .split("\n")
       .map((line) => styleRailLine(line, theme))
       .join("\n");
-    return new Text(theme.fg("accent", theme.bold("[guard]")) + "\n" + rendered, 0, 0);
-  });
+    return new Text(theme.fg("accent", theme.bold("[rail]")) + "\n" + rendered, 0, 0);
+  };
+  pi.registerMessageRenderer("pi-rail", render);
+  pi.registerMessageRenderer("pi-guard", render);
 }
 
-/** The resolved mechanism view for /guard policy rules: the deterministic filesystem/network/environment/command policy, provenance-annotated. */
+/** The resolved mechanism view for /rail policy rules: the deterministic filesystem/network/environment/command policy, provenance-annotated. */
 export function formatRailPolicy(state: RuntimeState, config: ResolvedRailConfig): string {
   const effective = state.backend?.describeEffectivePolicy(config);
 
@@ -282,7 +287,7 @@ export function formatRailPolicy(state: RuntimeState, config: ResolvedRailConfig
   const lines = [
     "# Pi Rail Policy Rules",
     "  unmarked entries are built-in defaults; [global]/[project] name the config that set them",
-    "  the decision policy itself is the disposition table — /guard policy opens it",
+    "  the decision policy itself is the disposition table — /rail policy opens it",
     "",
     "## Filesystem",
     `  Restrictions: ${config.filesystem.enabled ? "enabled" : "disabled (lists still route classifier exemptions)"}`,

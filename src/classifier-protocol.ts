@@ -121,7 +121,7 @@ export function buildNamerText(
 }
 
 /**
- * The judge's payload: the namer's plus the guard's recent decisions, which
+ * The judge's payload: the namer's plus the rail's recent decisions, which
  * are the one context the namer deliberately does not get (a third force-push
  * after two denials is signal). Same cache discipline — pendingAction last.
  */

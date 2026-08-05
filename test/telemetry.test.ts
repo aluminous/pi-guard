@@ -24,7 +24,7 @@ function readyState(captured: RailTelemetryRecord[], overrides?: Parameters<type
   state.enabled = true;
   state.initialized = true;
   state.appendEntry = (customType, data) => {
-    assert.equal(customType, "guard");
+    assert.equal(customType, "rail");
     captured.push(data as RailTelemetryRecord);
   };
   return { state, config };
@@ -78,7 +78,7 @@ describe("redactTelemetryRecord", () => {
 });
 
 describe("appendRailTelemetry", () => {
-  it("writes records as guard custom entries", () => {
+  it("writes records as rail custom entries", () => {
     const captured: RailTelemetryRecord[] = [];
     const { state } = readyState(captured);
     appendRailTelemetry(state, { kind: "block", tool: "write", reason: "denied" });

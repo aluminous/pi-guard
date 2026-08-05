@@ -1,6 +1,6 @@
-// Sandbox violation capture for /guard why: queries the macOS unified log for
-// Seatbelt denial reports in a guarded command's execution window and maps
-// each denied path back to the guard rule that caused it. Kernel denial lines
+// Sandbox violation capture for /rail why: queries the macOS unified log for
+// Seatbelt denial reports in a sandboxed command's execution window and maps
+// each denied path back to the rail rule that caused it. Kernel denial lines
 // look like (validated empirically on macOS 15 via `log show`):
 //
 //   2026-08-05 09:20:22.869661+0900  localhost kernel[0]: (Sandbox) Sandbox: cat(8294) deny(1) file-read-data /path/to/file
@@ -73,7 +73,7 @@ export function parseSandboxDenials(raw: string): SandboxDenial[] {
 
 export interface DenialAttribution {
   denial: SandboxDenial;
-  /** Human-readable guard-rule attribution, or undefined when no guard rule explains the denial. */
+  /** Human-readable rail-rule attribution, or undefined when no rail rule explains the denial. */
   rule?: string;
   /** Set when the attributed pattern is one the sandbox only holds as a literal path. */
   degraded?: DegradedPattern;
@@ -131,7 +131,7 @@ export function formatRailWhy(params: {
   const lines = [
     "# Rail Sandbox Denials",
     "",
-    `  last guarded command: ${command.command}`,
+    `  last sandboxed command: ${command.command}`,
     `  started ${formatCommandAge(command.startedAt)}${command.endedAt !== undefined ? `, ran ${command.endedAt - command.startedAt}ms` : ", still running"}`,
     "",
     "## Denials in that window",
@@ -139,14 +139,14 @@ export function formatRailWhy(params: {
   if (attributions.length === 0) {
     lines.push(
       "  (none found)",
-      "  The unified log can lag; re-run the failing command and try /guard why again.",
+      "  The unified log can lag; re-run the failing command and try /rail why again.",
       "  Non-sandbox failures (permissions, missing files) never appear here.",
     );
     return lines.join("\n");
   }
   for (const { denial, rule, degraded } of attributions) {
     const subject = `deny ${denial.operation}${denial.target ? ` ${denial.target}` : ""} (${denial.process})`;
-    lines.push(`  [BLOCK] ${subject} → ${rule ?? "no matching guard rule (system profile)"}`);
+    lines.push(`  [BLOCK] ${subject} → ${rule ?? "no matching rail rule (system profile)"}`);
     if (degraded) lines.push(`      pattern is degraded in the sandbox: Seatbelt holds the literal ${degraded.sandboxPath}`);
   }
   return lines.join("\n");

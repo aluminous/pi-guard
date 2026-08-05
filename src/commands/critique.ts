@@ -8,9 +8,9 @@ import { getPersistentConfigPath } from "../persistent-settings.ts";
 import { syncCapabilityPreset, type RuntimeState } from "../state.ts";
 import { formatError } from "../util.ts";
 
-const CRITIQUE_SYSTEM_PROMPT = `You are an expert reviewer of the capability taxonomy used by a local coding agent's guard.
+const CRITIQUE_SYSTEM_PROMPT = `You are an expert reviewer of the capability taxonomy used by a local coding agent's rail.
 
-The guard names each proposed tool action with one or more capability classes — a cheap model does the naming, deterministic mappers and a content screen shortcut the common cases — and a user-owned disposition table then decides allow, ask, deny, or escalation to a stronger judge. The class DEFINITIONS are the prompt the namer sees; the table is the user's whole policy.
+The rail names each proposed tool action with one or more capability classes — a cheap model does the naming, deterministic mappers and a content screen shortcut the common cases — and a user-owned disposition table then decides allow, ask, deny, or escalation to a stronger judge. The class DEFINITIONS are the prompt the namer sees; the table is the user's whole policy.
 
 Critique the definitions and the screen for:
 1. Boundaries: can two classes both plausibly claim the same action, or does an obvious action fall between them? Definitions should say what belongs to a neighbour ("X, but Y is class Z instead").
@@ -27,7 +27,7 @@ function formatTableForCritique(config: ResolvedRailConfig, state: RuntimeState)
   }).join("\n");
 }
 
-/** Handles `/guard critique [provider/model]`; defaults to Pi's current model. */
+/** Handles `/rail critique [provider/model]`; defaults to Pi's current model. */
 export function createCritiqueRunner(deps: { state: RuntimeState }) {
   const { state } = deps;
 
@@ -43,7 +43,7 @@ export function createCritiqueRunner(deps: { state: RuntimeState }) {
       : ctx.model;
 
     if (!model || model.provider === "unknown" || model.id === "unknown") {
-      ctx.ui.notify("No critique model selected. Use /guard critique provider/model or select a Pi model first.", "error");
+      ctx.ui.notify("No critique model selected. Use /rail critique provider/model or select a Pi model first.", "error");
       return;
     }
 
@@ -53,14 +53,14 @@ export function createCritiqueRunner(deps: { state: RuntimeState }) {
       return;
     }
 
-    ctx.ui.setStatus("guard-critique", ctx.ui.theme.fg("accent", "Critiquing guard capabilities"));
-    ctx.ui.notify(`Critiquing the guard capability taxonomy with ${model.provider}/${model.id}...`, "info");
+    ctx.ui.setStatus("rail-critique", ctx.ui.theme.fg("accent", "Critiquing rail capabilities"));
+    ctx.ui.notify(`Critiquing the rail capability taxonomy with ${model.provider}/${model.id}...`, "info");
     const userPrompt = [
-      "Here are the guard's namer and judge system prompts, its capability classes with their effective dispositions, and the deterministic content screen:",
+      "Here are the rail's namer and judge system prompts, its capability classes with their effective dispositions, and the deterministic content screen:",
       "",
-      "<guard_capability_mode>",
+      "<rail_capability_mode>",
       buildCapabilityPromptForCritique(config, state.capabilities),
-      "</guard_capability_mode>",
+      "</rail_capability_mode>",
       "",
       "And the resolved disposition table as the user currently has it:",
       "",
@@ -96,7 +96,7 @@ export function createCritiqueRunner(deps: { state: RuntimeState }) {
       const reason = formatError(error);
       ctx.ui.notify(`Rail critique failed: ${reason}`, "error");
     } finally {
-      ctx.ui.setStatus("guard-critique", undefined);
+      ctx.ui.setStatus("rail-critique", undefined);
     }
   };
 }

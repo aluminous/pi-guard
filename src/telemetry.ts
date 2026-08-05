@@ -1,5 +1,6 @@
-// Rail decision telemetry. Records every guard decision as a `custom` entry
-// in pi's own session log (customType "guard") so real sessions become a
+// Rail decision telemetry. Records every rail decision as a `custom` entry
+// in pi's own session log (customType "rail"; "guard" before the rename, still
+// read by eval/session-stats.ts) so real sessions become a
 // corpus for analyzing and improving the classifier. Entries sit next to the
 // tool call they judged, do not participate in LLM context, and are written
 // best-effort: telemetry must never block, delay, or break a tool call.
@@ -15,7 +16,16 @@ import type { ResolvedRailConfig } from "./config.ts";
 import type { RuntimeState } from "./state.ts";
 import { textPrefix } from "./util.ts";
 
-export const RAIL_TELEMETRY_TYPE = "guard";
+export const RAIL_TELEMETRY_TYPE = "rail";
+/**
+ * The customType written before the pi-guard → pi-rail rename. Never written
+ * again; readers that mine session corpora (eval/session-stats.ts) must accept
+ * it, or every session recorded before the rename stops being analyzable.
+ */
+export const LEGACY_RAIL_TELEMETRY_TYPE = "guard";
+/** Both customTypes a rail telemetry record can appear under in a session log. */
+export const RAIL_TELEMETRY_TYPES: readonly string[] = [RAIL_TELEMETRY_TYPE, LEGACY_RAIL_TELEMETRY_TYPE];
+
 const MINIMAL_VALUE_LIMIT = 200;
 
 export type RailTelemetryMode = "off" | "minimal" | "full";
@@ -120,7 +130,7 @@ export function redactTelemetryRecord(record: RailTelemetryRecord, mode: RailTel
 }
 
 /**
- * Persists a guard decision record to the session log via pi.appendEntry.
+ * Persists a rail decision record to the session log via pi.appendEntry.
  * Never throws: session logging is observability, not enforcement, and
  * ephemeral sessions silently skip persistence inside SessionManager.
  */

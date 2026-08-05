@@ -10,6 +10,6 @@ export function testConfig(overrides?: (config: ResolvedRailConfig) => void): Re
 }
 
 export function makeFixtureDir(): { dir: string; cleanup: () => void } {
-  const dir = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), "pi-guard-test-")));
+  const dir = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), "pi-rail-test-")));
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }

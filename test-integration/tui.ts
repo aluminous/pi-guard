@@ -5,7 +5,7 @@
  *
  * Deliberately excluded from `npm test` (which only globs test/*.test.ts):
  * it needs tmux and pi installed and takes ~15s. Run via `npm run test:tui`.
- * It only ever submits /guard slash commands, so no LLM turn is triggered.
+ * It only ever submits /rail slash commands, so no LLM turn is triggered.
  * The user's global pi config leaks into the session (model warnings, other
  * noise), so every assertion is substring-based and tolerates unrelated lines.
  */
@@ -17,7 +17,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 
-const SESSION = `pi-guard-tui-test-${process.pid}`;
+const SESSION = `pi-rail-tui-test-${process.pid}`;
 /** Exact-match session target (the trailing colon is required for `=` in target-pane position). */
 const TARGET = `=${SESSION}:`;
 const STARTUP_TIMEOUT_MS = 60_000;
@@ -90,7 +90,7 @@ async function submitCommand(command: string): Promise<void> {
 }
 
 /**
- * Closes the focused guard overlay with Esc and waits until `marker` (a string
+ * Closes the focused rail overlay with Esc and waits until `marker` (a string
  * only that overlay renders) is gone from the visible pane. The footer text is
  * not a reliable close marker: long overlay content (e.g. the policy view at
  * 40 rows) clips the footer line off the bottom of the screen.
@@ -100,7 +100,7 @@ async function closeOverlay(name: string, marker: string): Promise<void> {
   await waitFor((pane) => !pane.includes(marker), `${name} overlay to close`, UI_TIMEOUT_MS);
 }
 
-test("pi TUI: guard startup, status/policy page and its tabs, no [guard] conversation reports", async (t) => {
+test("pi TUI: rail startup, status/policy page and its tabs, no [rail] conversation reports", async (t) => {
   const tmuxPath = which("tmux");
   const piPath = which("pi");
   if (tmuxPath === undefined || piPath === undefined) {
@@ -109,21 +109,21 @@ test("pi TUI: guard startup, status/policy page and its tabs, no [guard] convers
   }
 
   const extensionRoot = path.resolve(import.meta.dirname, "..");
-  const projectDir = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), "pi-guard-tui-project-")));
+  const projectDir = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), "pi-rail-tui-project-")));
   let sessionStarted = false;
   try {
     // A tiny throwaway git repo for pi to treat as the project.
     const git = (...args: string[]) => execFileSync("git", ["-C", projectDir, ...args], { encoding: "utf8" });
     git("init", "--quiet");
-    writeFileSync(path.join(projectDir, "README.md"), "# pi-guard TUI test fixture\n");
+    writeFileSync(path.join(projectDir, "README.md"), "# pi-rail TUI test fixture\n");
     writeFileSync(path.join(projectDir, "hello.txt"), "hello\n");
-    // Pin what the assertions depend on: the developer's global guard config
+    // Pin what the assertions depend on: the developer's global rail config
     // leaks into the session (the project layer merges over it), and a global
     // statusLine of "auto"/"never" would fail the statusline gate below.
     mkdirSync(path.join(projectDir, ".pi"));
-    writeFileSync(path.join(projectDir, ".pi", "guard.json"), `${JSON.stringify({ statusLine: "always" })}\n`);
+    writeFileSync(path.join(projectDir, ".pi", "rail.json"), `${JSON.stringify({ statusLine: "always" })}\n`);
     git("add", ".");
-    git("-c", "user.name=pi-guard-test", "-c", "user.email=pi-guard-test@example.invalid", "commit", "--quiet", "-m", "fixture");
+    git("-c", "user.name=pi-rail-test", "-c", "user.email=pi-rail-test@example.invalid", "commit", "--quiet", "-m", "fixture");
 
     tmux(
       "new-session", "-d", "-s", SESSION, "-x", "140", "-y", "40", "-c", projectDir,
@@ -134,7 +134,7 @@ test("pi TUI: guard startup, status/policy page and its tabs, no [guard] convers
     // Startup: init notification plus a statusline (statusLine defaults to "always").
     await waitFor(
       (pane) => pane.includes("Rail initialized with seatbelt backend"),
-      "guard init notification",
+      "rail init notification",
       STARTUP_TIMEOUT_MS,
     );
     await waitFor(
@@ -143,8 +143,8 @@ test("pi TUI: guard startup, status/policy page and its tabs, no [guard] convers
       UI_TIMEOUT_MS,
     );
 
-    // /guard status opens the live status overlay.
-    await submitCommand("/guard status");
+    // /rail status opens the live status overlay.
+    await submitCommand("/rail status");
     await waitFor(
       (pane) => pane.includes("Esc closes") && pane.includes("Decisions this session"),
       "status overlay (footer + decisions section)",
@@ -152,9 +152,9 @@ test("pi TUI: guard startup, status/policy page and its tabs, no [guard] convers
     );
     await closeOverlay("status", "Decisions this session");
 
-    // /guard policy opens the interactive disposition page: every class, its
+    // /rail policy opens the interactive disposition page: every class, its
     // disposition, and the session stats column.
-    await submitCommand("/guard policy");
+    await submitCommand("/rail policy");
     await waitFor(
       (pane) => pane.includes("Capability policy") && /read-project\s+allow/.test(pane) && /off-machine-effects\s+ask/.test(pane),
       "disposition page with its rows",
@@ -180,35 +180,35 @@ test("pi TUI: guard startup, status/policy page and its tabs, no [guard] convers
 
     // Read-only mode is a session preset: the page banners it and shows the
     // tightened effective value next to the row the user still edits.
-    await submitCommand("/guard readonly");
-    await submitCommand("/guard policy");
+    await submitCommand("/rail readonly");
+    await submitCommand("/rail policy");
     await waitFor(
       (pane) => pane.includes("read-only preset active") && /modify-project\s+allow → deny\*/.test(pane),
       "read-only banner and preset-tightened row",
       UI_TIMEOUT_MS,
     );
     await closeOverlay("disposition page", "Capability policy");
-    await submitCommand("/guard readonly");
+    await submitCommand("/rail readonly");
 
     // The mechanism report is the page's second tab now. Tab cycles to it from
     // the table; no footer assertion here, since the rules view is tall enough
     // to clip the footer at 40 rows.
-    await submitCommand("/guard policy");
+    await submitCommand("/rail policy");
     await waitFor((pane) => pane.includes("Capability policy"), "policy page before tabbing", UI_TIMEOUT_MS);
     tmux("send-keys", "-t", TARGET, "Tab");
     await waitFor((pane) => pane.includes("Pi Rail Policy Rules"), "rules tab content after Tab", UI_TIMEOUT_MS);
     await closeOverlay("policy rules tab", "Pi Rail Policy Rules");
 
-    // /guard policy rules opens the same page directly on that tab.
-    await submitCommand("/guard policy rules");
+    // /rail policy rules opens the same page directly on that tab.
+    await submitCommand("/rail policy rules");
     await waitFor((pane) => pane.includes("Pi Rail Policy Rules"), "policy rules tab title", UI_TIMEOUT_MS);
     await closeOverlay("policy rules", "Pi Rail Policy Rules");
 
-    // Nothing above should have posted a [guard] report into the conversation.
+    // Nothing above should have posted a [rail] report into the conversation.
     const scrollback = fullScrollback();
     assert.ok(
-      !scrollback.includes("[guard]"),
-      `expected no [guard] report in the conversation.\nFull scrollback:\n${scrollback}`,
+      !scrollback.includes("[rail]"),
+      `expected no [rail] report in the conversation.\nFull scrollback:\n${scrollback}`,
     );
   } finally {
     if (sessionStarted) {

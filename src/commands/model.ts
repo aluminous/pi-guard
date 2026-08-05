@@ -11,11 +11,11 @@ function persist(ctx: ExtensionContext, update: { enabled?: boolean; model?: str
   try {
     updatePersistentClassifierSettings(update);
   } catch (error) {
-    ctx.ui.notify(`Could not persist guard classifier setting: ${formatError(error)}`, "warning");
+    ctx.ui.notify(`Could not persist rail classifier setting: ${formatError(error)}`, "warning");
   }
 }
 
-/** Handles `/guard model [auto|current|off|status|provider/model]`; no arg opens the selector in TUI mode. */
+/** Handles `/rail model [auto|current|off|status|provider/model]`; no arg opens the selector in TUI mode. */
 export async function runModelCommand(args: string, ctx: ExtensionContext, state: RuntimeState): Promise<void> {
   const config = state.config ?? loadConfig(ctx);
   const arg = args.trim();

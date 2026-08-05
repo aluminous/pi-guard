@@ -1,6 +1,6 @@
 // Decision-trace tests: trace contents for each interceptor stage (path
 // block, exempt read, allowlisted command, screen, namer/table/judge via a
-// fake complete function) and the /guard explain rendering path.
+// fake complete function) and the /rail explain rendering path.
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -203,7 +203,7 @@ describe("decision traces", () => {
   });
 });
 
-describe("/guard explain", () => {
+describe("/rail explain", () => {
   function makeCommand() {
     const state = createRuntimeState();
     const command = createRailCommand({
@@ -241,7 +241,7 @@ describe("/guard explain", () => {
     });
     await command.handler("explain", ctx);
     const lines = widgets.at(-1)?.lines ?? [];
-    assert.equal(widgets.at(-1)?.key, "guard-report");
+    assert.equal(widgets.at(-1)?.key, "rail-report");
     assert.ok(lines.some((line) => line.includes("write: /etc/hosts")));
     assert.ok(lines.some((line) => line.includes("[BLOCK] path-policy: write denied by pattern /etc")));
     assert.ok(lines.some((line) => line.includes("(1/2, newest first)")));
@@ -260,7 +260,7 @@ describe("/guard explain", () => {
   it("shows an empty-state report when nothing was traced", async () => {
     const { command, widgets, ctx } = makeCommand();
     await command.handler("explain", ctx);
-    assert.ok((widgets.at(-1)?.lines ?? []).some((line) => line.includes("no guarded tool calls traced yet")));
+    assert.ok((widgets.at(-1)?.lines ?? []).some((line) => line.includes("no intercepted tool calls traced yet")));
   });
 });
 

@@ -112,7 +112,7 @@ describe("judge", () => {
     assert.equal(result.decision, "deny");
     assert.equal(result.reason, "credential exfiltration");
     assert.equal(calls.length, 1);
-    assert.ok(calls[0]?.text.includes("previous exfil attempt"), "the judge sees the guard's recent decisions");
+    assert.ok(calls[0]?.text.includes("previous exfil attempt"), "the judge sees the rail's recent decisions");
   });
 
   it("uses a different system prompt than the namer", async () => {

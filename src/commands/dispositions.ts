@@ -30,7 +30,7 @@ export interface DispositionCommandDeps {
   /** Persist boundary; injectable so tests never touch the real config file. */
   persist?: Partial<DispositionPersistence>;
   notify(ctx: ExtensionContext, message: string, level?: "info" | "warning" | "error"): void;
-  /** Lines for the read-only rules tab; the guard command supplies formatRailPolicy. */
+  /** Lines for the read-only rules tab; the rail command supplies formatRailPolicy. */
   policyLines?(ctx: ExtensionContext): string[];
 }
 
@@ -69,7 +69,7 @@ export function createDispositionCommands(deps: DispositionCommandDeps) {
   }
 
   /**
-   * `/guard policy [rules]`: the interactive page in the TUI, a select flow over
+   * `/rail policy [rules]`: the interactive page in the TUI, a select flow over
    * RPC, an error headless. The two tabs are one panel, so invoking the other
    * tab while it is open switches rather than closing — only re-invoking the
    * tab you are already on toggles the panel shut.
@@ -98,7 +98,7 @@ export function createDispositionCommands(deps: DispositionCommandDeps) {
         deleteClass: (id) => deleteClass(state, id),
         notify: (message, level) => notify(ctx, message, level),
       });
-      // Let a later /guard policy rules retarget the tab on the open panel. The
+      // Let a later /rail policy rules retarget the tab on the open panel. The
       // live-view seam is string-typed so state.ts stays free of TUI types.
       if (state.liveView) {
         state.liveView.selectTab = (next) => {
@@ -142,7 +142,7 @@ export function createDispositionCommands(deps: DispositionCommandDeps) {
         value: "save",
         label: "Save persistently",
         searchText: "save persist write global config dispositions classes",
-        description: "Write every session change — rows, added classes, edits, deletions — to the global guard config",
+        description: "Write every session change — rows, added classes, edits, deletions — to the global rail config",
       });
       const picked = await pickFromList<CapabilityId | "save" | "add">(ctx, {
         title: "Capability dispositions (changes apply to this session)",
@@ -223,12 +223,12 @@ export function createDispositionCommands(deps: DispositionCommandDeps) {
     notify(ctx, `${id} → ${choice.value} for this session.`);
   }
 
-  /** `/guard set <class> [disposition]`: scripting/RPC parity with the page. */
+  /** `/rail set <class> [disposition]`: scripting/RPC parity with the page. */
   function runSet(args: string, ctx: ExtensionContext): void {
     const resolved = config(ctx);
     const [id = "", disposition = "", ...extra] = args.trim().split(/\s+/).filter((part) => part !== "");
     if (!id || extra.length > 0) {
-      notify(ctx, "Usage: /guard set <class> [allow|judge|ask|deny]", "warning");
+      notify(ctx, "Usage: /rail set <class> [allow|judge|ask|deny]", "warning");
       return;
     }
     // Registry, not the built-in set: a custom class is settable the moment it exists.
@@ -250,7 +250,7 @@ export function createDispositionCommands(deps: DispositionCommandDeps) {
     setRowDisposition(resolved, state, id, disposition);
     const after = dispositionRow(resolved, state, id);
     const preset = after.presetTightened ? ` (${after.effective.source} preset still forces ${after.effective.disposition})` : "";
-    notify(ctx, `${id} → ${disposition} for this session${preset}. /guard policy then Ctrl+S persists it.`);
+    notify(ctx, `${id} → ${disposition} for this session${preset}. /rail policy then Ctrl+S persists it.`);
   }
 
   /** Completions for "set <class> <disposition>"; null when nothing matches. */

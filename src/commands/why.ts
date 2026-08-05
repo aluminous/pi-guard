@@ -1,5 +1,5 @@
-// /guard why: map Seatbelt denials from the most recent guarded bash command
-// back to the guard rules that caused them, via the unified log (see
+// /rail why: map Seatbelt denials from the most recent sandboxed bash command
+// back to the rail rules that caused them, via the unified log (see
 // sandbox-log.ts for the validated predicate and parsing).
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "../config.ts";
@@ -23,13 +23,13 @@ export function createRailWhy(deps: RailWhyDeps) {
   return async function runRailWhy(ctx: ExtensionContext): Promise<void> {
     const command = state.lastBashCommand;
     if (!command) {
-      const message = "No guarded bash command has run this session; run the failing command first, then /guard why.";
+      const message = "No sandboxed bash command has run this session; run the failing command first, then /rail why.";
       if (!ctx.hasUI) console.log(message);
       ctx.ui.notify(message, "warning");
       return;
     }
     if (state.backend && state.backend.name !== "seatbelt") {
-      ctx.ui.notify(`/guard why reads macOS Seatbelt denials; the active backend is ${state.backend.name}.`, "warning");
+      ctx.ui.notify(`/rail why reads macOS Seatbelt denials; the active backend is ${state.backend.name}.`, "warning");
       return;
     }
     ctx.ui.notify("Querying the unified log for sandbox denials (this can take a few seconds)...", "info");

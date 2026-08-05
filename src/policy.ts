@@ -243,7 +243,7 @@ export function decidePathAccess(config: ResolvedRailConfig, cwd: string, inputP
  * canonical path is inside the session cwd or matches an explicit allowRead
  * entry, and does not match denyRead. Evaluated regardless of
  * filesystem.enabled — the configured lists express user trust even when
- * enforcement is off. Reads only: the guard's read projection never carries
+ * enforcement is off. Reads only: the rail's read projection never carries
  * file content, so an allowlisted path is the whole action; write/edit
  * content still needs review no matter how trusted the path is.
  */
