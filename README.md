@@ -80,7 +80,7 @@ Commands — everything lives under `/guard`, with argument autocomplete:
 - `/guard`: open the control panel (searchable actions with a live status header; a plain select dialog over RPC).
 - `/guard status`: toggle the live status view — a bordered panel docked where the editor sits (like the model chooser), updating while the agent streams above it (decisions, approvals, session guidance). Esc closes it, arrows/page keys scroll. Over RPC it toggles a live widget.
 - `/guard policy`: open the **capability policy page** — a two-tab panel whose first tab is the editable capability table with live per-class stats (see [Dispositions](#dispositions)). Over RPC it degrades to select dialogs; invoking the tab you are already on closes it.
-- `/guard policy rules`: open the same page on its **rules** tab — the resolved mechanism policy (filesystem/network/environment rules and the legacy classifier rule lists, provenance-annotated). **Tab** cycles between the two tabs; invoking the other tab while the panel is open switches rather than closing. Outside the TUI this stays a standalone live widget, as before.
+- `/guard policy rules`: open the same page on its **rules** tab — the resolved mechanism policy (filesystem, network, environment scrubbing, and the command allowlist, provenance-annotated). **Tab** cycles between the two tabs; invoking the other tab while the panel is open switches rather than closing. Outside the TUI this stays a standalone live widget, as before.
 - `/guard set <class> [allow|judge|ask|deny]`: set one class for this session from the command line (completions offer class ids — including custom ones — then dispositions). Without a disposition it prints the current effective value and where it came from.
 - `/guard guide <text>`: add classifier guidance for this session without waiting to be asked (see [Session guidance](#session-guidance)). Bare `/guard guide` prompts for the text; `/guard guide clear` drops every entry.
 - `/guard on`: enable Pi Guard.
@@ -180,7 +180,7 @@ Ready-to-copy profiles are available under [`examples/configs`](examples/configs
 - [`offline-restricted.json`](examples/configs/offline-restricted.json): narrower write access, no networking, and semantic review.
 - [`network-allowlist.json`](examples/configs/network-allowlist.json): unrestricted files with an allowlist-only network policy.
 - [`filesystem-denylist.json`](examples/configs/filesystem-denylist.json): unrestricted networking with a denylist-driven filesystem policy.
-- [`classifier-allowlist-only.json`](examples/configs/classifier-allowlist-only.json) and [`classifier-denylist-only.json`](examples/configs/classifier-denylist-only.json): legacy prose-rule profiles. They still load, but their rule lists no longer affect decisions in capability mode — express the same intent with `dispositions` instead.
+- [`dispositions-deny-by-default.json`](examples/configs/dispositions-deny-by-default.json) and [`dispositions-allow-by-default.json`](examples/configs/dispositions-allow-by-default.json): disposition-table profiles that drop the deterministic file/network boundaries and let the capability table carry the policy — strict deny-by-default, and permissive with a concrete deny set.
 
 Config files are layered over the built-in defaults, so omitted arrays retain
 their defaults rather than becoming empty.
@@ -365,18 +365,13 @@ and the screen: labelled actions still resolve through the table (`judge`
 degrades to `ask`), and anything that would need the namer passes through
 unreviewed, exactly as before.
 
-### Legacy classifier rule overrides
+### Retired: classifier rule tiers
 
 The prose rule tiers (`classifier.rules` with `allow`/`soft_deny`/`hard_deny`/
-`environment`) are **legacy**. They still parse and merge, and `/guard policy
-rules` still lists them, but nothing consults them for a decision; loading a config
-that sets them emits a diagnostic saying so. Their successor is the
-disposition table plus the class definitions in `src/capabilities.ts`.
-
-For reference, the merge semantics they keep: lists merge **by rule name**
-(`"Name: text"`), a same-name entry overrides in place, `"Name:"` with an empty
-body deletes, new names append, and `"replace": true` restores wholesale
-replacement.
+`environment`) have been **removed**. A config that still sets the key loads
+fine and emits one diagnostic saying it is ignored; the lists are no longer
+parsed, merged, or displayed. Their successor is the disposition table plus the
+class definitions in `src/capabilities.ts` — edit both from `/guard policy`.
 
 ### Command allowlist
 
