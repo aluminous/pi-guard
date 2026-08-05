@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DEFAULT_COMMAND_ALLOWLIST, isCommandAllowlisted } from "../src/command-allowlist.ts";
+import {
+  DEFAULT_COMMAND_ALLOWLIST,
+  DEFAULT_COMMAND_ALLOW_RULES,
+  allowlistCapabilities,
+  capabilityForTemplate,
+  explainCommandAllowlist,
+  isCommandAllowlisted,
+} from "../src/command-allowlist.ts";
 
 const GREP = ["grep *"];
 
@@ -103,5 +110,36 @@ describe("isCommandAllowlisted", () => {
     assert.equal(isCommandAllowlisted("du -sh node_modules | sort -h", DEFAULT_COMMAND_ALLOWLIST), false);
     assert.equal(isCommandAllowlisted("git rev-parse HEAD && git describe --tags", DEFAULT_COMMAND_ALLOWLIST), true);
     assert.equal(isCommandAllowlisted("cat package.json | jq .scripts", DEFAULT_COMMAND_ALLOWLIST), true);
+  });
+});
+
+describe("capability tags", () => {
+  const caps = (command: string) => allowlistCapabilities(explainCommandAllowlist(command, DEFAULT_COMMAND_ALLOWLIST));
+
+  it("tags inspection as read-project and machine probes as read-system", () => {
+    assert.deepEqual(caps("grep foo src"), ["read-project"]);
+    assert.deepEqual(caps("uname -a"), ["read-system"]);
+  });
+
+  it("tags toolchain probes as run-dev-tools", () => {
+    assert.deepEqual(caps("node --version"), ["run-dev-tools"]);
+  });
+
+  it("unions the tags across chain segments", () => {
+    assert.deepEqual(caps("git status && node --version && whoami"), ["read-project", "run-dev-tools", "read-system"]);
+  });
+
+  it("gives no labels to a command that is not allowlisted", () => {
+    assert.deepEqual(caps("curl example.com"), []);
+  });
+
+  it("defaults user-configured templates to read-project", () => {
+    assert.equal(capabilityForTemplate("make lint"), "read-project");
+    assert.equal(capabilityForTemplate("npm ls *"), "run-dev-tools");
+  });
+
+  it("keeps every default template tagged", () => {
+    assert.equal(DEFAULT_COMMAND_ALLOW_RULES.length, DEFAULT_COMMAND_ALLOWLIST.length);
+    assert.ok(DEFAULT_COMMAND_ALLOW_RULES.every((rule) => rule.capability.length > 0));
   });
 });
