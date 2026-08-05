@@ -5,7 +5,7 @@ import { buildCapabilityPromptForCritique } from "../classifier.ts";
 import { loadConfig, type ResolvedGuardConfig } from "../config.ts";
 import { showGuardView } from "../live-view.ts";
 import { getPersistentConfigPath } from "../persistent-settings.ts";
-import type { RuntimeState } from "../state.ts";
+import { syncCapabilityPreset, type RuntimeState } from "../state.ts";
 import { formatError } from "../util.ts";
 
 const CRITIQUE_SYSTEM_PROMPT = `You are an expert reviewer of the capability taxonomy used by a local coding agent's guard.
@@ -33,6 +33,7 @@ export function createCritiqueRunner(deps: { state: RuntimeState }) {
 
   return async function runCritiqueCommand(args: string, ctx: ExtensionContext) {
     const config = state.config ?? loadConfig(ctx);
+    syncCapabilityPreset(state);
     const modelSpec = args.trim();
     const model = modelSpec
       ? (() => {

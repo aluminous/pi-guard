@@ -302,7 +302,9 @@ function enforceReadOnlyMode(toolName: string, input: Record<string, unknown>, s
     return { block: true, reason: `${reason}. Do not work around the guard; ask the user to toggle read-only mode off (/guard readonly) if changes are wanted.` };
   };
   if (spec.access.includes("write")) return block(`${toolName} blocked: guard is in read-only mode`);
-  if (toolName === "bash" && !classifierEnabled(config, state.classifier) && classifyCommand(input, state, config, trace).needsNaming) {
+  // Scratch trace: the real allowlist stage is recorded once, in the main flow.
+  const scratch: DecisionTrace = { at: 0, toolName, action: "", final: "allowed", stages: [] };
+  if (toolName === "bash" && !classifierEnabled(config, state.classifier) && classifyCommand(input, state, config, scratch).needsNaming) {
     return block("bash blocked: guard is in read-only mode and the classifier is off, so commands cannot be reviewed for writes");
   }
   addTraceStage(trace, "readonly", "pass", toolName === "bash" ? "bash permitted pending capability review" : `${toolName} permitted in read-only mode`);
