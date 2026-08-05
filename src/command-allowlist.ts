@@ -1,4 +1,4 @@
-import { literalWordText, parseShellCommand, type ShellCommand } from "./shell-parse.ts";
+import { literalWordText, parseShellCommand, type ShellCommand, type ShellWord } from "./shell-parse.ts";
 
 /**
  * Deterministic shell-command allowlist over the parsed AST: a command is
@@ -127,27 +127,76 @@ function matchesRule(argv: string[], ruleTokens: string[]): boolean {
   return literals.every((token, index) => argv[index] === token);
 }
 
-function commandAllowed(command: ShellCommand, ruleTokens: string[][]): boolean {
-  if (command.kind === "subshell") return false; // parses fine, but grouping is never allowlisted
-  if (command.redirects.length > 0) return false;
-  if (command.assignments.some((assignment) => literalWordText(assignment.value) === undefined)) return false;
+/** One simple command's allowlist verdict: the matched rule text, or why it can never match. */
+export interface CommandSegmentVerdict {
+  command: string;
+  rule?: string;
+  refusal?: string;
+}
+
+export type CommandAllowlistExplanation =
+  | { allowlisted: true; segments: CommandSegmentVerdict[] }
+  | { allowlisted: false; reason: string; segments?: CommandSegmentVerdict[] };
+
+/** Display form of a parsed segment: quote removal already applied, expansions kept verbatim. */
+function describeSegment(command: ShellCommand): string {
+  if (command.kind === "subshell") return "(…)";
+  const words = [
+    ...command.assignments.map((assignment) => `${assignment.name}=${wordText(assignment.value)}`),
+    ...command.argv.map(wordText),
+  ];
+  return words.join(" ");
+}
+
+function wordText(word: ShellWord): string {
+  return word.parts.map((part) => part.text).join("");
+}
+
+function segmentVerdict(command: ShellCommand, rules: Array<{ text: string; tokens: string[] }>): CommandSegmentVerdict {
+  const text = describeSegment(command);
+  if (command.kind === "subshell") return { command: text, refusal: "subshell grouping is never allowlisted" };
+  if (command.redirects.length > 0) return { command: text, refusal: "redirects are never allowlisted" };
+  if (command.assignments.some((assignment) => literalWordText(assignment.value) === undefined)) {
+    return { command: text, refusal: "expansions in assignments are never allowlisted" };
+  }
   const argv: string[] = [];
   for (const word of command.argv) {
-    const text = literalWordText(word);
-    if (text === undefined) return false; // $VAR, $(…), `…` — expansions are never judged safe
-    argv.push(text);
+    const literal = literalWordText(word);
+    if (literal === undefined) return { command: text, refusal: "expansions ($VAR, $(…), `…`) are never allowlisted" };
+    argv.push(literal);
   }
-  if (argv.length === 0) return false; // bare assignments have no command head to judge
-  return ruleTokens.some((tokens) => matchesRule(argv, tokens));
+  if (argv.length === 0) return { command: text, refusal: "bare assignments have no command head to judge" };
+  const matched = rules.find((rule) => matchesRule(argv, rule.tokens));
+  if (!matched) return { command: text, refusal: "no allowlist rule matches" };
+  return { command: text, rule: matched.text };
+}
+
+/** Full allowlist verdict with per-segment detail, for decision traces and /guard test. */
+export function explainCommandAllowlist(command: string, rules: string[]): CommandAllowlistExplanation {
+  const parsedRules = rules
+    .map((rule) => ({ text: rule.trim(), tokens: rule.trim().split(/\s+/) }))
+    .filter((rule) => rule.tokens.length > 0 && rule.tokens[0] !== "");
+  if (parsedRules.length === 0) return { allowlisted: false, reason: "the command allowlist is empty" };
+  const parsed = parseShellCommand(command);
+  if (!parsed.ok) return { allowlisted: false, reason: `does not parse under the allowlist grammar: ${parsed.error}` };
+  if (parsed.script.chains.length === 0) return { allowlisted: false, reason: "empty command" };
+  const segments: CommandSegmentVerdict[] = [];
+  let background = false;
+  for (const chain of parsed.script.chains) {
+    if (chain.background) background = true;
+    for (const pipeline of chain.pipelines) {
+      for (const cmd of pipeline.commands) segments.push(segmentVerdict(cmd, parsedRules));
+    }
+  }
+  if (background) return { allowlisted: false, reason: "background jobs (&) are never allowlisted", segments };
+  const refused = segments.filter((segment) => segment.refusal);
+  if (refused.length > 0) {
+    return { allowlisted: false, reason: refused.map((segment) => `\`${segment.command}\`: ${segment.refusal}`).join("; "), segments };
+  }
+  return { allowlisted: true, segments };
 }
 
 /** True when the command parses and every simple command in it matches some rule. */
 export function isCommandAllowlisted(command: string, rules: string[]): boolean {
-  const ruleTokens = rules.map((rule) => rule.trim().split(/\s+/)).filter((tokens) => tokens.length > 0 && tokens[0] !== "");
-  if (ruleTokens.length === 0) return false;
-  const parsed = parseShellCommand(command);
-  if (!parsed.ok || parsed.script.chains.length === 0) return false;
-  return parsed.script.chains.every(
-    (chain) => !chain.background && chain.pipelines.every((pipeline) => pipeline.commands.every((cmd) => commandAllowed(cmd, ruleTokens))),
-  );
+  return explainCommandAllowlist(command, rules).allowlisted;
 }

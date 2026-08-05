@@ -1,9 +1,10 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { loadConfig, type StatusLineMode } from "../config.ts";
+import { formatDecisionTrace, formatEmptyTrace } from "../decision-trace.ts";
 import { updatePersistentStatusLine } from "../persistent-settings.ts";
 import type { RuntimeState } from "../state.ts";
 import { classifierModelLabel, formatGuardPolicy, formatGuardStatus, networkPolicyLabel, updateGuardStatus } from "../status.ts";
-import { toggleGuardView } from "../live-view.ts";
+import { showGuardView, toggleGuardView } from "../live-view.ts";
 import { pickFromList, type SelectItem } from "../tui/select-list.ts";
 import { formatError } from "../util.ts";
 import { runModelCommand } from "./model.ts";
@@ -19,6 +20,7 @@ export interface GuardCommandDeps {
 const SUBCOMMANDS: Array<{ value: string; description: string }> = [
   { value: "status", description: "Toggle the live status popup" },
   { value: "policy", description: "Show the resolved policy and classifier rules" },
+  { value: "explain", description: "Show the newest decision trace (explain <n> for older ones)" },
   { value: "on", description: "Enable the guard" },
   { value: "off", description: "Disable for the next agent turn, then re-enable" },
   { value: "off session", description: "Disable until the session ends (unguarded!)" },
@@ -62,6 +64,22 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     state.readOnly = !state.readOnly;
     if (state.readOnly) show(ctx, "Guard read-only mode on: write/edit are blocked and bash is restricted to read-only commands.");
     else show(ctx, "Guard read-only mode off.");
+  }
+
+  /** Shows the nth-newest decision trace (1-based, default newest) through the report view. */
+  function showExplain(ctx: ExtensionContext, args: string): void {
+    const total = state.traces.length;
+    if (total === 0) {
+      showGuardView(ctx, state, "report", () => formatEmptyTrace().split("\n"));
+      return;
+    }
+    const n = args.trim() === "" ? 1 : Number.parseInt(args.trim(), 10);
+    if (!Number.isInteger(n) || n < 1 || n > total) {
+      show(ctx, `Usage: /guard explain [n] with n between 1 (newest) and ${total}.`, "warning");
+      return;
+    }
+    const trace = state.traces[n - 1]!;
+    showGuardView(ctx, state, "report", () => formatDecisionTrace(trace, n, total).split("\n"));
   }
 
   /** TUI: toggle the live popup. RPC: toggle a live widget. Headless: print to stdout. Never posted to the agent. */
@@ -111,7 +129,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     }
   }
 
-  type PanelAction = "on" | "off-turn" | "off-session" | "readonly" | "model" | "statusline" | "smoke" | "critique" | "status" | "policy";
+  type PanelAction = "on" | "off-turn" | "off-session" | "readonly" | "model" | "statusline" | "smoke" | "critique" | "status" | "policy" | "explain";
 
   async function openPanel(ctx: ExtensionContext): Promise<void> {
     const items: SelectItem<PanelAction>[] = [];
@@ -131,6 +149,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
       { value: "critique", label: "Critique rules", searchText: "critique rules review improve", description: "Have Pi's current model review the classifier rules for gaps" },
       { value: "status", label: "Status popup", searchText: "status report details approvals live popup overlay", description: "Live status popup: decisions, approvals, guidance — updates while the agent works" },
       { value: "policy", label: "Policy view", searchText: "policy rules classifier allow deny filesystem network show", description: "Resolved policy: filesystem/network/env rules and classifier rule lists" },
+      { value: "explain", label: "Explain last decision", searchText: "explain trace decision why last chain stages", description: "Show the decision chain the guard ran for the most recent tool call" },
     );
 
     const picked = await pickFromList<PanelAction>(ctx, { title: "Pi Guard", headerLines: panelHeader(ctx), items });
@@ -159,6 +178,8 @@ export function createGuardCommand(deps: GuardCommandDeps) {
         return showView(ctx, "status");
       case "policy":
         return showView(ctx, "policy");
+      case "explain":
+        return showExplain(ctx, "");
     }
   }
 
@@ -180,6 +201,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     // into a clean no-op (pickFromList resolves undefined) or stderr error.
     if (!sub) return openPanel(ctx);
     if (sub === "status" || sub === "policy") return showView(ctx, sub);
+    if (sub === "explain") return showExplain(ctx, rest);
     if (sub === "on" || sub === "enable") return enable(ctx);
     if (sub === "off" || sub === "disable") {
       if (rest.toLowerCase() === "session") return disableSession(ctx);
@@ -190,7 +212,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     if (sub === "smoke" && !rest) return deps.runGuardSmoke(ctx);
     if (sub === "critique") return deps.runCritique(rest, ctx);
 
-    show(ctx, "Usage: /guard [status|policy|on|off|off session|readonly|model …|smoke|critique …]", "warning");
+    show(ctx, "Usage: /guard [status|policy|explain [n]|on|off|off session|readonly|model …|smoke|critique …]", "warning");
   }
 
   function getArgumentCompletions(argumentPrefix: string) {

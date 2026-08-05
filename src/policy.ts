@@ -2,14 +2,14 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { ResolvedGuardConfig } from "./config.ts";
 import { expandHome } from "./paths.ts";
-import { unique } from "./util.ts";
+import { textPrefix, unique } from "./util.ts";
 
 export type AccessKind = "read" | "write";
 
 export type PolicyDenialCode = "denied-by-pattern" | "outside-roots" | "unresolvable";
 
 export type PolicyDecision =
-  | { allowed: true; normalizedPath: string }
+  | { allowed: true; normalizedPath: string; matchedRoot?: string }
   | { allowed: false; code: PolicyDenialCode; reason: string; normalizedPath: string };
 
 function stripAtPrefix(value: string): string {
@@ -193,8 +193,8 @@ export function summarizeDegradedPatterns(degraded: DegradedPattern[]): string |
   return `Filesystem patterns enforced for file tools but not for bash (Seatbelt takes literal paths only): ${names.join(", ")}`;
 }
 
-function isAllowedByRoots(cwd: string, candidate: string, roots: string[]): boolean {
-  return roots.some((root) => patternMatches(cwd, candidate, root));
+function matchingRoot(cwd: string, candidate: string, roots: string[]): string | undefined {
+  return roots.find((root) => patternMatches(cwd, candidate, root));
 }
 
 function isDenied(cwd: string, candidate: string, patterns: string[]): string | undefined {
@@ -224,9 +224,11 @@ export function decidePathAccess(config: ResolvedGuardConfig, cwd: string, input
     return { allowed: false, code: "denied-by-pattern", normalizedPath: checkedPath, reason: `${kind} denied by pattern ${deniedBy}` };
   }
   if (kind === "write" || allowRoots.length > 0) {
-    if (!isAllowedByRoots(checkedCwd, checkedPath, allowRoots)) {
-      return { allowed: false, code: "outside-roots", normalizedPath: checkedPath, reason: `${kind} outside allowed roots` };
+    const root = matchingRoot(checkedCwd, checkedPath, allowRoots);
+    if (root === undefined) {
+      return { allowed: false, code: "outside-roots", normalizedPath: checkedPath, reason: `${kind} outside allowed roots (${textPrefix(allowRoots.join(", "), 160) || "none configured"})` };
     }
+    return { allowed: true, normalizedPath: checkedPath, matchedRoot: root };
   }
   return { allowed: true, normalizedPath: checkedPath };
 }
@@ -241,14 +243,20 @@ export function decidePathAccess(config: ResolvedGuardConfig, cwd: string, input
  * content still needs review no matter how trusted the path is.
  */
 export function isClassifierExemptRead(config: ResolvedGuardConfig, cwd: string, inputPath: string): boolean {
+  return classifierExemptReadReason(config, cwd, inputPath) !== undefined;
+}
+
+/** Which exemption condition applies ("in session cwd" / "matches allowRead '…'"), or undefined when the read is not exempt. */
+export function classifierExemptReadReason(config: ResolvedGuardConfig, cwd: string, inputPath: string): string | undefined {
   const normalizedPath = normalizeUserPath(cwd, inputPath);
   const canonical = canonicalizeExistingPath(normalizedPath);
-  if (!canonical.ok) return false;
+  if (!canonical.ok) return undefined;
   const canonicalCwd = canonicalizeExistingPath(cwd);
-  if (!canonicalCwd.ok) return false;
-  if (isDenied(canonicalCwd.path, canonical.path, config.filesystem.denyRead)) return false;
-  if (isInside(canonicalCwd.path, canonical.path)) return true;
-  return isAllowedByRoots(canonicalCwd.path, canonical.path, config.filesystem.allowRead);
+  if (!canonicalCwd.ok) return undefined;
+  if (isDenied(canonicalCwd.path, canonical.path, config.filesystem.denyRead)) return undefined;
+  if (isInside(canonicalCwd.path, canonical.path)) return "in session cwd";
+  const root = matchingRoot(canonicalCwd.path, canonical.path, config.filesystem.allowRead);
+  return root === undefined ? undefined : `matches allowRead '${root}'`;
 }
 
 function wildcardMatches(value: string, pattern: string): boolean {

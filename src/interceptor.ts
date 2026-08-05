@@ -1,12 +1,13 @@
 import path from "node:path";
 import { getPackageDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { askGuardApproval } from "./approvals.ts";
-import { addSessionGuidance, classifierEnabled, isClassifierModelUnavailable, projectToolCall, resolveClassifierModel, reviewToolCall } from "./classifier.ts";
+import { addSessionGuidance, classifierEnabled, isClassifierModelUnavailable, projectToolCall, resolveClassifierModel, reviewToolCall, type CompleteFn } from "./classifier.ts";
 import { READONLY_CLASSIFIER_RULES } from "./classifier-rules.ts";
-import { isCommandAllowlisted } from "./command-allowlist.ts";
+import { explainCommandAllowlist, isCommandAllowlisted } from "./command-allowlist.ts";
 import type { ResolvedGuardConfig } from "./config.ts";
+import { addTraceStage, type DecisionTrace } from "./decision-trace.ts";
 import { describeAction, GUARDED_TOOLS, type GuardedToolSpec } from "./guarded-tools.ts";
-import { decidePathAccess, isClassifierExemptRead, normalizeUserPath, type AccessKind } from "./policy.ts";
+import { classifierExemptReadReason, decidePathAccess, normalizeUserPath, type AccessKind } from "./policy.ts";
 import { appendGuardTelemetry } from "./telemetry.ts";
 import {
   recordApprovalDenied,
@@ -15,6 +16,7 @@ import {
   recordClassifierError,
   recordClassifierResult,
   recordClassifierSkip,
+  recordDecisionTrace,
   recordPolicyBlock,
   type RuntimeState,
 } from "./state.ts";
@@ -56,11 +58,16 @@ async function askPathApproval(params: {
   toolName: string;
   path: string;
   reason: string;
+  trace: DecisionTrace;
 }): Promise<ToolCallBlock | undefined> {
-  if (isApprovedPath(params.state.approvals[params.kind], params.path)) return;
+  if (isApprovedPath(params.state.approvals[params.kind], params.path)) {
+    addTraceStage(params.trace, "ask", "approved", `${params.kind} ${params.path} already approved this session`);
+    return;
+  }
   recordApprovalRequested(params.state, params.toolName, params.kind, params.path);
   if (!params.ctx.hasUI) {
     recordApprovalDenied(params.state);
+    addTraceStage(params.trace, "ask", "unanswerable", `${params.kind} ${params.path} needs approval but the session is headless`);
     appendGuardTelemetry(params.state, { kind: "approval", tool: params.toolName, access: params.kind, path: params.path, approved: false, reason: params.reason });
     return {
       block: true,
@@ -76,6 +83,7 @@ async function askPathApproval(params: {
   if (answer.comment) {
     addSessionGuidance(params.state.classifier, answer.approved ? "allowed" : "denied", params.toolName, `${params.kind} ${params.path}`, answer.comment);
   }
+  addTraceStage(params.trace, "ask", answer.approved ? "approved" : "denied", `user ${answer.approved ? "approved" : "denied"} ${params.kind} ${params.path}${answer.comment ? " with a comment" : ""}`);
   appendGuardTelemetry(params.state, {
     kind: "approval",
     tool: params.toolName,
@@ -108,6 +116,7 @@ async function enforcePathPolicy(
   config: ResolvedGuardConfig,
   spec: GuardedToolSpec,
   input: Record<string, unknown>,
+  trace: DecisionTrace,
 ): Promise<PathStageResult> {
   if (!config.filesystem.enabled || spec.access.length === 0) return { outcome: "continue" };
   const target = spec.path?.(input);
@@ -123,14 +132,17 @@ async function enforcePathPolicy(
   for (const kind of spec.access) {
     const decision = decidePathAccess(config, ctx.cwd, target, kind);
     if (decision.allowed) {
+      addTraceStage(trace, "path-policy", "pass", decision.matchedRoot !== undefined ? `${kind} allowed by root '${decision.matchedRoot}'` : `${kind} allowed: no deny pattern matches (blacklist mode)`);
       if (kind === "read") allowedReadPath = decision.normalizedPath;
       continue;
     }
     if (decision.code === "outside-roots") {
-      const approval = await askPathApproval({ ctx, state, kind, toolName: event.toolName, path: decision.normalizedPath, reason: decision.reason });
+      addTraceStage(trace, "path-policy", "ask", `${decision.reason} → approval`);
+      const approval = await askPathApproval({ ctx, state, kind, toolName: event.toolName, path: decision.normalizedPath, reason: decision.reason, trace });
       if (approval) return { outcome: "block", block: approval };
       continue;
     }
+    addTraceStage(trace, "path-policy", "block", decision.reason);
     return { outcome: "block", block: block(`${event.toolName} blocked for ${target}: ${decision.reason}`) };
   }
   return { outcome: "continue", allowedReadPath };
@@ -142,12 +154,13 @@ async function enforcePathPolicy(
  * and allowlisted reads skip review entirely — whether or not filesystem
  * enforcement is on; enabled:false only disables blocking, not trust.
  */
-function isExemptReadCall(spec: GuardedToolSpec, input: Record<string, unknown>, cwd: string, config: ResolvedGuardConfig, allowedReadPath: string | undefined): boolean {
-  if (!spec.access.includes("read") || spec.access.includes("write")) return false;
+function exemptReadCallReason(spec: GuardedToolSpec, input: Record<string, unknown>, cwd: string, config: ResolvedGuardConfig, allowedReadPath: string | undefined): string | undefined {
+  if (!spec.access.includes("read") || spec.access.includes("write")) return undefined;
   const target = spec.path?.(input);
-  if (typeof target !== "string") return false;
+  if (typeof target !== "string") return undefined;
   const canonicalTarget = allowedReadPath ?? normalizeUserPath(cwd, target);
-  return isPiPackageDocsOrExamplePath(canonicalTarget) || isClassifierExemptRead(config, cwd, target);
+  if (isPiPackageDocsOrExamplePath(canonicalTarget)) return "pi package docs/examples";
+  return classifierExemptReadReason(config, cwd, target);
 }
 
 /**
@@ -174,9 +187,10 @@ function isExemptCommandCall(toolName: string, input: Record<string, unknown>, s
  * need no review — they are read-only by construction and sandbox-bounded —
  * so read-only mode stays usable even without a classifier.
  */
-function enforceReadOnlyMode(toolName: string, input: Record<string, unknown>, state: RuntimeState, config: ResolvedGuardConfig, spec: GuardedToolSpec): ToolCallBlock | undefined {
+function enforceReadOnlyMode(toolName: string, input: Record<string, unknown>, state: RuntimeState, config: ResolvedGuardConfig, spec: GuardedToolSpec, trace: DecisionTrace): ToolCallBlock | undefined {
   const block = (reason: string): ToolCallBlock => {
     recordPolicyBlock(state, toolName, reason);
+    addTraceStage(trace, "readonly", "block", reason);
     appendGuardTelemetry(state, { kind: "block", tool: toolName, reason });
     return { block: true, reason: `${reason}. Do not work around the guard; ask the user to toggle read-only mode off (/guard readonly) if changes are wanted.` };
   };
@@ -184,6 +198,7 @@ function enforceReadOnlyMode(toolName: string, input: Record<string, unknown>, s
   if (toolName === "bash" && !classifierEnabled(config, state.classifier) && !isExemptCommandCall(toolName, input, state, config)) {
     return block("bash blocked: guard is in read-only mode and the classifier is off, so commands cannot be reviewed for writes");
   }
+  addTraceStage(trace, "readonly", "pass", toolName === "bash" ? "bash permitted pending review under read-only rules" : `${toolName} permitted in read-only mode`);
   return undefined;
 }
 
@@ -191,6 +206,8 @@ export async function interceptToolCall(
   event: { toolName: string; input: unknown },
   ctx: ExtensionContext,
   state: RuntimeState,
+  /** Test seam: replaces the classifier's model-call function (production always uses the default). */
+  completeFn?: CompleteFn,
 ): Promise<ToolCallBlock | undefined> {
   const config = state.config;
   if (!config || !config.enabled || !state.enabled) return;
@@ -200,21 +217,58 @@ export async function interceptToolCall(
   const spec = GUARDED_TOOLS[event.toolName];
   if (!spec) return;
 
+  const trace: DecisionTrace = { at: Date.now(), toolName: event.toolName, action: describeAction(event.toolName, spec.project(input)), final: "allowed", stages: [] };
+  try {
+    const result = await runInterceptStages(event, ctx, state, config, spec, input, trace, completeFn);
+    if (result) trace.final = "blocked";
+    return result;
+  } finally {
+    recordDecisionTrace(state, trace);
+  }
+}
+
+async function runInterceptStages(
+  event: { toolName: string; input: unknown },
+  ctx: ExtensionContext,
+  state: RuntimeState,
+  config: ResolvedGuardConfig,
+  spec: GuardedToolSpec,
+  input: Record<string, unknown>,
+  trace: DecisionTrace,
+  completeFn: CompleteFn | undefined,
+): Promise<ToolCallBlock | undefined> {
   if (state.readOnly) {
-    const denied = enforceReadOnlyMode(event.toolName, input, state, config, spec);
+    const denied = enforceReadOnlyMode(event.toolName, input, state, config, spec, trace);
     if (denied) return denied;
   }
 
-  const path = await enforcePathPolicy(event, ctx, state, config, spec, input);
+  const path = await enforcePathPolicy(event, ctx, state, config, spec, input, trace);
   if (path.outcome === "done") return;
   if (path.outcome === "block") return path.block;
 
   if (!classifierEnabled(config, state.classifier)) return;
-  if (isExemptReadCall(spec, input, ctx.cwd, config, path.allowedReadPath) || isExemptCommandCall(event.toolName, input, state, config)) {
+  const readExemption = exemptReadCallReason(spec, input, ctx.cwd, config, path.allowedReadPath);
+  if (spec.access.includes("read") && !spec.access.includes("write")) {
+    addTraceStage(trace, "read-exemption", readExemption ? "exempt" : "not exempt", readExemption ?? "not in cwd, allowRead, or pi docs — classifier review required");
+  }
+  if (readExemption !== undefined) {
     recordClassifierSkip(state);
     return;
   }
-  return runClassifierReview(event, ctx, state, config);
+  if (event.toolName === "bash" && typeof input.command === "string") {
+    if (!config.filesystem.enabled || !state.initialized || state.backend?.name !== "seatbelt") {
+      addTraceStage(trace, "command-allowlist", "skipped", "allowlist exemption needs an enforcing Seatbelt sandbox — classifier review required");
+    } else {
+      const explanation = explainCommandAllowlist(input.command, config.commands.allow);
+      if (explanation.allowlisted) {
+        addTraceStage(trace, "command-allowlist", "exempt", explanation.segments.map((segment) => `\`${segment.command}\` → rule \`${segment.rule}\``).join("; "));
+        recordClassifierSkip(state);
+        return;
+      }
+      addTraceStage(trace, "command-allowlist", "not exempt", explanation.reason);
+    }
+  }
+  return runClassifierReview(event, ctx, state, config, trace, completeFn);
 }
 
 /** Stage 3: LLM review — two-stage classify, ask-with-comment flow, fail-open/closed error handling. */
@@ -223,6 +277,8 @@ async function runClassifierReview(
   ctx: ExtensionContext,
   state: RuntimeState,
   config: ResolvedGuardConfig,
+  trace: DecisionTrace,
+  completeFn: CompleteFn | undefined,
 ): Promise<ToolCallBlock | undefined> {
   const startedAt = performance.now();
   let telemetryModel: string | undefined;
@@ -240,11 +296,18 @@ async function runClassifierReview(
       toolName: event.toolName,
       input: event.input,
       rulesOverride: state.readOnly ? READONLY_CLASSIFIER_RULES : undefined,
+      completeFn,
     });
     const latencyMs = Math.round(performance.now() - startedAt);
     state.classifier.lastDecision = { ...result, toolName: event.toolName, at: Date.now() };
     state.classifier.lastError = undefined;
     recordClassifierResult(state, event.toolName, result);
+    addTraceStage(
+      trace,
+      "classifier",
+      result.decision,
+      `${result.decision} · risk ${result.risk} · ${result.reason} (model ${telemetryModel ?? "unknown"}${result.fastPath ? ", fast path" : ""}, ${latencyMs}ms)`,
+    );
     const telemetry = {
       kind: "review" as const,
       tool: event.toolName,
@@ -274,6 +337,7 @@ async function runClassifierReview(
         const guidanceSubject = subject.startsWith(`${event.toolName}: `) ? subject.slice(event.toolName.length + 2) : subject;
         addSessionGuidance(state.classifier, answer.approved ? "allowed" : "denied", event.toolName, guidanceSubject, answer.comment);
       }
+      addTraceStage(trace, "ask", answer.approved ? "approved" : "denied", `user ${answer.approved ? "approved" : "denied"}${answer.comment ? " with a comment" : ""}`);
       appendGuardTelemetry(state, { ...telemetry, userApproved: answer.approved, userComment: answer.comment });
       if (answer.approved) return;
       const commentSuffix = answer.comment ? ` User comment: ${answer.comment}` : "";
@@ -281,6 +345,7 @@ async function runClassifierReview(
     }
     appendGuardTelemetry(state, telemetry);
     if (result.decision === "ask") {
+      addTraceStage(trace, "ask", "unanswerable", "reviewer asked for approval but the session is headless");
       return {
         block: true,
         reason: `Guard reviewer asks for approval, but this headless session has no user to ask: ${result.reason}. Rerun interactively or adjust guard config to authorize this action.`,
@@ -291,6 +356,7 @@ async function runClassifierReview(
     const reason = formatError(error);
     state.classifier.lastError = reason;
     recordClassifierError(state, event.toolName, reason);
+    addTraceStage(trace, "classifier", "error", `review failed: ${reason}`);
     appendGuardTelemetry(state, {
       kind: "error",
       tool: event.toolName,

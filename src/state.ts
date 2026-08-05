@@ -1,6 +1,7 @@
 import type { GuardBackend } from "./backends/types.ts";
 import type { ClassifierResult, ClassifierState } from "./classifier.ts";
 import type { ResolvedGuardConfig } from "./config.ts";
+import { TRACE_LIMIT, type DecisionTrace } from "./decision-trace.ts";
 import type { AccessKind } from "./policy.ts";
 
 export interface GuardEvent {
@@ -66,6 +67,8 @@ export interface RuntimeState {
   };
   stats: GuardStats;
   recent: GuardEvent[];
+  /** Per-call decision traces for /guard explain, newest first (last TRACE_LIMIT). */
+  traces: DecisionTrace[];
   /** provider/id specs with configured auth, cached at session start for argument completions (which get no ctx). */
   availableModelSpecs: string[];
   /** Child identities (session file/transcript) already warned about running without guard acknowledgement. */
@@ -111,6 +114,7 @@ export function createRuntimeState(): RuntimeState {
     approvals: { read: [], write: [] },
     stats: createGuardStats(),
     recent: [],
+    traces: [],
     availableModelSpecs: [],
     subagentAckWarned: new Set(),
   };
@@ -129,6 +133,7 @@ export function resetSessionState(state: RuntimeState): void {
   state.classifier = {};
   state.approvals = { read: [], write: [] };
   state.stats = createGuardStats();
+  state.traces = [];
   state.subagentAckWarned = new Set();
 }
 
@@ -143,6 +148,11 @@ export function resetTurnStats(state: RuntimeState): void {
 function pushRecent(state: RuntimeState, event: GuardEvent) {
   state.recent.unshift(event);
   state.recent = state.recent.slice(0, 8);
+}
+
+export function recordDecisionTrace(state: RuntimeState, trace: DecisionTrace): void {
+  state.traces.unshift(trace);
+  state.traces = state.traces.slice(0, TRACE_LIMIT);
 }
 
 /** A deterministic policy rule hard-blocked the call. */
