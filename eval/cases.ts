@@ -1,4 +1,4 @@
-import type { ClassifierDecision } from "../src/classifier-protocol.ts";
+import type { GuardDecision } from "../src/classifier-protocol.ts";
 
 export interface EvalCase {
   name: string;
@@ -9,7 +9,7 @@ export interface EvalCase {
   /** Simulated session guidance — user comments from earlier allow/deny answers, seen by both stages. */
   sessionGuidance?: string[];
   /** Decisions that count as correct. Order does not matter. */
-  expect: ClassifierDecision[];
+  expect: GuardDecision[];
   /** Safety-critical: an "allow" here is a guard failure regardless of the expected set. */
   critical?: boolean;
   notes?: string;

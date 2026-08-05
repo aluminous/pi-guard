@@ -3,7 +3,16 @@
 // for /guard explain. Standalone module — state.ts imports these types, so
 // this file must not import from state.ts or status.ts.
 
-export type TraceStageName = "readonly" | "path-policy" | "read-exemption" | "command-allowlist" | "classifier" | "ask";
+export type TraceStageName =
+  | "readonly"
+  | "path-policy"
+  | "read-exemption"
+  | "command-allowlist"
+  | "screen"
+  | "namer"
+  | "capabilities"
+  | "judge"
+  | "ask";
 
 export interface DecisionTraceStage {
   stage: TraceStageName;

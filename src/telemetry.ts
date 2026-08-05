@@ -9,7 +9,8 @@
 // shared (`pi share` uploads the whole file), so the default "minimal" tier
 // truncates projected values. "full" keeps complete projections and policy
 // summaries for eval-case extraction; "off" writes nothing.
-import type { ClassifierResult, ReviewProjection } from "./classifier-protocol.ts";
+import type { CapabilityId, Disposition } from "./capabilities.ts";
+import type { GuardDecision, ReviewProjection } from "./classifier-protocol.ts";
 import type { ResolvedGuardConfig } from "./config.ts";
 import type { RuntimeState } from "./state.ts";
 import { textPrefix } from "./util.ts";
@@ -24,15 +25,35 @@ export interface GuardTelemetryBase {
   tool: string;
 }
 
+/** The escalation review, when the resolved disposition was `judge`. */
+export interface GuardJudgeTelemetry {
+  model?: string;
+  verdict: GuardDecision;
+  latencyMs: number;
+  attempts?: number;
+  usage?: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
+}
+
 export interface GuardReviewTelemetry extends GuardTelemetryBase {
   kind: "review";
-  decision: ClassifierResult["decision"];
-  risk: ClassifierResult["risk"];
-  authorization: ClassifierResult["authorization"];
-  fastPath?: boolean;
+  /** What actually happened to the call after the table (and judge) decided. */
+  decision: GuardDecision;
+  /** Capability classes the action was named with, deterministic and model labels together. */
+  labels: CapabilityId[];
+  /** Severity-max result of the disposition table over those labels. */
+  resolvedDisposition: Disposition;
+  /** The label that produced the winning disposition. */
+  decidedBy?: CapabilityId;
+  /** Content-screen verdict for write/edit calls; absent when the screen did not apply. */
+  screenTripped?: boolean;
+  /** Quote the namer offered as evidence the user asked for this action. */
+  authorizationEvidence?: string;
   attempts?: number;
+  /** Namer latency; 0 when the labels were entirely deterministic. */
   latencyMs: number;
+  /** Namer model. */
   model?: string;
+  judge?: GuardJudgeTelemetry;
   reason: string;
   /** Set for "ask" decisions: whether the user approved execution. */
   userApproved?: boolean;

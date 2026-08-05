@@ -1,6 +1,6 @@
 import type { GuardBackend } from "./backends/types.ts";
-import { createCapabilityState, recordCapabilityHits, type CapabilityId, type CapabilityState, type Disposition } from "./capabilities.ts";
-import type { ClassifierResult, ClassifierState } from "./classifier.ts";
+import { applyReadOnlyPreset, clearPreset, createCapabilityState, recordCapabilityHits, type CapabilityId, type CapabilityState, type Disposition } from "./capabilities.ts";
+import type { ClassifierState } from "./classifier.ts";
 import type { ResolvedGuardConfig } from "./config.ts";
 import { TRACE_LIMIT, type DecisionTrace } from "./decision-trace.ts";
 import type { AccessKind } from "./policy.ts";
@@ -11,7 +11,6 @@ export interface GuardEvent {
   decision: "allow" | "deny" | "ask" | "block" | "error";
   /** Capability labels behind the decision, when it came from the table. */
   capabilities?: CapabilityId[];
-  risk?: string;
   reason: string;
 }
 
@@ -147,6 +146,16 @@ export function resetSessionState(state: RuntimeState): void {
   state.subagentAckWarned = new Set();
 }
 
+/**
+ * Keeps the session disposition preset in sync with read-only mode. Derived
+ * rather than set by the toggle, so anything that flips state.readOnly (the
+ * command, a shortcut, a test) gets the preset without having to remember it.
+ */
+export function syncCapabilityPreset(state: RuntimeState): void {
+  if (state.readOnly) applyReadOnlyPreset(state.capabilities);
+  else clearPreset(state.capabilities);
+}
+
 /** Resets the per-turn counters. A "turn" spans from one user message to the next, not each agent loop iteration. */
 export function resetTurnStats(state: RuntimeState): void {
   state.stats.turnRuleHits = 0;
@@ -189,25 +198,6 @@ export function recordApprovalGranted(state: RuntimeState, toolName: string, kin
 export function recordApprovalDenied(state: RuntimeState): void {
   state.stats.blocked++;
   state.stats.turnBlocked++;
-}
-
-/** Legacy two-stage classifier recorder; removed once the interceptor runs on capability decisions. */
-export function recordClassifierResult(state: RuntimeState, toolName: string, result: ClassifierResult): void {
-  state.stats.reviewed++;
-  state.stats.classifierHits++;
-  state.stats.turnClassifierHits++;
-  state.stats.classifierInputTokens += result.tokenUsage?.input ?? 0;
-  state.stats.classifierOutputTokens += result.tokenUsage?.output ?? 0;
-  state.stats.classifierCacheReadTokens += result.tokenUsage?.cacheRead ?? 0;
-  state.stats.classifierCacheWriteTokens += result.tokenUsage?.cacheWrite ?? 0;
-  if (result.decision === "allow") state.stats.allowed++;
-  if (result.decision === "deny") {
-    state.stats.denied++;
-    state.stats.classifierDenials++;
-    state.stats.turnClassifierDenials++;
-  }
-  if (result.decision === "ask") state.stats.asked++;
-  pushRecent(state, { at: Date.now(), toolName, decision: result.decision, risk: result.risk, reason: result.reason });
 }
 
 export interface CapabilityDecisionRecord {

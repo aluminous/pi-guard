@@ -214,6 +214,28 @@ function matchAll(patterns: NamedPattern[], text: string, kind: ScreenHitKind, h
   }
 }
 
+/** The screen's coverage in prose, for /guard critique and the policy view. */
+export function screenLexiconSummary(): Array<{ kind: ScreenHitKind; entries: string[] }> {
+  return [
+    { kind: "authorization", entries: AUTHORIZATION_PATTERNS.map((entry) => entry.detail) },
+    { kind: "agent-directive", entries: AGENT_DIRECTIVE_PATTERNS.map((entry) => entry.detail) },
+    {
+      kind: "persistence-surface",
+      entries: [...[...PERSISTENCE_BASENAMES].map((name) => `${name} (by name)`), ...PERSISTENCE_PATH_PATTERNS.map((entry) => entry.detail)],
+    },
+    { kind: "lifecycle-script", entries: LIFECYCLE_SCRIPT_NAMES.map((name) => `${name} script entry added`) },
+    {
+      kind: "credential-shape",
+      entries: [
+        ...CREDENTIAL_CONTENT_PATTERNS.map((entry) => entry.detail),
+        ...CREDENTIAL_REFERENCE_PATTERNS.map((entry) => entry.detail),
+        "high-entropy token (≥40 chars, ≥4.3 bits/char)",
+        "large base64 blob (≥200 chars)",
+      ],
+    },
+  ];
+}
+
 /** The text layer of the screen, usable on any content: write bodies, edit replacements, command text. */
 export function screenText(text: string): ScreenHit[] {
   if (!text) return [];

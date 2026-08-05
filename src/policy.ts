@@ -251,6 +251,19 @@ export function isClassifierExemptRead(config: ResolvedGuardConfig, cwd: string,
   return classifierExemptReadReason(config, cwd, inputPath) !== undefined;
 }
 
+/**
+ * The denyRead pattern this path matches, if any. Evaluated regardless of
+ * filesystem.enabled, like the exemption routing: the list expresses "these
+ * are secrets" even when blocking is off, and capability mode uses it as the
+ * deterministic `credentials` label rather than as a hard block.
+ */
+export function denyReadMatch(config: ResolvedGuardConfig, cwd: string, inputPath: string): string | undefined {
+  const canonical = canonicalizeExistingPath(normalizeUserPath(cwd, inputPath));
+  const canonicalCwd = canonicalizeExistingPath(cwd);
+  if (!canonical.ok || !canonicalCwd.ok) return undefined;
+  return isDenied(canonicalCwd.path, canonical.path, config.filesystem.denyRead);
+}
+
 /** Which exemption condition applies ("in session cwd" / "matches allowRead '…'"), or undefined when the read is not exempt. */
 export function classifierExemptReadReason(config: ResolvedGuardConfig, cwd: string, inputPath: string): string | undefined {
   const normalizedPath = normalizeUserPath(cwd, inputPath);

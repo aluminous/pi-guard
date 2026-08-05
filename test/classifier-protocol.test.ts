@@ -1,57 +1,86 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  FAST_SYSTEM_PROMPT,
-  buildFastReviewText,
-  buildFullReviewText,
+  JUDGE_SYSTEM_PROMPT,
+  NAMER_SYSTEM_PROMPT,
+  buildJudgeText,
+  buildNamerText,
   isModelUnavailableError,
   isRetryableClassifierError,
-  parseFastResult,
-  parseResult,
+  parseJudgeResult,
+  parseNamerResult,
   projectToolCall,
 } from "../src/classifier-protocol.ts";
 import { testConfig } from "./helpers.ts";
 
-describe("fast system prompt", () => {
-  it("requires the classifier to respect configured allow and deny rules", () => {
-    assert.match(FAST_SYSTEM_PROMPT, /only when an allow rule clearly covers/);
-    assert.match(FAST_SYSTEM_PROMPT, /no soft_deny or hard_deny rule applies/);
+describe("namer system prompt", () => {
+  it("keeps the namer out of the decision business", () => {
+    assert.match(NAMER_SYSTEM_PROMPT, /You decide nothing/);
+    assert.match(NAMER_SYSTEM_PROMPT, /No prose, no decisions, no risk scores/);
+  });
+
+  it("states that write content is part of the action", () => {
+    assert.match(NAMER_SYSTEM_PROMPT, /the CONTENT is part of the action/);
+  });
+
+  it("bounds authorization evidence to decoration", () => {
+    assert.match(NAMER_SYSTEM_PROMPT, /never removes one/);
   });
 });
 
-describe("parseResult", () => {
-  it("parses a well-formed reviewer response", () => {
-    const result = parseResult('{"decision":"deny","risk":"critical","authorization":"low","reason":"credential exfiltration"}');
-    assert.equal(result.decision, "deny");
-    assert.equal(result.risk, "critical");
-    assert.equal(result.reason, "credential exfiltration");
+describe("judge system prompt", () => {
+  it("is ask-preferred and reserves deny for what confirmation cannot fix", () => {
+    assert.match(JUDGE_SYSTEM_PROMPT, /Prefer ask/);
+    assert.match(JUDGE_SYSTEM_PROMPT, /stay unsafe even after the user confirms them/);
   });
 
-  it("extracts JSON embedded in surrounding prose or code fences", () => {
-    const result = parseResult('Here is my analysis:\n```json\n{"decision":"allow","risk":"low","authorization":"high","reason":"routine"}\n```');
-    assert.equal(result.decision, "allow");
-  });
-
-  it("rejects unknown decisions instead of guessing", () => {
-    assert.throws(() => parseResult('{"decision":"maybe","risk":"low","authorization":"high","reason":"x"}'), /invalid reviewer decision/);
-  });
-
-  it("rejects missing or blank reasons", () => {
-    assert.throws(() => parseResult('{"decision":"allow","risk":"low","authorization":"high","reason":"  "}'), /invalid reviewer reason/);
-  });
-
-  it("rejects non-JSON output", () => {
-    assert.throws(() => parseResult("I think this is fine to allow."), /did not return JSON/);
+  it("is explicitly per-action", () => {
+    assert.match(JUDGE_SYSTEM_PROMPT, /never a standing approval/);
   });
 });
 
-describe("parseFastResult", () => {
-  it("parses the fast-path verdict", () => {
-    assert.deepEqual(parseFastResult('{"triviallySafe":true,"reason":"read-only"}'), { triviallySafe: true, reason: "read-only" });
+describe("parseNamerResult", () => {
+  it("parses labels and optional authorization evidence", () => {
+    const result = parseNamerResult('{"labels":["network-fetch","modify-project"],"authorizationEvidence":"download the schema"}');
+    assert.deepEqual(result.labels, ["network-fetch", "modify-project"]);
+    assert.equal(result.authorizationEvidence, "download the schema");
   });
 
-  it("rejects a string where a boolean is required", () => {
-    assert.throws(() => parseFastResult('{"triviallySafe":"true","reason":"x"}'), /invalid fast reviewer triviallySafe/);
+  it("extracts JSON embedded in prose or code fences", () => {
+    assert.deepEqual(parseNamerResult('Here you go:\n```json\n{"labels":["read-project"]}\n```').labels, ["read-project"]);
+  });
+
+  it("drops unknown class ids rather than failing the protocol", () => {
+    assert.deepEqual(parseNamerResult('{"labels":["read-project","prod-deploy"]}').labels, ["read-project"]);
+  });
+
+  it("falls back to unclassified when nothing valid is left", () => {
+    assert.deepEqual(parseNamerResult('{"labels":[]}').labels, ["unclassified"]);
+    assert.deepEqual(parseNamerResult('{"labels":["nonsense"]}').labels, ["unclassified"]);
+  });
+
+  it("deduplicates repeated labels", () => {
+    assert.deepEqual(parseNamerResult('{"labels":["credentials","credentials"]}').labels, ["credentials"]);
+  });
+
+  it("fails closed on schema violations", () => {
+    assert.throws(() => parseNamerResult('{"labels":"read-project"}'), /invalid namer labels/);
+    assert.throws(() => parseNamerResult('{"labels":[1,2]}'), /invalid namer labels/);
+    assert.throws(() => parseNamerResult('{"labels":["read-project"],"authorizationEvidence":42}'), /invalid namer authorizationEvidence/);
+    assert.throws(() => parseNamerResult("looks safe to me"), /did not return JSON/);
+  });
+});
+
+describe("parseJudgeResult", () => {
+  it("parses a well-formed verdict", () => {
+    const result = parseJudgeResult('{"decision":"ask","reason":"push to a remote you did not name"}');
+    assert.equal(result.decision, "ask");
+    assert.equal(result.reason, "push to a remote you did not name");
+  });
+
+  it("rejects unknown decisions and blank reasons instead of guessing", () => {
+    assert.throws(() => parseJudgeResult('{"decision":"maybe","reason":"x"}'), /invalid judge decision/);
+    assert.throws(() => parseJudgeResult('{"decision":"allow","reason":"  "}'), /invalid judge reason/);
   });
 });
 
@@ -94,12 +123,12 @@ describe("projectToolCall", () => {
     assert.deepEqual(projection.inputSummary.keys, ["url"]);
   });
 
-  it("includes the policy summary for classifier context", () => {
+  it("includes the policy summary for reviewer context", () => {
     const projection = projectToolCall("bash", { command: "ls" }, "/repo", testConfig());
     assert.ok(projection.policySummary.some((line) => line.startsWith("Backend:")));
   });
 
-  it("tells the classifier when hard restriction layers are disabled", () => {
+  it("tells the reviewer when hard restriction layers are disabled", () => {
     const config = testConfig((c) => {
       c.filesystem.enabled = false;
       c.network.enabled = false;
@@ -111,35 +140,44 @@ describe("projectToolCall", () => {
 });
 
 describe("review payloads", () => {
-  it("keeps the fast payload low-context (no user messages) with the cache-friendly key order", () => {
+  it("leads the namer payload with the static class definitions and ends with pendingAction", () => {
     const projection = projectToolCall("bash", { command: "ls" }, "/repo", testConfig());
-    const payload = JSON.parse(buildFastReviewText(projection, testConfig()));
-    assert.deepEqual(Object.keys(payload), ["rules", "activePolicy", "cwd", "pendingAction"]);
-  });
-
-  it("adds recent user messages only to the full payload, before pendingAction", () => {
-    const projection = projectToolCall("bash", { command: "ls" }, "/repo", testConfig());
-    const payload = JSON.parse(buildFullReviewText(["please run ls"], projection, testConfig()));
+    const payload = JSON.parse(buildNamerText(["please run ls"], projection));
+    assert.deepEqual(Object.keys(payload), ["capabilityClasses", "activePolicy", "cwd", "recentUserMessages", "pendingAction"]);
+    assert.equal(payload.capabilityClasses.length, 12);
     assert.deepEqual(payload.recentUserMessages, ["please run ls"]);
-    assert.deepEqual(Object.keys(payload), ["rules", "activePolicy", "cwd", "recentUserMessages", "pendingAction"]);
   });
 
-  it("injects session guidance into both stages when present, neither when empty", () => {
+  it("injects session guidance only when present", () => {
     const projection = projectToolCall("bash", { command: "npm run deploy" }, "/repo", testConfig());
     const guidance = ["User allowed bash (npm run deploy) with comment: staging deploys are fine"];
-    const fast = JSON.parse(buildFastReviewText(projection, testConfig(), guidance));
-    const full = JSON.parse(buildFullReviewText([], projection, testConfig(), guidance));
-    assert.deepEqual(fast.userSessionGuidance, guidance);
-    assert.deepEqual(full.userSessionGuidance, guidance);
-    const bare = JSON.parse(buildFastReviewText(projection, testConfig()));
-    assert.equal("userSessionGuidance" in bare, false);
+    const withGuidance = JSON.parse(buildNamerText([], projection, guidance));
+    assert.deepEqual(withGuidance.userSessionGuidance, guidance);
+    assert.equal("userSessionGuidance" in JSON.parse(buildNamerText([], projection)), false);
+  });
+
+  it("gives the judge the guard's recent decisions and the namer's labels", () => {
+    const projection = projectToolCall("bash", { command: "git push --force origin main" }, "/repo", testConfig());
+    const payload = JSON.parse(
+      buildJudgeText({
+        recentUserMessages: ["tidy up the history"],
+        projection,
+        recentGuardDecisions: ["deny bash (off-machine-effects): user denied a force push"],
+        labels: ["off-machine-effects", "local-destructive"],
+        authorizationEvidence: "tidy up the history",
+      }),
+    );
+    assert.deepEqual(Object.keys(payload), ["capabilityClasses", "activePolicy", "cwd", "recentUserMessages", "recentGuardDecisions", "pendingAction"]);
+    assert.deepEqual(payload.pendingAction.capabilityLabels, ["off-machine-effects", "local-destructive"]);
+    assert.equal(payload.pendingAction.authorizationEvidence, "tidy up the history");
+    assert.equal(payload.recentGuardDecisions.length, 1);
   });
 
   it("keeps the payload prefix byte-stable across calls so provider prompt caches can hit", () => {
     const config = testConfig();
     const guidance = ["User allowed bash (npm test) with comment: fine"];
-    const a = buildFullReviewText(["same turn message"], projectToolCall("bash", { command: "npm test" }, "/repo", config), config, guidance);
-    const b = buildFullReviewText(["same turn message"], projectToolCall("write", { path: "src/x.ts", content: "export {}" }, "/repo", config), config, guidance);
+    const a = buildNamerText(["same turn message"], projectToolCall("bash", { command: "npm test" }, "/repo", config), guidance);
+    const b = buildNamerText(["same turn message"], projectToolCall("write", { path: "src/x.ts", content: "export {}" }, "/repo", config), guidance);
     const divergence = a.indexOf('"pendingAction"');
     assert.ok(divergence > 0);
     assert.equal(a.slice(0, divergence), b.slice(0, divergence));

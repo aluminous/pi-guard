@@ -1,23 +1,25 @@
 // /guard test: dry-runs a shell command or file read/write through the guard
-// stack — readonly gate, path policy, allowlist, and a REAL classifier review
-// when enabled — without executing anything and without touching stats,
+// stack — readonly gate, path policy, allowlist labels, content screen, a REAL
+// namer call when one is needed, the disposition table, and a REAL judge when
+// the table escalates — without executing anything and without touching stats,
 // telemetry, recent decisions, traces, or lastDecision. Reuses the same stage
-// functions the interceptor consults, so verdicts cannot drift.
+// helpers the interceptor consults, so verdicts cannot drift.
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { classifierEnabled, resolveClassifierModel, reviewToolCall, type CompleteFn } from "../classifier.ts";
-import { READONLY_CLASSIFIER_RULES } from "../classifier-rules.ts";
-import { explainCommandAllowlist } from "../command-allowlist.ts";
-import { loadConfig, type ResolvedGuardConfig } from "../config.ts";
+import { capabilityName, resolveCapabilities, type CapabilityId, type CapabilityResolution } from "../capabilities.ts";
+import { classifierEnabled, judgeToolCall, nameToolCall, resolveClassifierModel, resolveJudgeModel, type CompleteFn, type NamerResult } from "../classifier.ts";
+import { allowlistCapabilities, explainCommandAllowlist } from "../command-allowlist.ts";
+import { configSourceLabel, loadConfig, type ResolvedGuardConfig } from "../config.ts";
+import { screenToolCall } from "../content-screen.ts";
 import { GUARDED_TOOLS } from "../guarded-tools.ts";
 import { exemptReadCallReason } from "../interceptor.ts";
 import { showGuardView } from "../live-view.ts";
-import { decidePathAccess, type AccessKind } from "../policy.ts";
-import type { RuntimeState } from "../state.ts";
+import { decidePathAccess, denyReadMatch, type AccessKind } from "../policy.ts";
+import { syncCapabilityPreset, type RuntimeState } from "../state.ts";
 import { formatError } from "../util.ts";
 
 export interface GuardTestDeps {
   state: RuntimeState;
-  /** Test seam for the classifier review (production uses the default model-call function). */
+  /** Test seam for the namer/judge calls (production uses the default model-call function). */
   completeFn?: CompleteFn;
 }
 
@@ -37,44 +39,100 @@ function isSessionApproved(state: RuntimeState, kind: AccessKind, target: string
   return state.approvals[kind].some((root) => target === root || target.startsWith(`${root}/`));
 }
 
-interface ClassifierPlan {
-  /** undefined = review would actually run; otherwise the line explaining why not. */
+interface NamingPlan {
+  /** undefined = the namer would actually run; otherwise the line explaining why not. */
   skip?: string;
   toolName: string;
   input: unknown;
 }
 
+function scopeLabel(entry: CapabilityResolution["effective"][number]): string {
+  if (entry.scope === "config") return configSourceLabel(entry.source ?? "config");
+  if (entry.scope === "preset") return `${entry.source} preset`;
+  return entry.scope;
+}
+
 export function createGuardTest(deps: GuardTestDeps) {
   const { state } = deps;
 
-  async function classifierLines(ctx: ExtensionContext, config: ResolvedGuardConfig, plan: ClassifierPlan): Promise<string[]> {
-    if (!classifierEnabled(config, state.classifier)) return ["  classifier: disabled — would not review"];
-    if (plan.skip) return [`  classifier: ${plan.skip}`];
+  /** Runs the namer for real when the deterministic mappers could not label the action. */
+  async function namerLines(ctx: ExtensionContext, config: ResolvedGuardConfig, plan: NamingPlan): Promise<{ lines: string[]; named?: NamerResult; failed?: boolean }> {
+    // The deterministic reason is the more useful one when both apply.
+    if (plan.skip) return { lines: [`  namer: ${plan.skip}`] };
+    if (!classifierEnabled(config, state.classifier)) return { lines: ["  namer: classifier disabled — would not run"] };
     const model = resolveClassifierModel(ctx, config, state.classifier);
     const modelLabel = model ? `${model.provider}/${model.id}` : `unavailable (${state.classifier.modelOverride ?? config.classifier.model})`;
-    ctx.ui.notify(`Guard test: running a real classifier review (${modelLabel})...`, "info");
+    ctx.ui.notify(`Guard test: running a real capability naming call (${modelLabel})...`, "info");
     try {
-      const result = await reviewToolCall({
+      const named = await nameToolCall({ ctx, config, state: state.classifier, toolName: plan.toolName, input: plan.input, completeFn: deps.completeFn });
+      const usage = named.tokenUsage;
+      const cost = usage ? `${usage.input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0)} in / ${usage.output} out tokens` : "token usage not reported";
+      return {
+        named,
+        lines: [
+          `  namer: ${named.labels.join(", ")}`,
+          ...(named.authorizationEvidence ? [`  authorization evidence: "${named.authorizationEvidence}"`] : []),
+          `  real naming call by ${modelLabel} · ${cost}`,
+        ],
+      };
+    } catch (error) {
+      return {
+        failed: true,
+        lines: [
+          `  namer: naming failed — ${formatError(error)}`,
+          `  a real call would ${config.classifier.failClosed ? "stop the turn (fail closed)" : "fail open and proceed"}`,
+        ],
+      };
+    }
+  }
+
+  async function tableLines(
+    ctx: ExtensionContext,
+    config: ResolvedGuardConfig,
+    labels: CapabilityId[],
+    named: NamerResult | undefined,
+    plan: NamingPlan,
+  ): Promise<{ lines: string[]; verdict?: string }> {
+    if (labels.length === 0) return { lines: ["  no capability labels — nothing for the table to decide"] };
+    const resolution = resolveCapabilities(config, state.capabilities, labels);
+    const lines = [
+      ...resolution.effective.map((entry) => `  ${entry.id} → ${entry.disposition} (${scopeLabel(entry)})`),
+      `  severity-max ⇒ ${resolution.disposition} · decided by ${resolution.decidedBy.id} (${capabilityName(resolution.decidedBy.id)})`,
+    ];
+    if (resolution.disposition === "allow") return { lines, verdict: "would allow" };
+    if (resolution.disposition === "deny") return { lines, verdict: "would deny (disposition table)" };
+    if (resolution.disposition === "ask") return { lines, verdict: "would ask the user" };
+
+    // judge: run it for real, same as the interceptor would.
+    if (!classifierEnabled(config, state.classifier)) {
+      return { lines: [...lines, "  judge: classifier is off, so the judge cannot run — would ask instead"], verdict: "would ask the user (judge unavailable)" };
+    }
+    const model = resolveJudgeModel(ctx, config);
+    const modelLabel = model ? `${model.provider}/${model.id}` : `unavailable (${config.classifier.judgeModel})`;
+    ctx.ui.notify(`Guard test: running a real judge review (${modelLabel})...`, "info");
+    try {
+      const judge = await judgeToolCall({
         ctx,
         config,
         state: state.classifier,
         toolName: plan.toolName,
         input: plan.input,
-        rulesOverride: state.readOnly ? READONLY_CLASSIFIER_RULES : undefined,
+        labels: resolution.labels,
+        authorizationEvidence: named?.authorizationEvidence,
+        recentGuardDecisions: state.recent.slice(0, 8).map((event) => `${event.decision} ${event.toolName}: ${event.reason}`),
         completeFn: deps.completeFn,
       });
-      const usage = result.tokenUsage;
+      const usage = judge.tokenUsage;
       const cost = usage ? `${usage.input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0)} in / ${usage.output} out tokens` : "token usage not reported";
-      return [
-        `  classifier: would ${result.decision} · risk ${result.risk} · authorization ${result.authorization}${result.fastPath ? " · fast path" : ""}`,
-        `  reason: ${result.reason}`,
-        `  real review by ${modelLabel} · ${cost}${state.readOnly ? " · read-only ruleset" : ""}`,
-      ];
+      return {
+        lines: [...lines, `  judge: would ${judge.decision} — ${judge.reason}`, `  real judge review by ${modelLabel} · ${cost}`],
+        verdict: judge.decision === "allow" ? "would allow (judge)" : judge.decision === "deny" ? "would deny (judge)" : "would ask the user (judge)",
+      };
     } catch (error) {
-      return [
-        `  classifier: review failed — ${formatError(error)}`,
-        `  a real call would ${config.classifier.failClosed ? "stop the turn (fail closed)" : "fail open and proceed"}`,
-      ];
+      return {
+        lines: [...lines, `  judge: review failed — ${formatError(error)}`, "  a real call would fall back to asking the user"],
+        verdict: "would ask the user (judge unavailable)",
+      };
     }
   }
 
@@ -82,6 +140,7 @@ export function createGuardTest(deps: GuardTestDeps) {
     const lines: string[] = [];
     let verdict = "would allow";
     let blocked = false;
+    const labels: CapabilityId[] = [];
 
     if (state.readOnly && kind === "write") {
       lines.push("## Read-only gate", "  [BLOCK] on — write/edit are blocked deterministically", "");
@@ -98,9 +157,14 @@ export function createGuardTest(deps: GuardTestDeps) {
       const decision = decidePathAccess(config, ctx.cwd, target, kind);
       if (decision.allowed) {
         lines.push(`  [ALLOW] ${kind} ${decision.matchedRoot !== undefined ? `allowed by root '${decision.matchedRoot}'` : "allowed: no deny pattern matches (blacklist mode)"}`);
+      } else if (decision.code === "denied-by-pattern" && kind === "read") {
+        lines.push(`  [ASK] ${decision.reason} → credentials label (no longer a hard block)`);
       } else if (decision.code === "outside-roots") {
         if (isSessionApproved(state, kind, decision.normalizedPath)) {
           lines.push(`  [ALLOW] ${decision.reason} — but already approved this session`);
+        } else if (kind === "write") {
+          lines.push(`  [ASK] ${decision.reason} → modify-system label`);
+          labels.push("modify-system");
         } else {
           lines.push(`  [ASK] ${decision.reason} → would ask for session approval`);
           if (!blocked) verdict = "would ask for path approval";
@@ -113,19 +177,47 @@ export function createGuardTest(deps: GuardTestDeps) {
     }
     lines.push("");
 
-    const plan: ClassifierPlan = { toolName: kind, input: { path: target } };
+    const plan: NamingPlan = { toolName: kind, input: { path: target } };
     if (blocked) {
       plan.skip = "not reached — the call is blocked deterministically";
     } else if (kind === "read") {
+      const denied = denyReadMatch(config, ctx.cwd, target);
       const exemption = exemptReadCallReason(GUARDED_TOOLS.read!, { path: target }, ctx.cwd, config, undefined);
-      lines.push("## Read exemption", exemption ? `  [ALLOW] exempt: ${exemption} — review skipped` : "  not exempt — classifier review required", "");
-      if (exemption) plan.skip = `skipped — deterministically exempt (${exemption})`;
+      lines.push("## Read exemption");
+      if (denied) {
+        lines.push(`  [ASK] matches denyRead '${denied}' → credentials`);
+        labels.push("credentials");
+        plan.skip = "skipped — deterministically labeled credentials";
+      } else if (exemption) {
+        const label: CapabilityId = exemption.startsWith("matches allowRead") ? "read-system" : "read-project";
+        lines.push(`  [ALLOW] exempt: ${exemption} → ${label}`);
+        labels.push(label);
+        plan.skip = `skipped — deterministically exempt (${exemption})`;
+      } else {
+        lines.push("  not exempt — the namer would label this read");
+      }
+      lines.push("");
+    } else {
+      // Writes carry no content in a dry run, so the screen sees the path only.
+      const screen = screenToolCall("write", { path: target, content: "" }, ctx.cwd);
+      lines.push("## Content screen", `  ${screen.tripped ? "[ASK]" : "[ALLOW]"} ${screen.summary}`, "  note: content not simulated — a real write also screens the body", "");
+      if (screen.tripped) plan.skip = undefined;
+      else if (screen.label) {
+        labels.push(screen.label);
+        plan.skip = `skipped — screen clean, deterministic label ${screen.label}`;
+      }
     }
-    lines.push("## Classifier", ...(await classifierLines(ctx, config, plan)));
-    if (kind === "write" && !plan.skip && classifierEnabled(config, state.classifier)) {
-      lines.push("  note: content not simulated — a real write call also reviews the content");
-    }
-    return [verdictLine(verdict, lines), ...lines];
+
+    lines.push("## Namer");
+    const naming = await namerLines(ctx, config, plan);
+    lines.push(...naming.lines);
+    lines.push("");
+    lines.push("## Disposition table");
+    const table = await tableLines(ctx, config, [...labels, ...(naming.named?.labels ?? [])], naming.named, plan);
+    lines.push(...table.lines);
+    if (naming.failed) verdict = "review failed — see the namer section";
+    else if (table.verdict && !blocked && verdict === "would allow") verdict = table.verdict;
+    return [`  verdict: ${verdict}`, ...lines];
   }
 
   async function testCommand(ctx: ExtensionContext, config: ResolvedGuardConfig, command: string): Promise<string[]> {
@@ -135,56 +227,54 @@ export function createGuardTest(deps: GuardTestDeps) {
     const exempt = explanation.allowlisted && enforcing;
     const classifierOn = classifierEnabled(config, state.classifier);
     let verdict = "would allow";
+    let blocked = false;
 
     if (state.readOnly) {
       lines.push("## Read-only gate");
-      if (classifierOn) lines.push("  [ALLOW] on — bash is reviewed under the read-only ruleset");
+      if (classifierOn) lines.push("  [ALLOW] on — bash is named and resolved under the read-only disposition preset");
       else if (exempt) lines.push("  [ALLOW] on — deterministically allowlisted commands stay allowed");
       else {
         lines.push("  [BLOCK] on — classifier is off, so commands cannot be reviewed for writes");
         verdict = "would block (read-only mode)";
+        blocked = true;
       }
       lines.push("");
     }
 
     lines.push("## Command allowlist");
     if (explanation.allowlisted) {
-      lines.push(...explanation.segments.map((segment) => `  [ALLOW] \`${segment.command}\` → rule \`${segment.rule}\``));
+      lines.push(...explanation.segments.map((segment) => `  [ALLOW] \`${segment.command}\` → rule \`${segment.rule}\` (${segment.capability})`));
       lines.push(
         enforcing
-          ? "  allowlisted — exempt from classifier review while the Seatbelt sandbox enforces"
-          : "  allowlisted, but the sandbox is not enforcing (Seatbelt required) — review still applies",
+          ? "  allowlisted — deterministic capability labels, no namer call while the Seatbelt sandbox enforces"
+          : "  allowlisted, but the sandbox is not enforcing (Seatbelt required) — the namer still runs",
       );
     } else {
       lines.push(`  not allowlisted: ${explanation.reason}`);
       for (const segment of explanation.segments ?? []) {
-        lines.push(segment.rule !== undefined ? `  [ALLOW] \`${segment.command}\` → rule \`${segment.rule}\`` : `  [BLOCK] \`${segment.command}\`: ${segment.refusal}`);
+        lines.push(segment.rule !== undefined ? `  [ALLOW] \`${segment.command}\` → rule \`${segment.rule}\` (${segment.capability})` : `  [BLOCK] \`${segment.command}\`: ${segment.refusal}`);
       }
     }
     lines.push("");
 
-    const plan: ClassifierPlan = { toolName: "bash", input: { command } };
-    if (verdict.startsWith("would block")) plan.skip = "not reached — the call is blocked deterministically";
-    else if (exempt) {
-      plan.skip = "skipped — deterministically exempt (allowlisted while the sandbox enforces)";
-      verdict = "would allow (allowlist exempt)";
-    }
-    lines.push("## Classifier", ...(await classifierLines(ctx, config, plan)));
-    return [verdictLine(verdict, lines), ...lines];
-  }
+    const labels: CapabilityId[] = exempt ? allowlistCapabilities(explanation) : [];
+    const plan: NamingPlan = { toolName: "bash", input: { command } };
+    if (blocked) plan.skip = "not reached — the call is blocked deterministically";
+    else if (exempt) plan.skip = `skipped — allowlisted while the sandbox enforces (${labels.join(", ")})`;
 
-  function verdictLine(current: string, lines: string[]): string {
-    // The classifier lines are appended last; lift a real review's decision into the verdict.
-    const reviewed = lines.find((line) => line.includes("classifier: would "));
-    if (reviewed && current === "would allow") {
-      const decision = reviewed.match(/classifier: would (\w+)/)?.[1];
-      if (decision === "deny") return "  verdict: would deny (classifier)";
-      if (decision === "ask") return "  verdict: would ask the user (classifier)";
-    }
-    if (lines.some((line) => line.includes("classifier: review failed")) && current === "would allow") {
-      return "  verdict: review failed — see classifier section";
-    }
-    return `  verdict: ${current}`;
+    const screen = screenToolCall("bash", { command }, ctx.cwd);
+    if (screen.tripped) lines.push("## Content screen", `  [ASK] ${screen.summary}`, "");
+
+    lines.push("## Namer");
+    const naming = await namerLines(ctx, config, plan);
+    lines.push(...naming.lines);
+    lines.push("");
+    lines.push("## Disposition table");
+    const table = await tableLines(ctx, config, [...labels, ...(naming.named?.labels ?? [])], naming.named, plan);
+    lines.push(...table.lines);
+    if (naming.failed) verdict = "review failed — see the namer section";
+    else if (table.verdict && !blocked) verdict = table.verdict;
+    return [`  verdict: ${verdict}`, ...lines];
   }
 
   return async function runGuardTest(args: string, ctx: ExtensionContext): Promise<void> {
@@ -196,6 +286,7 @@ export function createGuardTest(deps: GuardTestDeps) {
       return;
     }
     const config = state.config ?? loadConfig(ctx);
+    syncCapabilityPreset(state);
     const subjectLabel = subject.kind === "command" ? `bash: ${subject.command}` : `${subject.kind}: ${subject.path}`;
     const body =
       subject.kind === "command"

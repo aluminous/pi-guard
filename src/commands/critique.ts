@@ -1,46 +1,30 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { complete, type Message } from "@earendil-works/pi-ai/compat";
-import { buildClassifierPromptForCritique } from "../classifier.ts";
+import { CAPABILITY_CLASSES, getEffectiveDisposition } from "../capabilities.ts";
+import { buildCapabilityPromptForCritique } from "../classifier.ts";
 import { loadConfig, type ResolvedGuardConfig } from "../config.ts";
 import { showGuardView } from "../live-view.ts";
 import { getPersistentConfigPath } from "../persistent-settings.ts";
 import type { RuntimeState } from "../state.ts";
 import { formatError } from "../util.ts";
 
-const CRITIQUE_SYSTEM_PROMPT = `You are an expert reviewer of auto mode classifier rules for a local coding agent guard.
+const CRITIQUE_SYSTEM_PROMPT = `You are an expert reviewer of the capability taxonomy used by a local coding agent's guard.
 
-The guard has an auto mode classifier that uses an AI reviewer to decide whether tool calls should be auto-approved, denied, or require user confirmation. Users can write custom rules in these categories:
+The guard names each proposed tool action with one or more capability classes — a cheap model does the naming, deterministic mappers and a content screen shortcut the common cases — and a user-owned disposition table then decides allow, ask, deny, or escalation to a stronger judge. The class DEFINITIONS are the prompt the namer sees; the table is the user's whole policy.
 
-- allow: Actions the classifier may auto-approve
-- soft_deny: Actions the classifier should block or ask for user confirmation unless clearly authorized
-- hard_deny: Actions the classifier should always deny
-- environment: Context about the user's setup and trust boundaries
+Critique the definitions and the screen for:
+1. Boundaries: can two classes both plausibly claim the same action, or does an obvious action fall between them? Definitions should say what belongs to a neighbour ("X, but Y is class Z instead").
+2. Namability: could a cheap model apply this class from a projected tool call, or does it need context the namer never sees?
+3. Disposition fit: does each class group actions the user would want treated the same way? A class whose members deserve different answers is the wrong shape.
+4. Screen coverage: what content-level attack would slip past the deterministic screen and reach the table with a benign label — and what benign content would trip it needlessly?
 
-Your job is to critique the rules for clarity, completeness, and potential issues. The classifier is an LLM that reads these rules as part of its system prompt.
+The taxonomy is deliberately capped at twelve classes: propose sharper wording before proposing a thirteenth, and say plainly if a proposed class is edge-case disease. Be concise and constructive; comment only where something could be improved.`;
 
-For each rule, evaluate:
-1. Clarity: Is the rule unambiguous? Could the classifier misinterpret it?
-2. Completeness: Are there gaps or edge cases the rule does not cover?
-3. Conflicts: Do any rules conflict with each other?
-4. Actionability: Is the rule specific enough for the classifier to act on?
-
-Be concise and constructive. Only comment on rules that could be improved. If all rules look good, say so.`;
-
-function formatRulesForCritique(config: ResolvedGuardConfig): string {
-  const sections = config.classifier.rules;
-  return [
-    "allow:",
-    ...sections.allow.map((rule) => `- ${rule}`),
-    "",
-    "soft_deny:",
-    ...sections.soft_deny.map((rule) => `- ${rule}`),
-    "",
-    "hard_deny:",
-    ...sections.hard_deny.map((rule) => `- ${rule}`),
-    "",
-    "environment:",
-    ...sections.environment.map((rule) => `- ${rule}`),
-  ].join("\n");
+function formatTableForCritique(config: ResolvedGuardConfig, state: RuntimeState): string {
+  return CAPABILITY_CLASSES.map((entry) => {
+    const effective = getEffectiveDisposition(config, state.capabilities, entry.id);
+    return `- ${entry.id} (${entry.name}) → ${effective.disposition} [${effective.scope}]\n  ${entry.definition}`;
+  }).join("\n");
 }
 
 /** Handles `/guard critique [provider/model]`; defaults to Pi's current model. */
@@ -68,20 +52,20 @@ export function createCritiqueRunner(deps: { state: RuntimeState }) {
       return;
     }
 
-    ctx.ui.setStatus("guard-critique", ctx.ui.theme.fg("accent", "Critiquing guard rules"));
-    ctx.ui.notify(`Critiquing guard rules with ${model.provider}/${model.id}...`, "info");
+    ctx.ui.setStatus("guard-critique", ctx.ui.theme.fg("accent", "Critiquing guard capabilities"));
+    ctx.ui.notify(`Critiquing the guard capability taxonomy with ${model.provider}/${model.id}...`, "info");
     const userPrompt = [
-      "Here is the full classifier system prompt that the guard auto mode classifier receives:",
+      "Here are the guard's namer and judge system prompts, its capability classes with their effective dispositions, and the deterministic content screen:",
       "",
-      "<classifier_system_prompt>",
-      buildClassifierPromptForCritique(config),
-      "</classifier_system_prompt>",
+      "<guard_capability_mode>",
+      buildCapabilityPromptForCritique(config, state.capabilities),
+      "</guard_capability_mode>",
       "",
-      "Here are the resolved classifier rules from the current config. Configured sections replace the corresponding defaults; otherwise defaults are used:",
+      "And the resolved disposition table as the user currently has it:",
       "",
-      formatRulesForCritique(config),
+      formatTableForCritique(config, state),
       "",
-      "Please critique these rules.",
+      "Please critique the class definitions, the table, and the screen.",
     ].join("\n");
 
     const message: Message = { role: "user", content: [{ type: "text", text: userPrompt }], timestamp: Date.now() };
@@ -98,7 +82,7 @@ export function createCritiqueRunner(deps: { state: RuntimeState }) {
         .join("\n")
         .trim();
       const output = [
-        "# Guard rule critique",
+        "# Guard capability critique",
         "",
         `Model: ${model.provider}/${model.id}`,
         `Config: ${getPersistentConfigPath()}`,
@@ -106,7 +90,7 @@ export function createCritiqueRunner(deps: { state: RuntimeState }) {
         critique || "No critique returned.",
       ].join("\n");
       showGuardView(ctx, state, "report", () => output.split("\n"));
-      ctx.ui.notify("Guard rule critique ready.", "info");
+      ctx.ui.notify("Guard capability critique ready.", "info");
     } catch (error) {
       const reason = formatError(error);
       ctx.ui.notify(`Guard critique failed: ${reason}`, "error");

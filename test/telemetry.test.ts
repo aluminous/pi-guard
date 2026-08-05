@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { interceptToolCall } from "../src/interceptor.ts";
 import { createRuntimeState, type RuntimeState } from "../src/state.ts";
-import { appendGuardTelemetry, redactTelemetryRecord, type GuardTelemetryRecord } from "../src/telemetry.ts";
+import { appendGuardTelemetry, redactTelemetryRecord, type GuardReviewTelemetry, type GuardTelemetryRecord } from "../src/telemetry.ts";
 import { testConfig } from "./helpers.ts";
 
 function fakeCtx(): ExtensionContext {
@@ -31,12 +31,14 @@ function readyState(captured: GuardTelemetryRecord[], overrides?: Parameters<typ
 }
 
 describe("redactTelemetryRecord", () => {
-  const record: GuardTelemetryRecord = {
+  const record: GuardReviewTelemetry = {
     kind: "review",
     tool: "bash",
     decision: "allow",
-    risk: "low",
-    authorization: "medium",
+    labels: ["run-dev-tools"],
+    resolvedDisposition: "allow",
+    decidedBy: "run-dev-tools",
+    screenTripped: false,
     latencyMs: 10,
     reason: "ok",
     projection: {
@@ -60,6 +62,13 @@ describe("redactTelemetryRecord", () => {
     const redacted = redactTelemetryRecord(record, "full") as typeof record;
     assert.equal((redacted.projection!.inputSummary.command as string).length, (record.projection!.inputSummary.command as string).length);
     assert.deepEqual(redacted.projection!.policySummary, ["network: allowed 5 domains"]);
+  });
+
+  it("keeps the capability fields through redaction", () => {
+    const redacted = redactTelemetryRecord(record, "minimal") as typeof record;
+    assert.deepEqual(redacted.labels, ["run-dev-tools"]);
+    assert.equal(redacted.resolvedDisposition, "allow");
+    assert.equal(redacted.screenTripped, false);
   });
 
   it("leaves non-review records untouched in minimal mode", () => {

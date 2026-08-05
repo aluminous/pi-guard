@@ -1,6 +1,6 @@
 // Decision-trace tests: trace contents for each interceptor stage (path
-// block, exempt read, allowlisted command, classifier decision via a fake
-// complete function) and the /guard explain rendering path.
+// block, exempt read, allowlisted command, screen, namer/table/judge via a
+// fake complete function) and the /guard explain rendering path.
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -64,18 +64,34 @@ function fakeComplete(script: string[]): CompleteFn {
 
 describe("decision traces", () => {
   it("records a path-policy block with the matching deny pattern", async () => {
-    writeFileSync(path.join(cwd, ".env"), "SECRET=1");
     const state = guardedState(testConfig());
-    const result = await interceptToolCall({ toolName: "read", input: { path: ".env" } }, fakeCtx(), state);
+    const result = await interceptToolCall({ toolName: "write", input: { path: ".env", content: "SECRET=1" } }, fakeCtx(), state);
     assert.equal(result?.block, true);
     assert.equal(state.traces.length, 1);
     const trace = state.traces[0]!;
-    assert.equal(trace.toolName, "read");
-    assert.match(trace.action, /read: \.env/);
+    assert.equal(trace.toolName, "write");
     assert.equal(trace.final, "blocked");
     assert.deepEqual(trace.stages.map((s) => s.stage), ["path-policy"]);
     assert.equal(trace.stages[0]!.outcome, "block");
     assert.match(trace.stages[0]!.detail, /denied by pattern \.env/);
+  });
+
+  it("routes a denyRead read to the credentials label instead of blocking on the path", async () => {
+    writeFileSync(path.join(cwd, ".env"), "SECRET=1");
+    const state = guardedState(testConfig());
+    const result = await interceptToolCall({ toolName: "read", input: { path: ".env" } }, fakeCtx(), state);
+    // Headless, so the judge-class ask still ends as a block — but via the table, not the path.
+    assert.equal(result?.block, true);
+    const trace = state.traces[0]!;
+    assert.match(trace.action, /read: \.env/);
+    const pathStage = trace.stages.find((s) => s.stage === "path-policy");
+    assert.equal(pathStage?.outcome, "label");
+    assert.match(pathStage!.detail, /credentials label instead of a block/);
+    const exemption = trace.stages.find((s) => s.stage === "read-exemption");
+    assert.match(exemption!.detail, /matches denyRead '\.env' → credentials/);
+    const capabilities = trace.stages.find((s) => s.stage === "capabilities");
+    assert.equal(capabilities?.outcome, "judge");
+    assert.match(capabilities!.detail, /credentials→judge \(default\)/);
   });
 
   it("records the exempt-read condition for an in-cwd read", async () => {
@@ -86,8 +102,10 @@ describe("decision traces", () => {
     assert.equal(trace.final, "allowed");
     const exemption = trace.stages.find((s) => s.stage === "read-exemption");
     assert.equal(exemption?.outcome, "exempt");
-    assert.match(exemption!.detail, /in session cwd/);
-    assert.ok(!trace.stages.some((s) => s.stage === "classifier"), "exempt reads must not reach the classifier");
+    assert.match(exemption!.detail, /in session cwd → read-project/);
+    assert.ok(!trace.stages.some((s) => s.stage === "namer"), "exempt reads must not reach the namer");
+    const capabilities = trace.stages.find((s) => s.stage === "capabilities");
+    assert.equal(capabilities?.outcome, "allow");
   });
 
   it("records per-segment rule matches for an allowlisted command", async () => {
@@ -99,8 +117,11 @@ describe("decision traces", () => {
     assert.equal(trace.final, "allowed");
     const allowlist = trace.stages.find((s) => s.stage === "command-allowlist");
     assert.equal(allowlist?.outcome, "exempt");
-    assert.match(allowlist!.detail, /`grep foo src` → rule `grep \*`/);
-    assert.match(allowlist!.detail, /`git status` → rule `git status \*`/);
+    assert.match(allowlist!.detail, /`grep foo src` → rule `grep \*` \(read-project\)/);
+    assert.match(allowlist!.detail, /`git status` → rule `git status \*` \(read-project\)/);
+    const capabilities = trace.stages.find((s) => s.stage === "capabilities");
+    assert.equal(capabilities?.outcome, "allow");
+    assert.match(capabilities!.detail, /read-project→allow \(default\) ⇒ allow/);
   });
 
   it("records the allowlist refusal reason for a non-allowlisted segment", async () => {
@@ -114,13 +135,13 @@ describe("decision traces", () => {
     assert.match(allowlist!.detail, /`curl example.com`: no allowlist rule matches/);
   });
 
-  it("records the classifier decision with model, fast path, and reason", async () => {
+  it("records the namer labels and the table resolution", async () => {
     const config = testConfig((c) => {
       c.classifier.enabled = true;
       c.classifier.model = "test/fake-model";
     });
     const state = guardedState(config);
-    const complete = fakeComplete(['{"triviallySafe":true,"reason":"routine build step"}']);
+    const complete = fakeComplete(['{"labels":["run-dev-tools"]}']);
     const result = await interceptToolCall(
       { toolName: "bash", input: { command: "npm run build" } },
       fakeCtx({ model: { provider: "test", id: "fake-model" } }),
@@ -130,13 +151,43 @@ describe("decision traces", () => {
     assert.equal(result, undefined);
     const trace = state.traces[0]!;
     assert.equal(trace.final, "allowed");
-    const classifier = trace.stages.find((s) => s.stage === "classifier");
-    assert.equal(classifier?.outcome, "allow");
-    assert.match(classifier!.detail, /risk low/);
-    assert.match(classifier!.detail, /routine build step/);
-    assert.match(classifier!.detail, /model test\/fake-model/);
-    assert.match(classifier!.detail, /fast path/);
+    const namer = trace.stages.find((s) => s.stage === "namer");
+    assert.equal(namer?.outcome, "run-dev-tools");
+    assert.match(namer!.detail, /model test\/fake-model/);
+    const capabilities = trace.stages.find((s) => s.stage === "capabilities");
+    assert.equal(capabilities?.outcome, "allow");
+    assert.match(capabilities!.detail, /run-dev-tools→allow \(default\) ⇒ allow/);
     assert.equal(state.classifier.lastDecision?.decision, "allow");
+    assert.deepEqual(state.classifier.lastDecision?.labels, ["run-dev-tools"]);
+  });
+
+  it("records the judge stage when the table escalates", async () => {
+    const config = testConfig((c) => {
+      c.classifier.enabled = true;
+      c.classifier.model = "test/fake-model";
+      c.classifier.judgeModel = "test/fake-model";
+    });
+    const state = guardedState(config);
+    const complete = fakeComplete([
+      '{"labels":["local-destructive"]}',
+      '{"decision":"deny","reason":"removes untracked work with no recovery path"}',
+    ]);
+    const result = await interceptToolCall(
+      { toolName: "bash", input: { command: "rm -rf build" } },
+      fakeCtx({ model: { provider: "test", id: "fake-model" } }),
+      state,
+      complete,
+    );
+    assert.equal(result?.block, true);
+    assert.match(result.reason, /Guard judge denied/);
+    const trace = state.traces[0]!;
+    assert.deepEqual(
+      trace.stages.map((s) => s.stage),
+      ["command-allowlist", "namer", "capabilities", "judge"],
+    );
+    const judge = trace.stages.find((s) => s.stage === "judge");
+    assert.equal(judge?.outcome, "deny");
+    assert.match(judge!.detail, /removes untracked work/);
   });
 
   it("keeps traces newest first, caps at TRACE_LIMIT, and resets per session", async () => {
@@ -221,13 +272,13 @@ describe("formatDecisionTrace", () => {
       action: "bash: rm -rf /",
       final: "blocked",
       stages: [
-        { stage: "readonly", outcome: "pass", detail: "bash permitted pending review under read-only rules" },
-        { stage: "classifier", outcome: "deny", detail: "deny · risk critical · destructive" },
+        { stage: "readonly", outcome: "pass", detail: "bash permitted pending capability review" },
+        { stage: "judge", outcome: "deny", detail: "deny · destroys work with no recovery path" },
       ],
     };
     const text = formatDecisionTrace(trace, 1, 1);
     assert.match(text, /\[ALLOW\] readonly:/);
-    assert.match(text, /\[BLOCK\] classifier:/);
+    assert.match(text, /\[BLOCK\] judge:/);
     assert.match(text, /final: blocked/);
   });
 });

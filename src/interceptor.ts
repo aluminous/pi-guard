@@ -1,26 +1,49 @@
 import path from "node:path";
 import { getPackageDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { askGuardApproval } from "./approvals.ts";
-import { addSessionGuidance, classifierEnabled, isClassifierModelUnavailable, projectToolCall, resolveClassifierModel, reviewToolCall, type CompleteFn } from "./classifier.ts";
-import { READONLY_CLASSIFIER_RULES } from "./classifier-rules.ts";
-import { explainCommandAllowlist, isCommandAllowlisted } from "./command-allowlist.ts";
-import type { ResolvedGuardConfig } from "./config.ts";
+import {
+  capabilityName,
+  recordCapabilityOutcome,
+  recordScreenVerdict,
+  resolveCapabilities,
+  type CapabilityId,
+  type CapabilityOutcome,
+  type CapabilityResolution,
+} from "./capabilities.ts";
+import {
+  addSessionGuidance,
+  classifierEnabled,
+  isClassifierModelUnavailable,
+  judgeToolCall,
+  nameToolCall,
+  projectToolCall,
+  resolveClassifierModel,
+  resolveJudgeModel,
+  type CompleteFn,
+  type GuardDecision,
+  type JudgeResult,
+  type NamerResult,
+} from "./classifier.ts";
+import { allowlistCapabilities, explainCommandAllowlist } from "./command-allowlist.ts";
+import { configSourceLabel, type ResolvedGuardConfig } from "./config.ts";
+import { screenToolCall, type ContentScreenVerdict } from "./content-screen.ts";
 import { addTraceStage, type DecisionTrace } from "./decision-trace.ts";
 import { describeAction, GUARDED_TOOLS, type GuardedToolSpec } from "./guarded-tools.ts";
-import { classifierExemptReadReason, decidePathAccess, normalizeUserPath, type AccessKind } from "./policy.ts";
-import { appendGuardTelemetry } from "./telemetry.ts";
+import { classifierExemptReadReason, decidePathAccess, denyReadMatch, normalizeUserPath, type AccessKind } from "./policy.ts";
+import { appendGuardTelemetry, type GuardJudgeTelemetry } from "./telemetry.ts";
 import {
   recordApprovalDenied,
   recordApprovalGranted,
   recordApprovalRequested,
+  recordCapabilityDecision,
   recordClassifierError,
-  recordClassifierResult,
   recordClassifierSkip,
   recordDecisionTrace,
   recordPolicyBlock,
+  syncCapabilityPreset,
   type RuntimeState,
 } from "./state.ts";
-import { formatError } from "./util.ts";
+import { formatError, textPrefix } from "./util.ts";
 
 export interface ToolCallBlock {
   block: true;
@@ -103,12 +126,34 @@ async function askPathApproval(params: {
   return { block: true, reason: `${params.kind} approval denied for ${params.path}.${commentSuffix} Do not work around the guard; ask the user.` };
 }
 
+/** An out-of-roots write: the label goes to the table, and an `ask` reuses the path dialog and its session memory. */
+interface PathApprovalContext {
+  kind: AccessKind;
+  path: string;
+  reason: string;
+}
+
 type PathStageResult =
-  | { outcome: "continue"; allowedReadPath?: string }
+  | { outcome: "continue"; allowedReadPath?: string; labels: CapabilityId[]; pathApproval?: PathApprovalContext }
   | { outcome: "done" }
   | { outcome: "block"; block: ToolCallBlock };
 
-/** Stage 1: deterministic path policy — hard blocks and out-of-roots approval prompts. */
+/**
+ * Stage 1: deterministic path policy. Two asymmetries are deliberate.
+ *
+ * denyWrite stays a hard block: it is the containment mirror of the sandbox,
+ * and loosening writes to secret or config paths would make the deny list
+ * mean something different for file tools than it does for bash.
+ *
+ * denyRead no longer blocks — reading a possible secret is a judgment call
+ * (a test-fixture key is fine, an exfil-adjacent read is not), so the match
+ * becomes a deterministic `credentials` label and the table decides. That
+ * label is attached in classifyRead, which runs whether or not enforcement is
+ * on, so the calibration does not change with filesystem.enabled.
+ *
+ * Out-of-roots writes become a `modify-system` label plus the path-approval
+ * context; at the default `ask` this is exactly today's approval UX.
+ */
 async function enforcePathPolicy(
   event: { toolName: string; input: unknown },
   ctx: ExtensionContext,
@@ -118,7 +163,7 @@ async function enforcePathPolicy(
   input: Record<string, unknown>,
   trace: DecisionTrace,
 ): Promise<PathStageResult> {
-  if (!config.filesystem.enabled || spec.access.length === 0) return { outcome: "continue" };
+  if (!config.filesystem.enabled || spec.access.length === 0) return { outcome: "continue", labels: [] };
   const target = spec.path?.(input);
   if (typeof target !== "string") return { outcome: "done" };
 
@@ -129,6 +174,8 @@ async function enforcePathPolicy(
   };
 
   let allowedReadPath: string | undefined;
+  const labels: CapabilityId[] = [];
+  let pathApproval: PathApprovalContext | undefined;
   for (const kind of spec.access) {
     const decision = decidePathAccess(config, ctx.cwd, target, kind);
     if (decision.allowed) {
@@ -136,7 +183,20 @@ async function enforcePathPolicy(
       if (kind === "read") allowedReadPath = decision.normalizedPath;
       continue;
     }
+    if (decision.code === "denied-by-pattern" && kind === "read") {
+      // Handled as a credentials label in classifyRead; do not block here.
+      addTraceStage(trace, "path-policy", "label", `${decision.reason} → credentials label instead of a block`);
+      continue;
+    }
     if (decision.code === "outside-roots") {
+      if (kind === "write") {
+        addTraceStage(trace, "path-policy", "label", `${decision.reason} → modify-system`);
+        labels.push("modify-system");
+        pathApproval = { kind, path: decision.normalizedPath, reason: decision.reason };
+        continue;
+      }
+      // Whitelist read mode is an explicit narrowing by the user; keep the
+      // existing per-path approval rather than routing it through read-system.
       addTraceStage(trace, "path-policy", "ask", `${decision.reason} → approval`);
       const approval = await askPathApproval({ ctx, state, kind, toolName: event.toolName, path: decision.normalizedPath, reason: decision.reason, trace });
       if (approval) return { outcome: "block", block: approval };
@@ -145,7 +205,7 @@ async function enforcePathPolicy(
     addTraceStage(trace, "path-policy", "block", decision.reason);
     return { outcome: "block", block: block(`${event.toolName} blocked for ${target}: ${decision.reason}`) };
   }
-  return { outcome: "continue", allowedReadPath };
+  return { outcome: "continue", allowedReadPath, labels, pathApproval };
 }
 
 /**
@@ -163,29 +223,76 @@ export function exemptReadCallReason(spec: GuardedToolSpec, input: Record<string
   return classifierExemptReadReason(config, cwd, target);
 }
 
+interface LabelStage {
+  labels: CapabilityId[];
+  /** True when the deterministic mappers could not label the action and the namer must. */
+  needsNaming: boolean;
+}
+
+/** Reads map deterministically: denyRead → credentials, exempt → read-project/read-system, otherwise the namer. */
+function classifyRead(
+  spec: GuardedToolSpec,
+  input: Record<string, unknown>,
+  cwd: string,
+  config: ResolvedGuardConfig,
+  allowedReadPath: string | undefined,
+  trace: DecisionTrace,
+): LabelStage {
+  const target = spec.path?.(input);
+  if (typeof target === "string") {
+    const denied = denyReadMatch(config, cwd, target);
+    if (denied) {
+      addTraceStage(trace, "read-exemption", "label", `matches denyRead '${denied}' → credentials`);
+      return { labels: ["credentials"], needsNaming: false };
+    }
+  }
+  const reason = exemptReadCallReason(spec, input, cwd, config, allowedReadPath);
+  if (reason === undefined) {
+    addTraceStage(trace, "read-exemption", "not exempt", "not in cwd, allowRead, or pi docs — naming required");
+    return { labels: [], needsNaming: true };
+  }
+  const label: CapabilityId = reason.startsWith("matches allowRead") ? "read-system" : "read-project";
+  addTraceStage(trace, "read-exemption", "exempt", `${reason} → ${label}`);
+  return { labels: [label], needsNaming: false };
+}
+
 /**
- * Stage 2 for bash: deterministic classifier exemption for allowlisted
- * commands. Unlike the read exemption this applies only while the sandbox is
- * actually enforcing (filesystem restrictions on, backend initialized, and it
- * is Seatbelt): "grep *" is only safe because Seatbelt bounds what grep can
- * read and write. Without that containment an allowlisted head could still
- * reach credentials (grep over ~/.ssh), so review stays on.
+ * Allowlisted commands carry their templates' capability tags. As before this
+ * only applies while the sandbox is actually enforcing: "grep *" is safe
+ * because Seatbelt bounds what grep can read and write, and without that an
+ * allowlisted head could still reach credentials.
  */
-function isExemptCommandCall(toolName: string, input: Record<string, unknown>, state: RuntimeState, config: ResolvedGuardConfig): boolean {
-  if (toolName !== "bash") return false;
-  if (!config.filesystem.enabled || !state.initialized || state.backend?.name !== "seatbelt") return false;
-  return typeof input.command === "string" && isCommandAllowlisted(input.command, config.commands.allow);
+function classifyCommand(input: Record<string, unknown>, state: RuntimeState, config: ResolvedGuardConfig, trace: DecisionTrace): LabelStage {
+  if (typeof input.command !== "string") return { labels: [], needsNaming: true };
+  if (!config.filesystem.enabled || !state.initialized || state.backend?.name !== "seatbelt") {
+    addTraceStage(trace, "command-allowlist", "skipped", "allowlist labels need an enforcing Seatbelt sandbox — naming required");
+    return { labels: [], needsNaming: true };
+  }
+  const explanation = explainCommandAllowlist(input.command, config.commands.allow);
+  if (!explanation.allowlisted) {
+    addTraceStage(trace, "command-allowlist", "not exempt", explanation.reason);
+    return { labels: [], needsNaming: true };
+  }
+  const labels = allowlistCapabilities(explanation);
+  addTraceStage(
+    trace,
+    "command-allowlist",
+    "exempt",
+    `${explanation.segments.map((segment) => `\`${segment.command}\` → rule \`${segment.rule}\` (${segment.capability})`).join("; ")}`,
+  );
+  return { labels, needsNaming: false };
 }
 
 /**
  * Session read-only mode (/guard readonly): write and edit are blocked
- * deterministically; bash must be classifier-reviewed (under
- * READONLY_CLASSIFIER_RULES) and is blocked outright when the classifier is
- * disabled — the sandbox still permits writes inside the configured roots, so
- * letting bash run unreviewed would silently break the read-only promise.
- * Exception: deterministically allowlisted commands (grep/ls/git status …)
- * need no review — they are read-only by construction and sandbox-bounded —
- * so read-only mode stays usable even without a classifier.
+ * deterministically; bash must be reviewed and is blocked outright when the
+ * classifier is disabled — the sandbox still permits writes inside the
+ * configured roots, so letting bash run unreviewed would silently break the
+ * read-only promise. Exception: deterministically allowlisted commands
+ * (grep/ls/git status …) need no review — they are read-only by construction
+ * and sandbox-bounded — so read-only mode stays usable without a classifier.
+ * On top of that the read-only disposition preset denies the writing classes,
+ * which is what constrains a named bash command.
  */
 function enforceReadOnlyMode(toolName: string, input: Record<string, unknown>, state: RuntimeState, config: ResolvedGuardConfig, spec: GuardedToolSpec, trace: DecisionTrace): ToolCallBlock | undefined {
   const block = (reason: string): ToolCallBlock => {
@@ -195,10 +302,10 @@ function enforceReadOnlyMode(toolName: string, input: Record<string, unknown>, s
     return { block: true, reason: `${reason}. Do not work around the guard; ask the user to toggle read-only mode off (/guard readonly) if changes are wanted.` };
   };
   if (spec.access.includes("write")) return block(`${toolName} blocked: guard is in read-only mode`);
-  if (toolName === "bash" && !classifierEnabled(config, state.classifier) && !isExemptCommandCall(toolName, input, state, config)) {
+  if (toolName === "bash" && !classifierEnabled(config, state.classifier) && classifyCommand(input, state, config, trace).needsNaming) {
     return block("bash blocked: guard is in read-only mode and the classifier is off, so commands cannot be reviewed for writes");
   }
-  addTraceStage(trace, "readonly", "pass", toolName === "bash" ? "bash permitted pending review under read-only rules" : `${toolName} permitted in read-only mode`);
+  addTraceStage(trace, "readonly", "pass", toolName === "bash" ? "bash permitted pending capability review" : `${toolName} permitted in read-only mode`);
   return undefined;
 }
 
@@ -206,7 +313,7 @@ export async function interceptToolCall(
   event: { toolName: string; input: unknown },
   ctx: ExtensionContext,
   state: RuntimeState,
-  /** Test seam: replaces the classifier's model-call function (production always uses the default). */
+  /** Test seam: replaces the model-call function used by the namer and judge (production always uses the default). */
   completeFn?: CompleteFn,
 ): Promise<ToolCallBlock | undefined> {
   const config = state.config;
@@ -216,6 +323,7 @@ export async function interceptToolCall(
 
   const spec = GUARDED_TOOLS[event.toolName];
   if (!spec) return;
+  syncCapabilityPreset(state);
 
   const trace: DecisionTrace = { at: Date.now(), toolName: event.toolName, action: describeAction(event.toolName, spec.project(input)), final: "allowed", stages: [] };
   try {
@@ -242,140 +350,335 @@ async function runInterceptStages(
     if (denied) return denied;
   }
 
-  const path = await enforcePathPolicy(event, ctx, state, config, spec, input, trace);
-  if (path.outcome === "done") return;
-  if (path.outcome === "block") return path.block;
+  const pathStage = await enforcePathPolicy(event, ctx, state, config, spec, input, trace);
+  if (pathStage.outcome === "done") return;
+  if (pathStage.outcome === "block") return pathStage.block;
 
-  if (!classifierEnabled(config, state.classifier)) return;
-  const readExemption = exemptReadCallReason(spec, input, ctx.cwd, config, path.allowedReadPath);
+  const deterministic: CapabilityId[] = [...pathStage.labels];
+  let needsNaming = false;
+  let screen: ContentScreenVerdict | undefined;
+
   if (spec.access.includes("read") && !spec.access.includes("write")) {
-    addTraceStage(trace, "read-exemption", readExemption ? "exempt" : "not exempt", readExemption ?? "not in cwd, allowRead, or pi docs — classifier review required");
+    const read = classifyRead(spec, input, ctx.cwd, config, pathStage.allowedReadPath, trace);
+    deterministic.push(...read.labels);
+    needsNaming = read.needsNaming;
+  } else if (event.toolName === "bash") {
+    const command = classifyCommand(input, state, config, trace);
+    deterministic.push(...command.labels);
+    needsNaming = command.needsNaming;
+  } else if (spec.access.includes("write")) {
+    screen = screenToolCall(event.toolName, input, ctx.cwd);
+    addTraceStage(trace, "screen", screen.tripped ? "tripped" : "clean", screen.summary);
+    if (screen.tripped) needsNaming = true;
+    else if (screen.label) deterministic.push(screen.label);
   }
-  if (readExemption !== undefined) {
-    recordClassifierSkip(state);
+
+  const classifierOn = classifierEnabled(config, state.classifier);
+  if (needsNaming && !classifierOn && deterministic.length === 0) {
+    // Classifier off: capability mode reduces to the deterministic mappers and
+    // screens, exactly like today's classifier-off behavior.
+    addTraceStage(trace, "namer", "skipped", "classifier disabled and no deterministic label — call passes through");
     return;
   }
-  if (event.toolName === "bash" && typeof input.command === "string") {
-    if (!config.filesystem.enabled || !state.initialized || state.backend?.name !== "seatbelt") {
-      addTraceStage(trace, "command-allowlist", "skipped", "allowlist exemption needs an enforcing Seatbelt sandbox — classifier review required");
-    } else {
-      const explanation = explainCommandAllowlist(input.command, config.commands.allow);
-      if (explanation.allowlisted) {
-        addTraceStage(trace, "command-allowlist", "exempt", explanation.segments.map((segment) => `\`${segment.command}\` → rule \`${segment.rule}\``).join("; "));
-        recordClassifierSkip(state);
-        return;
-      }
-      addTraceStage(trace, "command-allowlist", "not exempt", explanation.reason);
+
+  let named: NamerResult | undefined;
+  let namerLatencyMs: number | undefined;
+  let namerModel: string | undefined;
+  if (needsNaming && classifierOn) {
+    const startedAt = performance.now();
+    namerModel = describeModel(() => resolveClassifierModel(ctx, config, state.classifier));
+    try {
+      named = await nameToolCall({ ctx, config, state: state.classifier, toolName: event.toolName, input: event.input, completeFn });
+      namerLatencyMs = Math.round(performance.now() - startedAt);
+      state.classifier.lastError = undefined;
+      addTraceStage(
+        trace,
+        "namer",
+        named.labels.join(", "),
+        `named ${named.labels.join(", ")}${named.authorizationEvidence ? ` · evidence "${textPrefix(named.authorizationEvidence, 80)}"` : ""} (model ${namerModel ?? "unknown"}, ${namerLatencyMs}ms)`,
+      );
+    } catch (error) {
+      return handleNamerFailure(error, event, ctx, state, config, trace, namerModel, Math.round(performance.now() - startedAt));
     }
+  } else if (needsNaming && !classifierOn) {
+    addTraceStage(trace, "namer", "skipped", "classifier disabled — deterministic labels only");
   }
-  return runClassifierReview(event, ctx, state, config, trace, completeFn);
+
+  const labels = [...new Set([...deterministic, ...(named?.labels ?? [])])];
+  if (labels.length === 0) return;
+  if (screen) recordScreenVerdict(state.capabilities, labels, screen.tripped);
+
+  return enforceCapabilities({
+    event,
+    ctx,
+    state,
+    config,
+    trace,
+    completeFn,
+    labels,
+    named,
+    namerLatencyMs,
+    namerModel,
+    screen,
+    pathApproval: pathStage.pathApproval,
+    reviewed: named !== undefined,
+  });
 }
 
-/** Stage 3: LLM review — two-stage classify, ask-with-comment flow, fail-open/closed error handling. */
-async function runClassifierReview(
-  event: { toolName: string; input: unknown },
+function describeModel(resolve: () => { provider: string; id: string } | undefined): string | undefined {
+  try {
+    const model = resolve();
+    return model ? `${model.provider}/${model.id}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function handleNamerFailure(
+  error: unknown,
+  event: { toolName: string },
   ctx: ExtensionContext,
   state: RuntimeState,
   config: ResolvedGuardConfig,
   trace: DecisionTrace,
-  completeFn: CompleteFn | undefined,
-): Promise<ToolCallBlock | undefined> {
-  const startedAt = performance.now();
-  let telemetryModel: string | undefined;
-  try {
-    const model = resolveClassifierModel(ctx, config, state.classifier);
-    telemetryModel = model ? `${model.provider}/${model.id}` : undefined;
-  } catch {
-    telemetryModel = undefined;
+  model: string | undefined,
+  latencyMs: number,
+): ToolCallBlock | undefined {
+  const reason = formatError(error);
+  state.classifier.lastError = reason;
+  recordClassifierError(state, event.toolName, reason);
+  addTraceStage(trace, "namer", "error", `naming failed: ${reason}`);
+  appendGuardTelemetry(state, { kind: "error", tool: event.toolName, reason, latencyMs, model });
+  if (isClassifierModelUnavailable(error)) {
+    ctx.ui.notify(`Guard classifier unavailable: ${reason}. Stopping this turn for user intervention.`, "error");
+    ctx.abort();
+    return { block: true, reason: `Guard classifier unavailable: ${reason}. This turn was stopped for user intervention.` };
   }
+  // Read-only mode never fails open for bash: an unreviewed command could
+  // still perform sandbox-allowed writes, silently breaking the read-only
+  // promise, so a naming failure must block even with failClosed disabled.
+  if (!config.classifier.failClosed && !(state.readOnly && event.toolName === "bash")) {
+    ctx.ui.notify(`Guard classifier failed open: ${reason}`, "warning");
+    return;
+  }
+  return stopTurnForClassifierFailure(ctx, reason);
+}
+
+function describeResolution(resolution: CapabilityResolution): string {
+  const rows = resolution.effective.map((entry) => {
+    const scope = entry.scope === "config" ? configSourceLabel(entry.source ?? "config") : entry.scope === "preset" ? `${entry.source} preset` : entry.scope;
+    return `${entry.id}→${entry.disposition} (${scope})`;
+  });
+  return `${rows.join(", ")} ⇒ ${resolution.disposition}`;
+}
+
+/** "off-machine-effects, which you have set to ask (default)" — the attribution line every block and prompt carries. */
+function attribution(resolution: CapabilityResolution): string {
+  const decided = resolution.decidedBy;
+  const scope =
+    decided.scope === "config" ? configSourceLabel(decided.source ?? "config")
+    : decided.scope === "preset" ? `${decided.source} preset`
+    : decided.scope === "session" ? "this session"
+    : "default";
+  return `${decided.id} (${capabilityName(decided.id)}), which is set to ${decided.disposition} (${scope})`;
+}
+
+interface EnforceParams {
+  event: { toolName: string; input: unknown };
+  ctx: ExtensionContext;
+  state: RuntimeState;
+  config: ResolvedGuardConfig;
+  trace: DecisionTrace;
+  completeFn: CompleteFn | undefined;
+  labels: CapabilityId[];
+  named: NamerResult | undefined;
+  namerLatencyMs: number | undefined;
+  namerModel: string | undefined;
+  screen: ContentScreenVerdict | undefined;
+  pathApproval: PathApprovalContext | undefined;
+  reviewed: boolean;
+}
+
+/** Stage 3: the disposition table decides, with the judge as the delegated reviewer for `judge` classes. */
+async function enforceCapabilities(params: EnforceParams): Promise<ToolCallBlock | undefined> {
+  const { ctx, state, config, trace, event } = params;
+  const resolution = resolveCapabilities(config, state.capabilities, params.labels);
+  addTraceStage(trace, "capabilities", resolution.disposition, describeResolution(resolution));
+
+  const projection = projectToolCall(event.toolName, event.input, ctx.cwd, config);
+  const subject = describeAction(event.toolName, projection.inputSummary);
+  let disposition = resolution.disposition;
+  let judge: JudgeResult | undefined;
+  let judgeTelemetry: GuardJudgeTelemetry | undefined;
+  let reason = `${subject} is ${attribution(resolution)}`;
+
+  if (disposition === "judge") {
+    const outcome = await runJudgeStage(params, resolution);
+    disposition = outcome.disposition;
+    judge = outcome.judge;
+    judgeTelemetry = outcome.telemetry;
+    if (outcome.judge) reason = outcome.judge.reason;
+    else reason = `${outcome.fallbackReason} — asking instead`;
+  }
+
+  const finish = (decision: GuardDecision, outcome: CapabilityOutcome, block?: ToolCallBlock, userApproved?: boolean, userComment?: string): ToolCallBlock | undefined => {
+    // "Exempt" means the action resolved to allow with no model consulted; a
+    // deterministic label that escalated or prompted is not an exemption.
+    if (!params.reviewed && resolution.disposition === "allow") recordClassifierSkip(state);
+    recordCapabilityDecision(state, event.toolName, {
+      labels: resolution.labels,
+      decision,
+      disposition: resolution.disposition,
+      reason,
+      reviewed: params.reviewed || judge !== undefined,
+      tokenUsage: totalUsage(params.named, judge),
+    });
+    recordCapabilityOutcome(state.capabilities, resolution.labels, outcome);
+    state.classifier.lastDecision = { toolName: event.toolName, at: Date.now(), labels: resolution.labels, decision, reason };
+    appendGuardTelemetry(state, {
+      kind: "review",
+      tool: event.toolName,
+      decision,
+      labels: resolution.labels,
+      resolvedDisposition: resolution.disposition,
+      decidedBy: resolution.decidedBy.id,
+      screenTripped: params.screen?.tripped,
+      authorizationEvidence: params.named?.authorizationEvidence,
+      attempts: params.named?.attempts,
+      latencyMs: params.namerLatencyMs ?? 0,
+      model: params.namerModel,
+      judge: judgeTelemetry,
+      reason,
+      userApproved,
+      userComment,
+      usage: totalUsage(params.named, judge),
+      projection,
+    });
+    return block;
+  };
+
+  if (disposition === "allow") return finish("allow", judge ? "judge-allow" : "allow");
+
+  if (disposition === "deny") {
+    const denyReason = judge ? `Guard judge denied: ${reason}` : `Guard denied: ${subject} is ${attribution(resolution)}`;
+    return finish("deny", judge ? "judge-deny" : "deny", {
+      block: true,
+      reason: `${denyReason}. Do not work around this denial; choose a safer path or ask the user.`,
+    });
+  }
+
+  // ask — the path-approval dialog when the label came from an out-of-roots
+  // write, so the session path memory keeps working; otherwise a capability ask.
+  if (params.pathApproval && !judge) {
+    const approval = await askPathApproval({
+      ctx,
+      state,
+      kind: params.pathApproval.kind,
+      toolName: event.toolName,
+      path: params.pathApproval.path,
+      reason: params.pathApproval.reason,
+      trace,
+    });
+    return finish(approval ? "deny" : "allow", approval ? "ask-denied" : "ask-approved", approval);
+  }
+
+  if (!ctx.hasUI) {
+    addTraceStage(trace, "ask", "unanswerable", "approval needed but the session is headless");
+    return finish("deny", "ask-denied", {
+      block: true,
+      reason: `Guard needs approval, but this headless session has no user to ask: ${reason}. Rerun interactively, or set ${resolution.decidedBy.id} to allow in guard config.`,
+    });
+  }
+
+  const evidence = params.named?.authorizationEvidence;
+  const evidenceLine = evidence ? `\n\nReviewer notes: user said "${textPrefix(evidence, 200)}"` : "";
+  const capabilityLine = `Capabilities: ${resolution.labels.join(", ")}`;
+  const answer = await askGuardApproval(
+    ctx,
+    state,
+    judge ? "Guard judge asks for approval" : "Guard asks for approval",
+    `${subject}\n\n${capabilityLine}\n\n${reason}${evidenceLine}\n\nAllow?`,
+  );
+  if (answer.comment) {
+    const guidanceSubject = subject.startsWith(`${event.toolName}: `) ? subject.slice(event.toolName.length + 2) : subject;
+    addSessionGuidance(state.classifier, answer.approved ? "allowed" : "denied", event.toolName, guidanceSubject, answer.comment);
+  }
+  addTraceStage(trace, "ask", answer.approved ? "approved" : "denied", `user ${answer.approved ? "approved" : "denied"}${answer.comment ? " with a comment" : ""}`);
+  if (answer.approved) return finish("allow", judge ? "judge-ask" : "ask-approved", undefined, true, answer.comment);
+  const commentSuffix = answer.comment ? ` User comment: ${answer.comment}` : "";
+  return finish(
+    "deny",
+    judge ? "judge-ask" : "ask-denied",
+    { block: true, reason: `Guard asked and the user denied: ${reason}.${commentSuffix} Do not work around this denial; choose a safer path or ask the user.` },
+    false,
+    answer.comment,
+  );
+}
+
+function totalUsage(named: NamerResult | undefined, judge: JudgeResult | undefined) {
+  if (!named && !judge) return undefined;
+  return {
+    input: (named?.tokenUsage?.input ?? 0) + (judge?.tokenUsage?.input ?? 0),
+    output: (named?.tokenUsage?.output ?? 0) + (judge?.tokenUsage?.output ?? 0),
+    cacheRead: (named?.tokenUsage?.cacheRead ?? 0) + (judge?.tokenUsage?.cacheRead ?? 0),
+    cacheWrite: (named?.tokenUsage?.cacheWrite ?? 0) + (judge?.tokenUsage?.cacheWrite ?? 0),
+  };
+}
+
+/** The last few guard decisions, as the judge sees them: a retry after a denial is signal. */
+function recentDecisionsForJudge(state: RuntimeState): string[] {
+  return state.recent
+    .slice(0, 8)
+    .map((event) => `${event.decision} ${event.toolName}${event.capabilities?.length ? ` (${event.capabilities.join(", ")})` : ""}: ${textPrefix(event.reason, 160)}`);
+}
+
+/**
+ * A judge failure degrades to `ask` rather than to allow or to a stopped turn:
+ * the table already established that this class needs a human or a careful
+ * reviewer, and the judge's own decision rules resolve ambiguity to ask.
+ */
+async function runJudgeStage(
+  params: EnforceParams,
+  resolution: CapabilityResolution,
+): Promise<{ disposition: GuardDecision; judge?: JudgeResult; telemetry?: GuardJudgeTelemetry; fallbackReason: string }> {
+  const { ctx, state, config, trace, event } = params;
+  if (!classifierEnabled(config, state.classifier)) {
+    addTraceStage(trace, "judge", "skipped", "classifier is off, so the judge cannot run");
+    return { disposition: "ask", fallbackReason: `${resolution.decidedBy.id} is set to judge but the classifier is off` };
+  }
+  const model = describeModel(() => resolveJudgeModel(ctx, config));
+  const startedAt = performance.now();
   try {
-    const result = await reviewToolCall({
+    const judge = await judgeToolCall({
       ctx,
       config,
       state: state.classifier,
       toolName: event.toolName,
       input: event.input,
-      rulesOverride: state.readOnly ? READONLY_CLASSIFIER_RULES : undefined,
-      completeFn,
+      labels: resolution.labels,
+      authorizationEvidence: params.named?.authorizationEvidence,
+      recentGuardDecisions: recentDecisionsForJudge(state),
+      completeFn: params.completeFn,
     });
     const latencyMs = Math.round(performance.now() - startedAt);
-    state.classifier.lastDecision = { ...result, toolName: event.toolName, at: Date.now() };
-    state.classifier.lastError = undefined;
-    recordClassifierResult(state, event.toolName, result);
-    addTraceStage(
-      trace,
-      "classifier",
-      result.decision,
-      `${result.decision} · risk ${result.risk} · ${result.reason} (model ${telemetryModel ?? "unknown"}${result.fastPath ? ", fast path" : ""}, ${latencyMs}ms)`,
-    );
-    const telemetry = {
-      kind: "review" as const,
-      tool: event.toolName,
-      decision: result.decision,
-      risk: result.risk,
-      authorization: result.authorization,
-      fastPath: result.fastPath,
-      attempts: result.attempts,
-      latencyMs,
-      model: telemetryModel,
-      reason: result.reason,
-      usage: result.tokenUsage
-        ? { input: result.tokenUsage.input, output: result.tokenUsage.output, cacheRead: result.tokenUsage.cacheRead, cacheWrite: result.tokenUsage.cacheWrite }
-        : undefined,
-      projection: projectToolCall(event.toolName, event.input, ctx.cwd, config),
+    addTraceStage(trace, "judge", judge.decision, `${judge.decision} · ${judge.reason} (model ${model ?? "unknown"}, ${latencyMs}ms)`);
+    return {
+      disposition: judge.decision,
+      judge,
+      telemetry: {
+        model,
+        verdict: judge.decision,
+        latencyMs,
+        attempts: judge.attempts,
+        usage: judge.tokenUsage ? { input: judge.tokenUsage.input, output: judge.tokenUsage.output, cacheRead: judge.tokenUsage.cacheRead, cacheWrite: judge.tokenUsage.cacheWrite } : undefined,
+      },
+      fallbackReason: "",
     };
-    if (result.decision === "allow") {
-      appendGuardTelemetry(state, telemetry);
-      return;
-    }
-    if (result.decision === "ask" && ctx.hasUI) {
-      // Action first: the classifier's reason alone can be too vague to approve on.
-      const subject = describeAction(event.toolName, telemetry.projection.inputSummary);
-      const answer = await askGuardApproval(ctx, state, "Guard reviewer asks for approval", `${subject}\n\n${result.reason}\n\nAllow?`);
-      if (answer.comment) {
-        // addSessionGuidance already prefixes the tool name; strip it from the shared subject.
-        const guidanceSubject = subject.startsWith(`${event.toolName}: `) ? subject.slice(event.toolName.length + 2) : subject;
-        addSessionGuidance(state.classifier, answer.approved ? "allowed" : "denied", event.toolName, guidanceSubject, answer.comment);
-      }
-      addTraceStage(trace, "ask", answer.approved ? "approved" : "denied", `user ${answer.approved ? "approved" : "denied"}${answer.comment ? " with a comment" : ""}`);
-      appendGuardTelemetry(state, { ...telemetry, userApproved: answer.approved, userComment: answer.comment });
-      if (answer.approved) return;
-      const commentSuffix = answer.comment ? ` User comment: ${answer.comment}` : "";
-      return { block: true, reason: `Guard reviewer asked and the user denied: ${result.reason}.${commentSuffix} Do not work around this denial; choose a safer path or ask the user.` };
-    }
-    appendGuardTelemetry(state, telemetry);
-    if (result.decision === "ask") {
-      addTraceStage(trace, "ask", "unanswerable", "reviewer asked for approval but the session is headless");
-      return {
-        block: true,
-        reason: `Guard reviewer asks for approval, but this headless session has no user to ask: ${result.reason}. Rerun interactively or adjust guard config to authorize this action.`,
-      };
-    }
-    return { block: true, reason: `Guard reviewer ${result.decision}: ${result.reason}. Do not work around this denial; choose a safer path or ask the user.` };
   } catch (error) {
     const reason = formatError(error);
     state.classifier.lastError = reason;
-    recordClassifierError(state, event.toolName, reason);
-    addTraceStage(trace, "classifier", "error", `review failed: ${reason}`);
-    appendGuardTelemetry(state, {
-      kind: "error",
-      tool: event.toolName,
-      reason,
-      latencyMs: Math.round(performance.now() - startedAt),
-      model: telemetryModel,
-    });
-    if (isClassifierModelUnavailable(error)) {
-      ctx.ui.notify(`Guard classifier unavailable: ${reason}. Stopping this turn for user intervention.`, "error");
-      ctx.abort();
-      return { block: true, reason: `Guard classifier unavailable: ${reason}. This turn was stopped for user intervention.` };
-    }
-    // Read-only mode never fails open for bash: an unreviewed command could
-    // still perform sandbox-allowed writes, silently breaking the read-only
-    // promise, so a review failure must block even with failClosed disabled.
-    if (!config.classifier.failClosed && !(state.readOnly && event.toolName === "bash")) {
-      ctx.ui.notify(`Guard classifier failed open: ${reason}`, "warning");
-      return;
-    }
-    return stopTurnForClassifierFailure(ctx, reason);
+    addTraceStage(trace, "judge", "error", `judge failed: ${reason} — falling back to ask`);
+    appendGuardTelemetry(state, { kind: "error", tool: event.toolName, reason: `judge: ${reason}`, latencyMs: Math.round(performance.now() - startedAt), model });
+    return { disposition: "ask", fallbackReason: `the escalation reviewer could not run (${reason})` };
   }
 }

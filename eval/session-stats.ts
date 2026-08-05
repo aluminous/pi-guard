@@ -97,9 +97,12 @@ const blocks = records.filter((r) => r.record.kind === "block");
 const approvals = records.filter((r) => r.record.kind === "approval");
 const errors = records.filter((r) => r.record.kind === "error");
 
-const decisions = { allow: 0, deny: 0, ask: 0 };
+const decisions: Record<string, number> = { allow: 0, deny: 0, ask: 0 };
 const models = new Map<string, number>();
-let fastPath = 0;
+const labelCounts = new Map<string, number>();
+let judged = 0;
+let screenTripped = 0;
+let screenApplied = 0;
 let retried = 0;
 let inputTokens = 0;
 let outputTokens = 0;
@@ -109,7 +112,12 @@ const latencies: number[] = [];
 for (const { record } of reviews) {
   if (record.kind !== "review") continue;
   decisions[record.decision] = (decisions[record.decision] ?? 0) + 1;
-  if (record.fastPath) fastPath++;
+  if (record.judge) judged++;
+  if (record.screenTripped !== undefined) {
+    screenApplied++;
+    if (record.screenTripped) screenTripped++;
+  }
+  for (const label of record.labels ?? []) labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
   if ((record.attempts ?? 1) > 1) retried++;
   if (record.model) models.set(record.model, (models.get(record.model) ?? 0) + 1);
   inputTokens += record.usage?.input ?? 0;
@@ -117,6 +125,7 @@ for (const { record } of reviews) {
   cacheReadTokens += record.usage?.cacheRead ?? 0;
   cacheWriteTokens += record.usage?.cacheWrite ?? 0;
   if (typeof record.latencyMs === "number") latencies.push(record.latencyMs);
+  if (record.judge?.latencyMs) latencies.push(record.judge.latencyMs);
 }
 const totalPromptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
 const sortedLatencies = [...latencies].sort((a, b) => a - b);
@@ -131,7 +140,9 @@ const summary = {
   reviews: {
     total: reviews.length,
     decisions,
-    fastPathRate: reviews.length ? fastPath / reviews.length : 0,
+    capabilities: Object.fromEntries([...labelCounts.entries()].sort((a, b) => b[1] - a[1])),
+    judgeRate: reviews.length ? judged / reviews.length : 0,
+    screenTripRate: screenApplied ? screenTripped / screenApplied : 0,
     retryRate: reviews.length ? retried / reviews.length : 0,
     asksRejectedByUser: asksRejected.length,
     latencyMs: {
@@ -183,7 +194,9 @@ console.log(`Sessions scanned: ${summary.sessionsScanned} (${summary.sessionsWit
 console.log(`Records: ${summary.records}`);
 console.log("");
 console.log(`Reviews: ${summary.reviews.total}  (allow ${decisions.allow}, deny ${decisions.deny}, ask ${decisions.ask})`);
-console.log(`  Fast-path rate: ${pct(summary.reviews.fastPathRate)}  Retry rate: ${pct(summary.reviews.retryRate)}`);
+console.log(`  Judge rate: ${pct(summary.reviews.judgeRate)}  Screen trip rate: ${pct(summary.reviews.screenTripRate)}  Retry rate: ${pct(summary.reviews.retryRate)}`);
+const topLabels = Object.entries(summary.reviews.capabilities).slice(0, 6);
+if (topLabels.length > 0) console.log(`  Capabilities: ${topLabels.map(([label, count]) => `${label} ${count}`).join(", ")}`);
 console.log(`  Latency ms: p50 ${summary.reviews.latencyMs.p50}  p95 ${summary.reviews.latencyMs.p95}  max ${summary.reviews.latencyMs.max}`);
 console.log(
   `  Tokens: ${totalPromptTokens} prompt (${summary.reviews.tokens.cacheRead} cached reads, ${pct(summary.reviews.tokens.cacheHitRate)} hit rate) / ${summary.reviews.tokens.output} out`,

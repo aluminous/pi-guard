@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { capabilityStats } from "../src/capabilities.ts";
 import {
   createRuntimeState,
   recordApprovalDenied,
   recordApprovalGranted,
   recordApprovalRequested,
+  recordCapabilityDecision,
   recordClassifierError,
-  recordClassifierResult,
   recordPolicyBlock,
   resetSessionState,
   resetTurnStats,
@@ -39,11 +40,11 @@ describe("decision recording", () => {
     assert.equal(state.stats.allowed, 0);
   });
 
-  it("derives classifier counters from the decision", () => {
+  it("derives review counters from capability decisions", () => {
     const state = createRuntimeState();
-    recordClassifierResult(state, "bash", { decision: "allow", risk: "low", authorization: "high", reason: "ok", tokenUsage: { input: 100, output: 20 } });
-    recordClassifierResult(state, "bash", { decision: "deny", risk: "critical", authorization: "low", reason: "no", tokenUsage: { input: 50, output: 10 } });
-    recordClassifierResult(state, "bash", { decision: "ask", risk: "medium", authorization: "unknown", reason: "confirm" });
+    recordCapabilityDecision(state, "bash", { labels: ["run-dev-tools"], decision: "allow", disposition: "allow", reason: "ok", reviewed: true, tokenUsage: { input: 100, output: 20 } });
+    recordCapabilityDecision(state, "bash", { labels: ["credentials"], decision: "deny", disposition: "judge", reason: "no", reviewed: true, tokenUsage: { input: 50, output: 10 } });
+    recordCapabilityDecision(state, "bash", { labels: ["off-machine-effects"], decision: "ask", disposition: "ask", reason: "confirm", reviewed: true });
     assert.equal(state.stats.reviewed, 3);
     assert.equal(state.stats.classifierHits, 3);
     assert.equal(state.stats.turnClassifierHits, 3);
@@ -54,6 +55,18 @@ describe("decision recording", () => {
     assert.equal(state.stats.asked, 1);
     assert.equal(state.stats.classifierInputTokens, 150);
     assert.equal(state.stats.classifierOutputTokens, 30);
+    assert.equal(capabilityStats(state.capabilities, "credentials").hits, 1);
+    assert.equal(state.recent[0]?.capabilities?.[0], "off-machine-effects");
+  });
+
+  it("counts a deterministic table hit as a rule hit, not a review", () => {
+    const state = createRuntimeState();
+    recordCapabilityDecision(state, "read", { labels: ["read-project"], decision: "allow", disposition: "allow", reason: "in cwd", reviewed: false });
+    assert.equal(state.stats.ruleHits, 1);
+    assert.equal(state.stats.turnRuleHits, 1);
+    assert.equal(state.stats.classifierHits, 0);
+    assert.equal(state.stats.reviewed, 0);
+    assert.equal(state.stats.allowed, 1);
   });
 
   it("records classifier errors", () => {

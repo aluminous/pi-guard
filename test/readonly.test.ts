@@ -1,24 +1,21 @@
 // Read-only mode tests: deterministic write/edit blocks, bash fail-closed
-// behavior when the classifier cannot review, the restrictive ruleset
-// threaded into classifier review, and the /guard readonly toggle.
+// behavior when the classifier cannot review, the read-only disposition
+// preset, and the /guard readonly toggle.
 import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { after, describe, it } from "node:test";
-import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { GuardBackend } from "../src/backends/types.ts";
-import { READONLY_CLASSIFIER_RULES } from "../src/classifier-rules.ts";
-import { reviewToolCall, type CompleteFn } from "../src/classifier.ts";
+import { getEffectiveDisposition, READ_ONLY_PRESET_DENY } from "../src/capabilities.ts";
+import type { CompleteFn } from "../src/classifier.ts";
 import { createGuardCommand } from "../src/commands/guard.ts";
 import { interceptToolCall } from "../src/interceptor.ts";
-import { createRuntimeState } from "../src/state.ts";
+import { createRuntimeState, syncCapabilityPreset } from "../src/state.ts";
 import { makeFixtureDir, testConfig } from "./helpers.ts";
 
 const fixture = makeFixtureDir();
 after(() => fixture.cleanup());
-
-const DEFAULT_DENY_RULE = "deny every action not explicitly described by an allow rule";
 
 /** Minimal fake ExtensionContext: deterministic interceptor paths plus optional classifier model/auth wiring. */
 function fakeCtx(cwd: string, options?: { model?: { provider: string; id: string }; authError?: Error }) {
@@ -59,11 +56,11 @@ function readOnlyState(config: ReturnType<typeof testConfig>) {
   return state;
 }
 
-describe("read-only mode interception", () => {
-  mkdirSync(path.join(fixture.dir, "project", "src"), { recursive: true });
-  writeFileSync(path.join(fixture.dir, "project", "src", "app.ts"), "ok");
-  const cwd = path.join(fixture.dir, "project");
+mkdirSync(path.join(fixture.dir, "project", "src"), { recursive: true });
+writeFileSync(path.join(fixture.dir, "project", "src", "app.ts"), "ok");
+const cwd = path.join(fixture.dir, "project");
 
+describe("read-only mode interception", () => {
   it("blocks write deterministically", async () => {
     const state = readOnlyState(testConfig());
     const result = await interceptToolCall({ toolName: "write", input: { path: "src/app.ts", content: "x" } }, fakeCtx(cwd), state);
@@ -154,14 +151,9 @@ describe("read-only mode interception", () => {
   });
 });
 
-describe("read-only classifier rules threading", () => {
-  const model = { provider: "test", id: "fake-model" } as Model<Api>;
-
-  function makeCompleteFn(script: string[]) {
-    const calls: Array<{ text: string }> = [];
-    const complete: CompleteFn = (async (_model: unknown, context: { messages: Array<{ content: Array<{ type: string; text?: string }> }> }) => {
-      const text = context.messages[0]?.content.find((part) => part.type === "text")?.text ?? "";
-      calls.push({ text });
+describe("read-only disposition preset", () => {
+  function fakeComplete(script: string[]): CompleteFn {
+    return (async () => {
       const step = script.shift();
       if (step === undefined) throw new Error("fake complete script exhausted");
       return {
@@ -172,45 +164,57 @@ describe("read-only classifier rules threading", () => {
         timestamp: Date.now(),
       } as unknown as Awaited<ReturnType<CompleteFn>>;
     }) as CompleteFn;
-    return { complete, calls };
   }
 
-  function reviewConfig() {
-    return testConfig((c) => {
+  it("denies the writing classes and leaves reads alone", () => {
+    const state = createRuntimeState();
+    const config = testConfig();
+    state.readOnly = true;
+    syncCapabilityPreset(state);
+    for (const id of READ_ONLY_PRESET_DENY) {
+      assert.equal(getEffectiveDisposition(config, state.capabilities, id).disposition, "deny", `${id} must be denied in read-only mode`);
+    }
+    assert.equal(getEffectiveDisposition(config, state.capabilities, "read-project").disposition, "allow");
+    assert.equal(getEffectiveDisposition(config, state.capabilities, "run-dev-tools").disposition, "allow");
+    state.readOnly = false;
+    syncCapabilityPreset(state);
+    assert.equal(getEffectiveDisposition(config, state.capabilities, "modify-project").disposition, "allow");
+  });
+
+  it("blocks a named bash command that would write, without asking the user", async () => {
+    const config = testConfig((c) => {
       c.classifier.enabled = true;
       c.classifier.model = "test/fake-model";
     });
-  }
-
-  it("replaces the config rules with the read-only ruleset when overridden", async () => {
-    const { complete, calls } = makeCompleteFn(['{"triviallySafe":true,"reason":"read-only"}']);
-    const result = await reviewToolCall({
-      ctx: fakeCtx("/repo", { model }),
-      config: reviewConfig(),
-      state: {},
-      toolName: "bash",
-      input: { command: "git status" },
-      rulesOverride: READONLY_CLASSIFIER_RULES,
-      completeFn: complete,
-    });
-    assert.equal(result.decision, "allow");
-    assert.equal(calls.length, 1);
-    assert.ok(calls[0]!.text.includes(DEFAULT_DENY_RULE), "review payload must carry the read-only default-deny rule");
-    assert.ok(!calls[0]!.text.includes("Toolchain Bootstrap"), "config rules must be replaced, not merged");
+    const state = readOnlyState(config);
+    state.backend = { name: "seatbelt" } as GuardBackend;
+    const ctx = fakeCtx(cwd, { model: { provider: "test", id: "fake-model" } });
+    const result = await interceptToolCall(
+      { toolName: "bash", input: { command: "printf hi > out.txt" } },
+      ctx,
+      state,
+      fakeComplete(['{"labels":["modify-project"]}']),
+    );
+    assert.equal(result?.block, true);
+    assert.match(result.reason, /read-only preset/);
+    assert.match(result.reason, /modify-project/);
   });
 
-  it("keeps the config rules without an override", async () => {
-    const { complete, calls } = makeCompleteFn(['{"triviallySafe":true,"reason":"routine"}']);
-    await reviewToolCall({
-      ctx: fakeCtx("/repo", { model }),
-      config: reviewConfig(),
-      state: {},
-      toolName: "bash",
-      input: { command: "git status" },
-      completeFn: complete,
+  it("still allows a named read-only command under the preset", async () => {
+    const config = testConfig((c) => {
+      c.classifier.enabled = true;
+      c.classifier.model = "test/fake-model";
     });
-    assert.ok(!calls[0]!.text.includes(DEFAULT_DENY_RULE));
-    assert.ok(calls[0]!.text.includes("Toolchain Bootstrap"));
+    const state = readOnlyState(config);
+    state.backend = { name: "seatbelt" } as GuardBackend;
+    const ctx = fakeCtx(cwd, { model: { provider: "test", id: "fake-model" } });
+    const result = await interceptToolCall(
+      { toolName: "bash", input: { command: "rg --files-with-matches TODO" } },
+      ctx,
+      state,
+      fakeComplete(['{"labels":["read-project"]}']),
+    );
+    assert.equal(result, undefined);
   });
 });
 
