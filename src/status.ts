@@ -1,6 +1,13 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { EffectivePolicy } from "./backends/types.ts";
+import {
+  CAPABILITY_CLASSES,
+  getEffectiveDisposition,
+  usedCapabilityStats,
+  type CapabilityState,
+  type EffectiveDisposition,
+} from "./capabilities.ts";
 import { classifierEnabled, resolveClassifierModel } from "./classifier.ts";
 import { configSourceLabel, ruleProvenanceKey, type ClassifierRuleListKey, type ProvenanceListKey, type ResolvedGuardConfig, type StatusLineMode } from "./config.ts";
 import { getPersistentConfigPath } from "./persistent-settings.ts";
@@ -75,6 +82,22 @@ function sandboxFidelityLines(effective: EffectivePolicy | undefined, max: numbe
   ];
 }
 
+/** "[global]", "[this session]", "[read-only preset]" — blank for a built-in default, matching the list convention. */
+function dispositionSourceSuffix(effective: EffectiveDisposition): string {
+  if (effective.scope === "default") return "";
+  if (effective.scope === "config") return ` [${configSourceLabel(effective.source ?? "config")}]`;
+  if (effective.scope === "preset") return ` [${effective.source} preset]`;
+  return " [this session]";
+}
+
+/** The disposition table as /guard policy shows it: every class, its effective disposition, and where that came from. */
+export function formatDispositionTable(config: ResolvedGuardConfig, capabilities: CapabilityState | undefined): string[] {
+  return CAPABILITY_CLASSES.map((entry) => {
+    const effective = getEffectiveDisposition(config, capabilities, entry.id);
+    return `  ${entry.id.padEnd(21)} ${effective.disposition}${dispositionSourceSuffix(effective)}`;
+  });
+}
+
 export function networkPolicyLabel(config: ResolvedGuardConfig): string {
   if (!config.network.enabled) return "network unrestricted";
   return config.network.allowedDomains.length > 0 ? `${config.network.allowedDomains.length} domains` : "network blocked";
@@ -130,6 +153,20 @@ export function updateGuardStatus(ctx: ExtensionContext, state: RuntimeState): v
   ctx.ui.setStatus("guard", `${muted(`Guard: ${backend}, ${network}, ${classifierModelLabel(ctx, config, state)} `)}${hasImportantStats ? warning(compact) : muted(compact)}`);
 }
 
+/** Per-class hits and outcomes, for classes actually seen; the full table lives in /guard policy. */
+function capabilityStatLines(state: RuntimeState): string[] {
+  const used = usedCapabilityStats(state.capabilities);
+  if (used.length === 0) return ["  (none yet)"];
+  return used.map(({ id, stats }) => {
+    const outcomes = Object.entries(stats.outcomes)
+      .filter(([, count]) => count > 0)
+      .map(([name, count]) => `${name} ${count}`)
+      .join(", ");
+    const screen = stats.screenTripped + stats.screenClean > 0 ? `  screen ${stats.screenTripped} tripped / ${stats.screenClean} clean` : "";
+    return `  ${id.padEnd(21)} ${stats.hits} hit(s)${outcomes ? `  ${outcomes}` : ""}${screen}`;
+  });
+}
+
 export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConfig): string {
   const classifierOn = classifierEnabled(config, state.classifier);
   const health = state.enabled && state.initialized ? "enforcing" : state.enabled ? "enabled but not initialized" : state.disabledForNextAgent ? "disabled for next agent turn" : "disabled";
@@ -163,17 +200,21 @@ export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConf
     `  ${network}`,
     state.lastError ? `  Last error: ${state.lastError}` : undefined,
     "",
-    "## Classifier",
-    `  ${classifierOn ? "enabled" : "disabled"}`,
-    `  Model: ${state.classifier.modelOverride ?? config.classifier.model}`,
+    "## Reviewers",
+    `  Namer: ${classifierOn ? "enabled" : "disabled"}`,
+    `  Namer model: ${state.classifier.modelOverride ?? config.classifier.model}`,
+    `  Judge model: ${config.classifier.judgeModel}`,
     `  Fail closed: ${config.classifier.failClosed ? "yes" : "no"}`,
     `  Telemetry: ${config.classifier.telemetry}`,
     state.classifier.lastError ? `  Last error: ${state.classifier.lastError}` : undefined,
     "",
     "## Decisions this session",
     `  Reviewed: ${state.stats.reviewed}  Allowed: ${state.stats.allowed}  Denied: ${state.stats.denied}  Asked: ${state.stats.asked}`,
-    `  Policy blocks: ${state.stats.blocked}  Exempt (reads/commands): ${state.stats.classifierSkips}  Errors: ${state.stats.errors}`,
+    `  Policy blocks: ${state.stats.blocked}  Exempt (no model consulted): ${state.stats.classifierSkips}  Errors: ${state.stats.errors}`,
     `  Tokens: ${formatTokensWithCache(state.stats)}`,
+    "",
+    "## Capabilities seen this session",
+    ...capabilityStatLines(state),
     "",
     "## Session approvals",
     `  Read paths: ${state.approvals.read.length > 0 ? state.approvals.read.join(", ") : "(none)"}`,
@@ -281,6 +322,10 @@ export function formatGuardPolicy(state: RuntimeState, config: ResolvedGuardConf
     "# Pi Guard Policy",
     "  unmarked entries are built-in defaults; [global]/[project] name the config that set them",
     "",
+    "## Capability dispositions",
+    "  the whole decision policy: actions are named with these classes, the strictest row wins",
+    ...formatDispositionTable(config, state.capabilities),
+    "",
     "## Filesystem",
     `  Restrictions: ${config.filesystem.enabled ? "enabled" : "disabled (lists still route classifier exemptions)"}`,
     `  Read mode: ${config.filesystem.allowRead.length === 0 ? "blacklist (all paths except deny read)" : "whitelist"}`,
@@ -305,13 +350,16 @@ export function formatGuardPolicy(state: RuntimeState, config: ResolvedGuardConf
     `  Allow: ${formatArray(config.environment.allow)}${inlineListSuffix("environment.allow")}`,
     `  Unset: ${formatArray(config.environment.unset)}${inlineListSuffix("environment.unset")}`,
     "",
-    "## Classifier",
-    `  ${classifierEnabled(config, state.classifier) ? "enabled" : "disabled"} · model ${state.classifier.modelOverride ?? config.classifier.model} · fail ${config.classifier.failClosed ? "closed" : "open"}`,
+    "## Reviewers",
+    `  namer ${classifierEnabled(config, state.classifier) ? "enabled" : "disabled"} · model ${state.classifier.modelOverride ?? config.classifier.model} · judge model ${config.classifier.judgeModel} · fail ${config.classifier.failClosed ? "closed" : "open"}`,
     "",
-    ...ruleSection("Classifier allow rules", "allow", rules.allow),
-    ...ruleSection("Classifier soft-deny rules (ask without authorization)", "soft_deny", rules.soft_deny),
-    ...ruleSection("Classifier hard-deny rules (never allowed)", "hard_deny", rules.hard_deny),
-    ...ruleSection("Classifier environment assumptions", "environment", rules.environment),
+    "## Legacy classifier rules (parsed, no longer consulted)",
+    "  capability mode decides from the disposition table above; these lists are kept so old configs still load",
+    "",
+    ...ruleSection("Legacy allow rules", "allow", rules.allow),
+    ...ruleSection("Legacy soft-deny rules", "soft_deny", rules.soft_deny),
+    ...ruleSection("Legacy hard-deny rules", "hard_deny", rules.hard_deny),
+    ...ruleSection("Legacy environment assumptions", "environment", rules.environment),
     "## Config sources",
     ...config.sources.map((source) => `  • ${source}`),
   ];

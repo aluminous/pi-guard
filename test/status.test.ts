@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { CONFIG_DIR_NAME, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { recordCapabilityOutcome, recordScreenVerdict } from "../src/capabilities.ts";
 import { globalGuardConfigPath, mergeConfig } from "../src/config.ts";
-import { createRuntimeState, resetTurnStats } from "../src/state.ts";
+import { createRuntimeState, recordCapabilityDecision, resetTurnStats, syncCapabilityPreset } from "../src/state.ts";
 import { formatGuardPolicy, formatGuardStatus, statusLineVisible } from "../src/status.ts";
 import { showGuardView, toggleGuardView } from "../src/live-view.ts";
 import { testConfig } from "./helpers.ts";
@@ -32,14 +33,25 @@ describe("guard status restriction labels", () => {
 });
 
 describe("guard status session sections", () => {
-  it("shows session guidance entries and the exempt-read counter", () => {
+  it("shows session guidance entries and the exempt counter", () => {
     const state = createRuntimeState();
     state.classifier.sessionGuidance = ["User allowed bash (npm run deploy) with comment: staging deploys are fine"];
     state.stats.classifierSkips = 3;
     const status = formatGuardStatus(state, testConfig());
     assert.match(status, /Session guidance/);
     assert.match(status, /staging deploys are fine/);
-    assert.match(status, /Exempt \(reads\/commands\): 3/);
+    assert.match(status, /Exempt \(no model consulted\): 3/);
+  });
+
+  it("summarizes per-class capability stats for classes seen this session", () => {
+    const state = createRuntimeState();
+    recordCapabilityDecision(state, "bash", { labels: ["off-machine-effects"], decision: "deny", disposition: "ask", reason: "denied", reviewed: true });
+    recordCapabilityOutcome(state.capabilities, ["off-machine-effects"], "ask-denied");
+    recordScreenVerdict(state.capabilities, ["off-machine-effects"], true);
+    const status = formatGuardStatus(state, testConfig());
+    assert.match(status, /Capabilities seen this session/);
+    assert.match(status, /off-machine-effects\s+1 hit\(s\)\s+ask-denied 1\s+screen 1 tripped \/ 0 clean/);
+    assert.doesNotMatch(status, /read-project/, "classes never seen stay out of the session view");
   });
 });
 
@@ -83,16 +95,30 @@ describe("guard status token cache reporting", () => {
 });
 
 describe("formatGuardPolicy", () => {
-  it("includes deterministic policy and every classifier rule list", () => {
+  it("leads with the disposition table and keeps the legacy rule lists marked", () => {
     const config = testConfig();
     const policy = formatGuardPolicy(createRuntimeState(), config);
     assert.match(policy, /# Pi Guard Policy/);
-    assert.match(policy, /Classifier allow rules \(\d+\)/);
-    assert.match(policy, /soft-deny rules \(ask without authorization\)/);
-    assert.match(policy, /hard-deny rules \(never allowed\)/);
+    assert.match(policy, /## Capability dispositions/);
+    assert.match(policy, /read-project\s+allow/);
+    assert.match(policy, /off-machine-effects\s+ask/);
+    assert.match(policy, /credentials\s+judge/);
+    assert.match(policy, /Legacy classifier rules \(parsed, no longer consulted\)/);
+    assert.match(policy, /Legacy allow rules \(\d+\)/);
     assert.match(policy, /Local Validation/);
-    assert.match(policy, /Safety-Check Bypass/);
     assert.match(policy, /Config sources/);
+    assert.ok(policy.indexOf("## Capability dispositions") < policy.indexOf("Legacy classifier rules"));
+  });
+
+  it("annotates disposition provenance and the read-only preset", () => {
+    const config = mergeConfig(testConfig(), { dispositions: { "install-dependencies": "ask" } }, globalGuardConfigPath());
+    const state = createRuntimeState();
+    state.readOnly = true;
+    syncCapabilityPreset(state);
+    const policy = formatGuardPolicy(state, config);
+    assert.match(policy, /install-dependencies\s+ask \[global\]/);
+    assert.match(policy, /modify-project\s+deny \[read-only preset\]/);
+    assert.match(policy, /read-project\s+allow\n/, "defaults stay unmarked");
   });
 
   it("notes that lists still route classifier exemptions when enforcement is off", () => {
