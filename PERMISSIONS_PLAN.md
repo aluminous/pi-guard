@@ -432,3 +432,43 @@ by severity-max over labels, with the classifier's own decision used only
 when no label is emitted. `judge` is a documented placeholder for full
 classifier review until the strong-model judge exists. `ask` uses the
 existing approval dialog; approval comments keep feeding session guidance.
+
+### Adopted (2026-08-05): dogfood the final semantics on the experimental branch
+
+No hybrid, no advisory mode — on `stage-0-attribution` the table and
+taxonomy actually decide, for real telemetry. Final decision path:
+
+- **Classifier becomes a single-stage namer** (the two-stage fast/full
+  split dies, per the remeasurement): it emits a label set + optional
+  authorization evidence, never a decision. Cache-friendly payload
+  discipline retained; class definitions replace prose rule tiers in the
+  prompt. Legacy classifier.rules config parses but is inert in capability
+  mode (diagnostic notes it).
+- **Deterministic mappers label without LLM**: read exemption →
+  read-project; allowlist templates carry capability tags; trusted-path
+  denials → credentials. **Writes/edits are NEVER deterministically
+  labeled** — content is part of the action, so they always pass through
+  the namer, which must label content-level risks (authorization planting
+  → persistence, secrets in content → credentials); multi-label
+  severity-max preserves the round-2 hardening (a benign path cannot
+  launder hostile content past modify-project: allow).
+- **Table resolves by severity-max** over labels: deny > ask > judge >
+  allow. Empty label set → unclassified.
+- **The judge is real, not a placeholder**: a thoughtful review with
+  curated richer context (recent user messages, session guidance, action
+  projection, recent guard decisions), ask-preferred decision rules,
+  per-action verdicts, model = `classifier.judgeModel` (default
+  "current" — the session model is typically the strong one).
+- **Core taxonomy grows modify-system** (writes outside the project),
+  default ask — out-of-roots writes need a class; 12 core classes total.
+- **Read-only mode becomes a session preset** flipping modify/destructive/
+  share rows to deny, keeping its deterministic write/edit block and its
+  fail-closed bash behavior when the namer is unavailable.
+- Classifier disabled = capability mode limited to deterministic mappers,
+  as today. Eval harness adapts to the new pipeline (same expected
+  decision sets; judge runs with the eval model) rather than being
+  abandoned.
+- Verification: /guard test (Stage 0) is the dogfood vehicle — it
+  exercises namer → table → judge without agent turns; manual tmux pass
+  over the settings page (toggle, highlight, Ctrl+S, live stats) and the
+  decision paths on implementation.
