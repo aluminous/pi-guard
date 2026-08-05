@@ -446,12 +446,25 @@ taxonomy actually decide, for real telemetry. Final decision path:
   mode (diagnostic notes it).
 - **Deterministic mappers label without LLM**: read exemption →
   read-project; allowlist templates carry capability tags; trusted-path
-  denials → credentials. **Writes/edits are NEVER deterministically
-  labeled** — content is part of the action, so they always pass through
-  the namer, which must label content-level risks (authorization planting
-  → persistence, secrets in content → credentials); multi-label
-  severity-max preserves the round-2 hardening (a benign path cannot
-  launder hostile content past modify-project: allow).
+  denials → credentials.
+- **Writes/edits get a deterministic content screen, not an unconditional
+  LLM pass** (revised 2026-08-05 after maintainer pushback — edits are 24%
+  of classifier traffic and burst-edit latency is real harm). Clean
+  content → deterministic modify-project/modify-system label → table, zero
+  LLM. The screen escalates to the namer when content or target is
+  lexically/structurally interesting: authorization/review/approval
+  lexicon and agent-directive phrasing; persistence surfaces by path
+  (manifest script blocks, git hooks, shell profiles, cron/launchd);
+  manifest diffs that add lifecycle scripts (structural JSON check);
+  credential-looking content (key material, long secrets, base64 blobs).
+  The namer then labels content-level risks (planting → persistence,
+  secrets → credentials) and severity-max resolves. Honest limits: a
+  paraphrasing adversary can evade a lexicon — accepted per the north star
+  (not an adversarial boundary; sandbox and deny-paths still bound blast
+  radius). Regression criterion: every round-2 subtle-* eval case MUST
+  trip the screen; the screen's trip rate is telemetry so over/under-
+  triggering is measurable. Users wanting always-review keep it: set
+  modify-project to judge for the session.
 - **Table resolves by severity-max** over labels: deny > ask > judge >
   allow. Empty label set → unclassified.
 - **The judge is real, not a placeholder**: a thoughtful review with
