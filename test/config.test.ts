@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { describe, it } from "node:test";
-import { DEFAULT_CONFIG, globalRailConfigPath, mergeConfig, type RailConfig } from "../src/config.ts";
+import { CONFIG_DIR_NAME, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  DEFAULT_CONFIG,
+  globalRailConfigPath,
+  loadConfig,
+  mergeConfig,
+  resolveConfigFile,
+  type RailConfig,
+} from "../src/config.ts";
 import { getEffectiveDisposition } from "../src/capabilities.ts";
-import { testConfig } from "./helpers.ts";
+import { makeFixtureDir, testConfig, withTempAgentDir } from "./helpers.ts";
 
 describe("mergeConfig", () => {
   it("overrides scalar and nested fields and records the source", () => {
@@ -198,5 +208,125 @@ describe("capabilities config", () => {
   it("still rejects a disposition for a class nobody declared", () => {
     const config = mergeConfig(testConfig(), { dispositions: { "never-declared": "deny" } }, globalPath);
     assert.match(config.diagnostics.join("\n"), /dispositions\.never-declared: unknown capability class/);
+  });
+});
+
+// The pi-guard → pi-rail compatibility seam. rail.json is the name now, but a
+// user whose live config is still guard.json must keep working — and must not
+// end up with half their settings in each file.
+describe("rail.json / legacy guard.json resolution", () => {
+  const writeJson = (dir: string, name: string, body: unknown) => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, name), JSON.stringify(body), "utf8");
+  };
+
+  it("prefers rail.json, falls back to guard.json, and defaults to rail.json when neither exists", () => {
+    const fixture = makeFixtureDir();
+    try {
+      assert.deepEqual(resolveConfigFile(fixture.dir), { path: path.join(fixture.dir, "rail.json"), legacy: false });
+
+      writeJson(fixture.dir, "guard.json", {});
+      assert.deepEqual(resolveConfigFile(fixture.dir), { path: path.join(fixture.dir, "guard.json"), legacy: true });
+
+      writeJson(fixture.dir, "rail.json", {});
+      assert.deepEqual(resolveConfigFile(fixture.dir), {
+        path: path.join(fixture.dir, "rail.json"),
+        legacy: false,
+        ignoredLegacyPath: path.join(fixture.dir, "guard.json"),
+      });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  /** loadConfig against a throwaway agent dir and project dir; both layers start empty. */
+  function withLayers(fn: (layers: { globalDir: string; projectDir: string; load: () => ReturnType<typeof loadConfig> }) => void): void {
+    withTempAgentDir((agentDir) => {
+      const project = makeFixtureDir();
+      try {
+        const ctx = { cwd: project.dir, isProjectTrusted: () => true } as unknown as ExtensionContext;
+        fn({
+          globalDir: path.join(agentDir, "extensions"),
+          projectDir: path.join(project.dir, CONFIG_DIR_NAME),
+          load: () => loadConfig(ctx),
+        });
+      } finally {
+        project.cleanup();
+      }
+    });
+  }
+
+  it("loads a legacy global guard.json exactly as before, with one advisory", () => {
+    withLayers(({ globalDir, load }) => {
+      writeJson(globalDir, "guard.json", { backend: "none", network: { enabled: false } });
+      const config = load();
+      assert.equal(config.backend, "none");
+      assert.equal(config.network.enabled, false);
+      assert.equal(config.sources.at(-1), path.join(globalDir, "guard.json"));
+      const advisory = config.diagnostics.filter((line) => line.includes("guard.json"));
+      assert.equal(advisory.length, 1);
+      assert.match(advisory[0]!, /Loaded legacy .*guard\.json/);
+      assert.match(advisory[0]!, /rename it to rail\.json/);
+    });
+  });
+
+  it("loads a global rail.json with no advisory at all", () => {
+    withLayers(({ globalDir, load }) => {
+      writeJson(globalDir, "rail.json", { backend: "none" });
+      const config = load();
+      assert.equal(config.backend, "none");
+      assert.deepEqual(config.diagnostics, []);
+    });
+  });
+
+  it("lets rail.json win over a guard.json beside it and says the guard.json was ignored", () => {
+    withLayers(({ globalDir, load }) => {
+      writeJson(globalDir, "guard.json", { backend: "none", statusLine: "never" });
+      writeJson(globalDir, "rail.json", { backend: "seatbelt" });
+      const config = load();
+      assert.equal(config.backend, "seatbelt");
+      assert.equal(config.statusLine, "always", "nothing from the shadowed guard.json leaks in");
+      assert.equal(config.sources.at(-1), path.join(globalDir, "rail.json"));
+      const advisory = config.diagnostics.filter((line) => line.includes("guard.json"));
+      assert.equal(advisory.length, 1);
+      assert.match(advisory[0]!, /Ignored .*guard\.json/);
+      assert.match(advisory[0]!, /rail\.json takes precedence/);
+    });
+  });
+
+  it("applies the same fallback and precedence to the project layer", () => {
+    withLayers(({ projectDir, load }) => {
+      writeJson(projectDir, "guard.json", { statusLine: "never" });
+      const legacy = load();
+      assert.equal(legacy.statusLine, "never");
+      assert.match(legacy.diagnostics.join("\n"), /Loaded legacy .*guard\.json/);
+
+      writeJson(projectDir, "rail.json", { statusLine: "auto" });
+      const both = load();
+      assert.equal(both.statusLine, "auto");
+      assert.match(both.diagnostics.join("\n"), /Ignored .*guard\.json/);
+    });
+  });
+
+  it("layers a legacy global guard.json under a project rail.json", () => {
+    withLayers(({ globalDir, projectDir, load }) => {
+      writeJson(globalDir, "guard.json", { backend: "none", statusLine: "never" });
+      writeJson(projectDir, "rail.json", { statusLine: "auto" });
+      const config = load();
+      assert.equal(config.backend, "none", "the legacy global layer still applies");
+      assert.equal(config.statusLine, "auto", "the project layer still wins");
+      assert.deepEqual(config.sources, ["defaults", path.join(globalDir, "guard.json"), path.join(projectDir, "rail.json")]);
+    });
+  });
+
+  it("resolves the global path to whichever file exists", () => {
+    withTempAgentDir((agentDir) => {
+      const globalDir = path.join(agentDir, "extensions");
+      assert.equal(globalRailConfigPath(), path.join(globalDir, "rail.json"));
+      writeJson(globalDir, "guard.json", {});
+      assert.equal(globalRailConfigPath(), path.join(globalDir, "guard.json"));
+      writeJson(globalDir, "rail.json", {});
+      assert.equal(globalRailConfigPath(), path.join(globalDir, "rail.json"));
+    });
   });
 });

@@ -1,8 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { CapabilityId, Disposition } from "./capabilities.ts";
-import type { CapabilitiesConfig, RailConfig, StatusLineMode } from "./config.ts";
+import { globalRailConfigPath, type CapabilitiesConfig, type RailConfig, type StatusLineMode } from "./config.ts";
 
 /** The on-disk shape of a custom class: exactly what capabilities.classes entries look like. */
 export interface PersistedCapabilityClass {
@@ -12,8 +11,14 @@ export interface PersistedCapabilityClass {
   disposition?: Disposition;
 }
 
+/**
+ * The global config file to write. Resolved per call rather than fixed, so
+ * Ctrl+S lands in whatever loadConfig actually read at the global layer:
+ * persisting to rail.json while the live config is still a legacy guard.json
+ * would fork the user's configuration into two files that both load.
+ */
 function configPath(): string {
-  return path.join(getAgentDir(), "extensions", "rail.json");
+  return globalRailConfigPath();
 }
 
 function lockPath(filePath: string): string {

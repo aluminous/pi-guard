@@ -550,15 +550,64 @@ export function mergeConfig(base: ResolvedRailConfig, override: Partial<RailConf
   return next;
 }
 
+export const RAIL_CONFIG_FILENAME = "rail.json";
+/** What this extension's config file was called before the pi-guard → pi-rail rename. */
+export const LEGACY_RAIL_CONFIG_FILENAME = "guard.json";
+
+/** Which of the two filenames one config layer resolves to, and what to say about it. */
+export interface ResolvedConfigFile {
+  /** The file to read — and the file persistent writers must write back to. */
+  path: string;
+  /** True when the legacy guard.json was chosen because no rail.json sits beside it. */
+  legacy: boolean;
+  /** Set when a guard.json exists at this layer but lost to rail.json. */
+  ignoredLegacyPath?: string;
+}
+
+/**
+ * Picks the config file for one layer. rail.json always wins; a lone guard.json
+ * is read exactly as it was before the rename, so upgrading does not silently
+ * drop a user's live configuration. With neither present the rail.json path
+ * comes back, which is what a writer should create.
+ */
+export function resolveConfigFile(dir: string): ResolvedConfigFile {
+  const railPath = path.join(dir, RAIL_CONFIG_FILENAME);
+  const legacyPath = path.join(dir, LEGACY_RAIL_CONFIG_FILENAME);
+  const hasLegacy = existsSync(legacyPath);
+  if (existsSync(railPath)) return hasLegacy ? { path: railPath, legacy: false, ignoredLegacyPath: legacyPath } : { path: railPath, legacy: false };
+  if (hasLegacy) return { path: legacyPath, legacy: true };
+  return { path: railPath, legacy: false };
+}
+
+/**
+ * The advisory for a layer where a legacy guard.json exists: it either was the
+ * file loaded, or it was shadowed by a rail.json and did nothing. Undefined
+ * when there is no guard.json to talk about.
+ */
+export function legacyConfigDiagnostic(file: ResolvedConfigFile): string | undefined {
+  if (file.legacy) return `Loaded legacy ${file.path} — rename it to ${RAIL_CONFIG_FILENAME} (pi-guard is now pi-rail).`;
+  if (file.ignoredLegacyPath) return `Ignored ${file.ignoredLegacyPath}: ${file.path} takes precedence (pi-guard is now pi-rail). Delete the legacy file once its settings are merged.`;
+  return undefined;
+}
+
+/** The directory holding the global config, whichever of the two filenames is in it. */
+export function globalRailConfigDir(): string {
+  return path.join(getAgentDir(), "extensions");
+}
+
+/** The global config file in effect: rail.json, or a legacy guard.json when that is all there is. */
 export function globalRailConfigPath(): string {
-  return path.join(getAgentDir(), "extensions", "rail.json");
+  return resolveConfigFile(globalRailConfigDir()).path;
 }
 
 /** Short display label for a provenance source: "default", "global", "project", or the raw path when unrecognized. */
 export function configSourceLabel(source: string): string {
   if (source === "default") return "default";
-  if (source === globalRailConfigPath()) return "global";
-  if (source.endsWith(path.join(CONFIG_DIR_NAME, "rail.json"))) return "project";
+  const base = path.basename(source);
+  if (base === RAIL_CONFIG_FILENAME || base === LEGACY_RAIL_CONFIG_FILENAME) {
+    if (source === path.join(globalRailConfigDir(), base)) return "global";
+    if (source.endsWith(path.join(CONFIG_DIR_NAME, base))) return "project";
+  }
   return source;
 }
 
@@ -568,17 +617,25 @@ export function loadConfig(ctx: ExtensionContext): ResolvedRailConfig {
   config.diagnostics = [];
   config.sources = ["defaults"];
 
-  const globalPath = globalRailConfigPath();
-  const projectPath = path.join(ctx.cwd, CONFIG_DIR_NAME, "rail.json");
+  const globalFile = resolveConfigFile(globalRailConfigDir());
+  const projectFile = resolveConfigFile(path.join(ctx.cwd, CONFIG_DIR_NAME));
 
-  const globalConfig = readJson(globalPath, diagnostics);
-  if (globalConfig) config = mergeConfig(config, globalConfig, globalPath);
+  // The advisory is about which files are on disk, so it is emitted even when
+  // the chosen file turns out to be unparseable — that is when knowing a
+  // shadowed guard.json is sitting there matters most.
+  const globalAdvisory = legacyConfigDiagnostic(globalFile);
+  if (globalAdvisory) diagnostics.push(globalAdvisory);
+
+  const globalConfig = readJson(globalFile.path, diagnostics);
+  if (globalConfig) config = mergeConfig(config, globalConfig, globalFile.path);
 
   if (ctx.isProjectTrusted()) {
-    const projectConfig = readJson(projectPath, diagnostics);
-    if (projectConfig) config = mergeConfig(config, projectConfig, projectPath);
-  } else if (existsSync(projectPath)) {
-    diagnostics.push(`Ignoring untrusted project config: ${projectPath}`);
+    const projectAdvisory = legacyConfigDiagnostic(projectFile);
+    if (projectAdvisory) diagnostics.push(projectAdvisory);
+    const projectConfig = readJson(projectFile.path, diagnostics);
+    if (projectConfig) config = mergeConfig(config, projectConfig, projectFile.path);
+  } else if (existsSync(projectFile.path)) {
+    diagnostics.push(`Ignoring untrusted project config: ${projectFile.path}`);
   }
 
   config.diagnostics.push(...diagnostics);
