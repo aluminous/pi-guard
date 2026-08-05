@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { CAPABILITY_IDS, DEFAULT_DISPOSITIONS, isCapabilityId, isDisposition, type CapabilityId, type Disposition } from "./capabilities.ts";
 import { DEFAULT_CLASSIFIER_RULES } from "./classifier-rules.ts";
 import { DEFAULT_COMMAND_ALLOWLIST } from "./command-allowlist.ts";
 
@@ -27,16 +28,20 @@ export interface ClassifierRulesConfig {
 export interface ClassifierConfig {
   enabled?: boolean;
   model?: string;
+  /** Model for the `judge` disposition's escalation review; "current" uses the session model. */
+  judgeModel?: string;
   timeoutMs?: number;
   failClosed?: boolean;
   /** Decision telemetry written to pi's session log: off, minimal (truncated), or full. */
   telemetry?: "off" | "minimal" | "full";
+  /** Legacy prose rule tiers. Parsed for compatibility; inert in capability mode. */
   rules?: ClassifierRulesConfig;
 }
 
 export interface ResolvedClassifierConfig {
   enabled: boolean;
   model: string;
+  judgeModel: string;
   timeoutMs: number;
   failClosed: boolean;
   telemetry: "off" | "minimal" | "full";
@@ -66,6 +71,8 @@ export interface GuardConfig {
   commands?: {
     allow?: string[];
   };
+  /** Capability disposition table: class id → allow | judge | ask | deny. Omitted classes keep their default. */
+  dispositions?: Record<string, string>;
   classifier?: ClassifierConfig;
   seatbelt?: Record<string, unknown>;
   container?: Record<string, unknown>;
@@ -99,6 +106,8 @@ export interface ConfigProvenance {
   rules: Record<ClassifierRuleListKey, Record<string, RuleProvenance>>;
   /** Rules deleted by a "Name:" empty-body entry: original name → deleting source. */
   deletedRules: Record<ClassifierRuleListKey, Record<string, string>>;
+  /** Capability class id → source; "default" until a config file sets the row. */
+  dispositions: Record<CapabilityId, string>;
 }
 
 export interface ResolvedGuardConfig {
@@ -124,6 +133,8 @@ export interface ResolvedGuardConfig {
   commands: {
     allow: string[];
   };
+  /** Fully resolved disposition table: every capability class has a row. */
+  dispositions: Record<CapabilityId, Disposition>;
   classifier: ResolvedClassifierConfig;
   seatbelt: Record<string, unknown>;
   container: Record<string, unknown>;
@@ -259,6 +270,7 @@ function defaultProvenance(config: Omit<ResolvedGuardConfig, "provenance">): Con
       environment: ruleListProvenance(config.classifier.rules.environment, "default"),
     },
     deletedRules: { allow: {}, soft_deny: {}, hard_deny: {}, environment: {} },
+    dispositions: Object.fromEntries(CAPABILITY_IDS.map((id) => [id, "default"])) as Record<CapabilityId, string>,
   };
 }
 
@@ -298,9 +310,11 @@ const DEFAULTS_SANS_PROVENANCE: Omit<ResolvedGuardConfig, "provenance"> = {
   commands: {
     allow: [...DEFAULT_COMMAND_ALLOWLIST],
   },
+  dispositions: { ...DEFAULT_DISPOSITIONS },
   classifier: {
     enabled: false,
     model: "auto",
+    judgeModel: "current",
     timeoutMs: 8000,
     failClosed: true,
     telemetry: "minimal",
@@ -400,6 +414,7 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
     environment: { ...base.environment },
     network: { ...base.network },
     commands: { ...base.commands },
+    dispositions: { ...base.dispositions },
     classifier: { ...base.classifier },
     seatbelt: { ...base.seatbelt },
     container: { ...base.container },
@@ -447,9 +462,30 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
     next.commands.allow = setList("commands.allow", asStringArray(override.commands.allow, `${source}.commands.allow`, diagnostics), next.commands.allow);
   }
 
+  // Per-row merge, unlike the wholesale lists: the disposition table is the
+  // user-facing policy surface, so a project config that sets one row must not
+  // silently reset the eleven it did not mention.
+  if (isObject(override.dispositions)) {
+    for (const [key, value] of Object.entries(override.dispositions)) {
+      if (!isCapabilityId(key)) {
+        diagnostics.push(`Ignoring ${source}.dispositions.${key}: unknown capability class`);
+        continue;
+      }
+      if (!isDisposition(value)) {
+        diagnostics.push(`Ignoring ${source}.dispositions.${key}: expected "allow", "judge", "ask", or "deny"`);
+        continue;
+      }
+      next.dispositions[key] = value;
+      next.provenance.dispositions[key] = source;
+    }
+  } else if (override.dispositions !== undefined) {
+    diagnostics.push(`Ignoring ${source}.dispositions: expected an object of class → disposition`);
+  }
+
   if (isObject(override.classifier)) {
     if (typeof override.classifier.enabled === "boolean") next.classifier.enabled = override.classifier.enabled;
     if (typeof override.classifier.model === "string" && override.classifier.model.trim()) next.classifier.model = override.classifier.model.trim();
+    if (typeof override.classifier.judgeModel === "string" && override.classifier.judgeModel.trim()) next.classifier.judgeModel = override.classifier.judgeModel.trim();
     if (typeof override.classifier.timeoutMs === "number" && Number.isFinite(override.classifier.timeoutMs) && override.classifier.timeoutMs > 0) {
       next.classifier.timeoutMs = Math.floor(override.classifier.timeoutMs);
     } else if (override.classifier.timeoutMs !== undefined) {
@@ -464,6 +500,9 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
       }
     }
     if (isObject(override.classifier.rules)) {
+      diagnostics.push(
+        `${source}.classifier.rules is legacy: capability mode names actions from the class taxonomy and decides via the disposition table, so prose rule tiers no longer affect decisions. Use "dispositions" instead.`,
+      );
       const rulesOverride = override.classifier.rules;
       const replace = rulesOverride.replace === true;
       if (rulesOverride.replace !== undefined && typeof rulesOverride.replace !== "boolean") {

@@ -1,4 +1,5 @@
 import type { GuardBackend } from "./backends/types.ts";
+import { createCapabilityState, recordCapabilityHits, type CapabilityId, type CapabilityState, type Disposition } from "./capabilities.ts";
 import type { ClassifierResult, ClassifierState } from "./classifier.ts";
 import type { ResolvedGuardConfig } from "./config.ts";
 import { TRACE_LIMIT, type DecisionTrace } from "./decision-trace.ts";
@@ -8,6 +9,8 @@ export interface GuardEvent {
   at: number;
   toolName: string;
   decision: "allow" | "deny" | "ask" | "block" | "error";
+  /** Capability labels behind the decision, when it came from the table. */
+  capabilities?: CapabilityId[];
   risk?: string;
   reason: string;
 }
@@ -53,12 +56,14 @@ export interface RuntimeState {
   backend: GuardBackend | undefined;
   enabled: boolean;
   disabledForNextAgent: boolean;
-  /** Session read-only mode: write/edit blocked, bash reviewed under READONLY_CLASSIFIER_RULES (blocked if the classifier is off). */
+  /** Session read-only mode: write/edit blocked, bash named-and-judged under the read-only disposition preset (blocked if the classifier is off). */
   readOnly: boolean;
   initialized: boolean;
   lastError: string | undefined;
   warnings: string[];
   classifier: ClassifierState;
+  /** Session disposition overrides, the read-only preset, and per-class stats. */
+  capabilities: CapabilityState;
   /** Open live status/policy view (TUI overlay or RPC widget), if any. */
   liveView?: GuardLiveView;
   approvals: {
@@ -113,6 +118,7 @@ export function createRuntimeState(): RuntimeState {
     lastError: undefined,
     warnings: [],
     classifier: {},
+    capabilities: createCapabilityState(),
     approvals: { read: [], write: [] },
     stats: createGuardStats(),
     recent: [],
@@ -133,6 +139,7 @@ export function resetSessionState(state: RuntimeState): void {
   state.lastError = undefined;
   state.warnings = [];
   state.classifier = {};
+  state.capabilities = createCapabilityState();
   state.approvals = { read: [], write: [] };
   state.stats = createGuardStats();
   state.traces = [];
@@ -184,6 +191,7 @@ export function recordApprovalDenied(state: RuntimeState): void {
   state.stats.turnBlocked++;
 }
 
+/** Legacy two-stage classifier recorder; removed once the interceptor runs on capability decisions. */
 export function recordClassifierResult(state: RuntimeState, toolName: string, result: ClassifierResult): void {
   state.stats.reviewed++;
   state.stats.classifierHits++;
@@ -200,6 +208,42 @@ export function recordClassifierResult(state: RuntimeState, toolName: string, re
   }
   if (result.decision === "ask") state.stats.asked++;
   pushRecent(state, { at: Date.now(), toolName, decision: result.decision, risk: result.risk, reason: result.reason });
+}
+
+export interface CapabilityDecisionRecord {
+  labels: CapabilityId[];
+  decision: "allow" | "deny" | "ask";
+  /** The resolved table disposition that produced this decision. */
+  disposition: Disposition;
+  reason: string;
+  /** True when a model call (namer and/or judge) was involved; deterministic table hits count as rule hits instead. */
+  reviewed: boolean;
+  tokenUsage?: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
+}
+
+/** One resolved capability decision: statusline counters, per-class stats, and the recent-decisions ring. */
+export function recordCapabilityDecision(state: RuntimeState, toolName: string, record: CapabilityDecisionRecord): void {
+  if (record.reviewed) {
+    state.stats.reviewed++;
+    state.stats.classifierHits++;
+    state.stats.turnClassifierHits++;
+  } else {
+    state.stats.ruleHits++;
+    state.stats.turnRuleHits++;
+  }
+  state.stats.classifierInputTokens += record.tokenUsage?.input ?? 0;
+  state.stats.classifierOutputTokens += record.tokenUsage?.output ?? 0;
+  state.stats.classifierCacheReadTokens += record.tokenUsage?.cacheRead ?? 0;
+  state.stats.classifierCacheWriteTokens += record.tokenUsage?.cacheWrite ?? 0;
+  if (record.decision === "allow") state.stats.allowed++;
+  if (record.decision === "deny") {
+    state.stats.denied++;
+    state.stats.classifierDenials++;
+    state.stats.turnClassifierDenials++;
+  }
+  if (record.decision === "ask") state.stats.asked++;
+  recordCapabilityHits(state.capabilities, record.labels);
+  pushRecent(state, { at: Date.now(), toolName, decision: record.decision, capabilities: record.labels, reason: record.reason });
 }
 
 /** A read or allowlisted command skipped classifier review deterministically. */

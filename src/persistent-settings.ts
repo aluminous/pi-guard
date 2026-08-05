@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import type { CapabilityId, Disposition } from "./capabilities.ts";
 import type { GuardConfig, StatusLineMode } from "./config.ts";
 
 function configPath(): string {
@@ -64,6 +65,20 @@ export function updatePersistentClassifierSettings(update: { enabled?: boolean; 
         ...update,
       },
     };
+    writeFileSync(filePath, JSON.stringify(next, null, 2), "utf8");
+  });
+}
+
+/** Writes one disposition row to the global config; `undefined` deletes the row so the class falls back to its default. */
+export function updatePersistentDisposition(id: CapabilityId, disposition: Disposition | undefined): void {
+  withConfigLock(() => {
+    const filePath = configPath();
+    const current = readConfigUnlocked();
+    const dispositions = { ...(current.dispositions ?? {}) };
+    if (disposition === undefined) delete dispositions[id];
+    else dispositions[id] = disposition;
+    const next: GuardConfig = { ...current, dispositions };
+    if (Object.keys(dispositions).length === 0) delete next.dispositions;
     writeFileSync(filePath, JSON.stringify(next, null, 2), "utf8");
   });
 }

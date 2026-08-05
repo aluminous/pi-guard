@@ -88,13 +88,21 @@ describe("mergeConfig", () => {
     assert.equal(deployIndex, DEFAULT_CONFIG.classifier.rules.soft_deny.findIndex((rule) => rule.startsWith("Production Deploy:")) - 1, "override keeps position (one earlier rule was deleted)");
     assert.equal(softDeny.at(-1), "My Custom Rule: never touch the vendor directory.");
     assert.equal(merged.classifier.rules.allow.length, DEFAULT_CONFIG.classifier.rules.allow.length, "untouched lists keep defaults");
-    assert.deepEqual(merged.diagnostics, []);
+    assert.deepEqual(merged.diagnostics.filter((line) => !line.includes("is legacy")), []);
+  });
+
+  it("warns that configured rule tiers are inert in capability mode", () => {
+    const merged = mergeConfig(testConfig(), { classifier: { rules: { allow: ["My Rule: fine."] } } }, "test.json");
+    assert.match(merged.diagnostics[0]!, /test\.json\.classifier\.rules is legacy/);
+    assert.match(merged.diagnostics[0]!, /disposition table/);
+    // Still parsed and merged, so old configs keep loading without error.
+    assert.ok(merged.classifier.rules.allow.includes("My Rule: fine."));
   });
 
   it("warns when deleting an unknown rule name", () => {
     const merged = mergeConfig(testConfig(), { classifier: { rules: { allow: ["No Such Rule:"] } } }, "test.json");
-    assert.equal(merged.diagnostics.length, 1);
-    assert.match(merged.diagnostics[0]!, /cannot delete unknown rule "No Such Rule"/);
+    assert.equal(merged.diagnostics.length, 2);
+    assert.match(merged.diagnostics[1]!, /cannot delete unknown rule "No Such Rule"/);
   });
 
   it("replaces rule lists wholesale when replace is true", () => {

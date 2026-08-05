@@ -186,7 +186,7 @@ export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConf
     "",
     "## Recent decisions",
     ...(state.recent.length > 0
-      ? state.recent.map((event) => `  [${decisionLabel(event.decision)}] ${event.toolName}${event.risk ? `/${event.risk}` : ""} - ${event.reason} (${formatAge(event.at)})`)
+      ? state.recent.map((event) => `  [${decisionLabel(event.decision)}] ${event.toolName}${event.capabilities?.length ? ` (${event.capabilities.join(", ")})` : event.risk ? `/${event.risk}` : ""} - ${event.reason} (${formatAge(event.at)})`)
       : ["  (none yet)"]),
     "",
     "## Policy summary",
