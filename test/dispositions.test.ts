@@ -54,7 +54,7 @@ function openPage(state: RuntimeState, config: ResolvedGuardConfig) {
     done: (value) => closes.push(value),
   });
   page.focused = true;
-  const line = (id: string) => page.render(120).find((text) => text.includes(id)) ?? "";
+  const line = (id: string) => page.render(200).find((text) => text.includes(id)) ?? "";
   return { page, persisted, closes, line };
 }
 
@@ -177,12 +177,14 @@ describe("DispositionPage", () => {
     recordCapabilityHits(state.capabilities, ["off-machine-effects"]);
     recordCapabilityOutcome(state.capabilities, ["off-machine-effects"], "ask-denied");
     const { page, line } = openPage(state, testConfig());
-    const rendered = page.render(120);
+    const rendered = page.render(200);
     assert.equal(rendered.filter((text) => /(read-project|off-machine-effects|unclassified)/.test(text)).length, 3);
     assert.match(line("off-machine-effects"), /off-machine-effects\s+ask\s+<muted>1 hit · 1 asked<\/muted>/);
     assert.match(line("install-dependencies"), /install-dependencies {2}allow/, "the widest class id still leaves a column gutter");
     assert.match(rendered.join("\n"), /↑↓ row · ←→\/Enter cycle/);
-    assert.match(rendered.join("\n"), /Reading, listing, or searching files/, "the highlighted row's definition sits in the footer area");
+    const definition = rendered.find((text) => text.includes("Reading, listing, or searching files")) ?? "";
+    assert.match(definition, /session working directory\.<\/muted>/, "the highlighted row's short definition sits in the footer area");
+    assert.doesNotMatch(definition, /credentials instead/, "definitions are prompt text; the footer shows the first sentence only");
   });
 
   it("moves the highlight with up and down, wrapping at the ends", () => {
@@ -255,7 +257,7 @@ describe("DispositionPage", () => {
     const state = createRuntimeState();
     state.readOnly = true;
     const { page, line } = openPage(state, testConfig());
-    assert.match(page.render(120).join("\n"), /<warning>\s+read-only preset active: modify\/destructive rows tightened to deny \(marked \*\)<\/warning>/);
+    assert.match(page.render(200).join("\n"), /<warning>\s+read-only preset active: modify\/destructive rows tightened to deny \(marked \*\)<\/warning>/);
     assert.match(line("modify-project"), /allow → deny\*/);
     assert.doesNotMatch(line("read-project"), /\*/);
 

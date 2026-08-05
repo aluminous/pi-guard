@@ -27,9 +27,19 @@ export const DISPOSITION_HELP: Record<Disposition, string> = {
   deny: "refuse outright",
 };
 
+/**
+ * First sentence of a class definition, capped. The definitions are prompt
+ * text written for the namer; the page footer wants a line, not a prompt dump.
+ */
+function shortDefinition(definition: string): string {
+  const sentence = definition.match(/^.*?\.(?=\s|$)/)?.[0] ?? definition;
+  return sentence.length > 150 ? `${sentence.slice(0, 149).trimEnd()}…` : sentence;
+}
+
 export interface DispositionRow {
   id: CapabilityId;
   name: string;
+  /** Short form of the class definition, for the page footer and select descriptions. */
   definition: string;
   /** The row the user edits: the session override when set, else the persisted value. */
   value: Disposition;
@@ -73,7 +83,7 @@ export function dispositionRows(config: ResolvedGuardConfig | undefined, state: 
     return {
       id: entry.id,
       name: entry.name,
-      definition: entry.definition,
+      definition: shortDefinition(entry.definition),
       value: override ?? persisted,
       persisted,
       modified: override !== undefined && override !== persisted,
