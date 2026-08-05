@@ -5,7 +5,8 @@ import { dispositionCell, type DispositionRow } from "../dispositions.ts";
 import type { PanelTheme, PanelTui } from "./report-panel.ts";
 import type { Keybindings } from "./select-list.ts";
 
-const ID_WIDTH = 21;
+// Two clear columns: the longest class id is 20 wide, so 22 keeps a gutter.
+const ID_WIDTH = 22;
 const DISPOSITION_WIDTH = 16;
 
 export interface DispositionPageParams {

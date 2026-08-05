@@ -180,6 +180,7 @@ describe("DispositionPage", () => {
     const rendered = page.render(120);
     assert.equal(rendered.filter((text) => /(read-project|off-machine-effects|unclassified)/.test(text)).length, 3);
     assert.match(line("off-machine-effects"), /off-machine-effects\s+ask\s+<muted>1 hit · 1 asked<\/muted>/);
+    assert.match(line("install-dependencies"), /install-dependencies {2}allow/, "the widest class id still leaves a column gutter");
     assert.match(rendered.join("\n"), /↑↓ row · ←→\/Enter cycle/);
     assert.match(rendered.join("\n"), /Reading, listing, or searching files/, "the highlighted row's definition sits in the footer area");
   });

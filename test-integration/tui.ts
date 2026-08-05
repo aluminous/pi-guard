@@ -100,7 +100,7 @@ async function closeOverlay(name: string, marker: string): Promise<void> {
   await waitFor((pane) => !pane.includes(marker), `${name} overlay to close`, UI_TIMEOUT_MS);
 }
 
-test("pi TUI: guard startup, status/policy overlays, no [guard] conversation reports", async (t) => {
+test("pi TUI: guard startup, status/disposition/policy views, no [guard] conversation reports", async (t) => {
   const tmuxPath = which("tmux");
   const piPath = which("pi");
   if (tmuxPath === undefined || piPath === undefined) {
@@ -147,11 +147,36 @@ test("pi TUI: guard startup, status/policy overlays, no [guard] conversation rep
     );
     await closeOverlay("status", "Decisions this session");
 
-    // /guard policy opens the resolved policy overlay. No footer assertion
-    // here: the policy view is tall enough to clip the footer at 40 rows.
+    // /guard policy opens the interactive disposition page: every class, its
+    // disposition, and the session stats column.
     await submitCommand("/guard policy");
-    await waitFor((pane) => pane.includes("Pi Guard Policy"), "policy overlay title", UI_TIMEOUT_MS);
-    await closeOverlay("policy", "Pi Guard Policy");
+    await waitFor(
+      (pane) => pane.includes("Capability dispositions") && /read-project\s+allow/.test(pane) && /off-machine-effects\s+ask/.test(pane),
+      "disposition page with its rows",
+      UI_TIMEOUT_MS,
+    );
+    // Right cycles the highlighted row (allow → judge) at session scope.
+    tmux("send-keys", "-t", TARGET, "Right");
+    await waitFor((pane) => /read-project\s+judge/.test(pane), "cycled disposition on the highlighted row", UI_TIMEOUT_MS);
+    await closeOverlay("disposition page", "Capability dispositions");
+
+    // Read-only mode is a session preset: the page banners it and shows the
+    // tightened effective value next to the row the user still edits.
+    await submitCommand("/guard readonly");
+    await submitCommand("/guard policy");
+    await waitFor(
+      (pane) => pane.includes("read-only preset active") && /modify-project\s+allow → deny\*/.test(pane),
+      "read-only banner and preset-tightened row",
+      UI_TIMEOUT_MS,
+    );
+    await closeOverlay("disposition page", "Capability dispositions");
+    await submitCommand("/guard readonly");
+
+    // The mechanism report lives one level down now. No footer assertion here:
+    // the rules view is tall enough to clip the footer at 40 rows.
+    await submitCommand("/guard policy rules");
+    await waitFor((pane) => pane.includes("Pi Guard Policy Rules"), "policy rules overlay title", UI_TIMEOUT_MS);
+    await closeOverlay("policy rules", "Pi Guard Policy Rules");
 
     // Nothing above should have posted a [guard] report into the conversation.
     const scrollback = fullScrollback();
