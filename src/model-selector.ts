@@ -55,6 +55,6 @@ export async function selectClassifierModel(params: {
     });
   }
 
-  const picked = await pickFromList(params.ctx, { title: "Guard classifier model", items });
+  const picked = await pickFromList(params.ctx, { title: "Rail classifier model", items });
   return picked?.value;
 }

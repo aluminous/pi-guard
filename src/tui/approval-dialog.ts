@@ -1,7 +1,7 @@
 import { Container, Input, Spacer, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import type { Keybindings, Theme } from "./select-list.ts";
 
-export interface GuardApprovalAnswer {
+export interface RailApprovalAnswer {
   approved: boolean;
   /** Optional user comment, recorded as classifier session guidance. */
   comment?: string;
@@ -50,21 +50,21 @@ class InlineCommentRow implements Component {
 }
 
 /**
- * Two-way approval dialog for guard prompts: Allow / Deny, with a shared
+ * Two-way approval dialog for rail prompts: Allow / Deny, with a shared
  * inline comment. Typing while either option is highlighted edits a comment
  * rendered directly on that row; arrowing between the options keeps the
  * typed text. Enter resolves the highlighted option (attaching the trimmed
  * comment when non-empty, as classifier session guidance); Escape denies
  * without comment, matching the previous confirm-dialog semantics.
  */
-export class GuardApprovalDialog extends Container {
+export class RailApprovalDialog extends Container {
   private commentInput = new Input();
   private dynamic = new Container();
   private selectedIndex = 0;
   private _focused = false;
   private theme: Theme;
   private keybindings: Keybindings;
-  private done: (answer: GuardApprovalAnswer) => void;
+  private done: (answer: RailApprovalAnswer) => void;
 
   get focused() {
     return this._focused;
@@ -75,7 +75,7 @@ export class GuardApprovalDialog extends Container {
     this.commentInput.focused = value;
   }
 
-  constructor(params: { title: string; message: string; theme: Theme; keybindings: Keybindings; done: (answer: GuardApprovalAnswer) => void }) {
+  constructor(params: { title: string; message: string; theme: Theme; keybindings: Keybindings; done: (answer: RailApprovalAnswer) => void }) {
     super();
     this.theme = params.theme;
     this.keybindings = params.keybindings;

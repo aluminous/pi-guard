@@ -1,9 +1,9 @@
 # Example configurations
 
-Copy one of these files to `~/.pi/agent/extensions/guard.json` for a global
-profile or to `.pi/guard.json` in a trusted project.
+Copy one of these files to `~/.pi/agent/extensions/rail.json` for a global
+profile or to `.pi/rail.json` in a trusted project.
 
-Configuration is layered over Pi Guard's defaults. Omitted fields retain their
+Configuration is layered over Pi Rail's defaults. Omitted fields retain their
 default values; arrays are replaced wholesale when present.
 
 - `classifier-focused.json` disables filesystem and network restrictions and
@@ -20,12 +20,14 @@ default values; arrays are replaced wholesale when present.
   filesystem access except for the listed sensitive paths. It is the explicit
   denylist-driven example; `allowWrite: ["/"]` supplies the sandbox runtime's
   broad writable root, while `denyWrite` carves sensitive paths back out.
-- `classifier-allowlist-only.json` disables file/network restrictions and
-  environment scrubbing, then allows only repository inspection and local
-  validation through classifier rules. Everything else is a hard deny.
-- `classifier-denylist-only.json` also relies only on classifier rules, but
-  allows ordinary local coding work and hard-denies a concrete blacklist of
-  dangerous actions.
+- `dispositions-deny-by-default.json` disables file/network restrictions and
+  environment scrubbing, then routes every capability class to `deny` except
+  reading the project and running its dev tools. It is the strict
+  deny-by-default disposition profile.
+- `dispositions-allow-by-default.json` also leans entirely on the disposition
+  table, but allows ordinary local coding work and denies a concrete set of
+  dangerous classes: credentials, local destruction, persistence, system
+  modification, and off-machine effects.
 
 `network.enabled` means “enforce network restrictions.” With it set to `false`,
 networking is unrestricted. To deny all networking, set it to `true` with an
@@ -36,6 +38,7 @@ denylist-only policy is not supported. Its write policy also requires at least
 one writable root; use `"/"` as that root only when you intentionally want the
 denylist-driven behavior shown in `filesystem-denylist.json`.
 
-The two `classifier-*-only.json` profiles intentionally remove deterministic
-file/network boundaries. Their allowlists and denylists are interpreted by an
-LLM and should be treated as semantic review policy, not a hard sandbox.
+The two `dispositions-*.json` profiles intentionally remove deterministic
+file/network boundaries. Their policy is the capability disposition table: a
+model names each action with capability classes and the table decides. Treat
+them as semantic review policy, not a hard sandbox.

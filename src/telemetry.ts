@@ -1,5 +1,6 @@
-// Guard decision telemetry. Records every guard decision as a `custom` entry
-// in pi's own session log (customType "guard") so real sessions become a
+// Rail decision telemetry. Records every rail decision as a `custom` entry
+// in pi's own session log (customType "rail"; "guard" before the rename, still
+// read by eval/session-stats.ts) so real sessions become a
 // corpus for analyzing and improving the classifier. Entries sit next to the
 // tool call they judged, do not participate in LLM context, and are written
 // best-effort: telemetry must never block, delay, or break a tool call.
@@ -9,30 +10,60 @@
 // shared (`pi share` uploads the whole file), so the default "minimal" tier
 // truncates projected values. "full" keeps complete projections and policy
 // summaries for eval-case extraction; "off" writes nothing.
-import type { ClassifierResult, ReviewProjection } from "./classifier-protocol.ts";
-import type { ResolvedGuardConfig } from "./config.ts";
+import type { CapabilityId, Disposition } from "./capabilities.ts";
+import type { RailDecision, ReviewProjection } from "./classifier-protocol.ts";
+import type { ResolvedRailConfig } from "./config.ts";
 import type { RuntimeState } from "./state.ts";
 import { textPrefix } from "./util.ts";
 
-export const GUARD_TELEMETRY_TYPE = "guard";
+export const RAIL_TELEMETRY_TYPE = "rail";
+/**
+ * The customType written before the pi-guard → pi-rail rename. Never written
+ * again; readers that mine session corpora (eval/session-stats.ts) must accept
+ * it, or every session recorded before the rename stops being analyzable.
+ */
+export const LEGACY_RAIL_TELEMETRY_TYPE = "guard";
+/** Both customTypes a rail telemetry record can appear under in a session log. */
+export const RAIL_TELEMETRY_TYPES: readonly string[] = [RAIL_TELEMETRY_TYPE, LEGACY_RAIL_TELEMETRY_TYPE];
+
 const MINIMAL_VALUE_LIMIT = 200;
 
-export type GuardTelemetryMode = "off" | "minimal" | "full";
+export type RailTelemetryMode = "off" | "minimal" | "full";
 
-export interface GuardTelemetryBase {
+export interface RailTelemetryBase {
   kind: "review" | "block" | "approval" | "error";
   tool: string;
 }
 
-export interface GuardReviewTelemetry extends GuardTelemetryBase {
-  kind: "review";
-  decision: ClassifierResult["decision"];
-  risk: ClassifierResult["risk"];
-  authorization: ClassifierResult["authorization"];
-  fastPath?: boolean;
-  attempts?: number;
-  latencyMs: number;
+/** The escalation review, when the resolved disposition was `judge`. */
+export interface RailJudgeTelemetry {
   model?: string;
+  verdict: RailDecision;
+  latencyMs: number;
+  attempts?: number;
+  usage?: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
+}
+
+export interface RailReviewTelemetry extends RailTelemetryBase {
+  kind: "review";
+  /** What actually happened to the call after the table (and judge) decided. */
+  decision: RailDecision;
+  /** Capability classes the action was named with, deterministic and model labels together. */
+  labels: CapabilityId[];
+  /** Severity-max result of the disposition table over those labels. */
+  resolvedDisposition: Disposition;
+  /** The label that produced the winning disposition. */
+  decidedBy?: CapabilityId;
+  /** Content-screen verdict for write/edit calls; absent when the screen did not apply. */
+  screenTripped?: boolean;
+  /** Quote the namer offered as evidence the user asked for this action. */
+  authorizationEvidence?: string;
+  attempts?: number;
+  /** Namer latency; 0 when the labels were entirely deterministic. */
+  latencyMs: number;
+  /** Namer model. */
+  model?: string;
+  judge?: RailJudgeTelemetry;
   reason: string;
   /** Set for "ask" decisions: whether the user approved execution. */
   userApproved?: boolean;
@@ -42,12 +73,12 @@ export interface GuardReviewTelemetry extends GuardTelemetryBase {
   projection?: ReviewProjection;
 }
 
-export interface GuardBlockTelemetry extends GuardTelemetryBase {
+export interface RailBlockTelemetry extends RailTelemetryBase {
   kind: "block";
   reason: string;
 }
 
-export interface GuardApprovalTelemetry extends GuardTelemetryBase {
+export interface RailApprovalTelemetry extends RailTelemetryBase {
   kind: "approval";
   access: string;
   path: string;
@@ -57,20 +88,20 @@ export interface GuardApprovalTelemetry extends GuardTelemetryBase {
   userComment?: string;
 }
 
-export interface GuardErrorTelemetry extends GuardTelemetryBase {
+export interface RailErrorTelemetry extends RailTelemetryBase {
   kind: "error";
   reason: string;
   latencyMs: number;
   model?: string;
 }
 
-export type GuardTelemetryRecord =
-  | GuardReviewTelemetry
-  | GuardBlockTelemetry
-  | GuardApprovalTelemetry
-  | GuardErrorTelemetry;
+export type RailTelemetryRecord =
+  | RailReviewTelemetry
+  | RailBlockTelemetry
+  | RailApprovalTelemetry
+  | RailErrorTelemetry;
 
-export function telemetryMode(config: ResolvedGuardConfig): GuardTelemetryMode {
+export function telemetryMode(config: ResolvedRailConfig): RailTelemetryMode {
   return config.classifier.telemetry;
 }
 
@@ -86,7 +117,7 @@ function truncateStrings(value: unknown, limit: number): unknown {
 }
 
 /** Applies the configured privacy tier to a record about to be persisted. */
-export function redactTelemetryRecord(record: GuardTelemetryRecord, mode: GuardTelemetryMode): GuardTelemetryRecord {
+export function redactTelemetryRecord(record: RailTelemetryRecord, mode: RailTelemetryMode): RailTelemetryRecord {
   if (mode === "full" || record.kind !== "review" || !record.projection) return record;
   return {
     ...record,
@@ -99,15 +130,15 @@ export function redactTelemetryRecord(record: GuardTelemetryRecord, mode: GuardT
 }
 
 /**
- * Persists a guard decision record to the session log via pi.appendEntry.
+ * Persists a rail decision record to the session log via pi.appendEntry.
  * Never throws: session logging is observability, not enforcement, and
  * ephemeral sessions silently skip persistence inside SessionManager.
  */
-export function appendGuardTelemetry(state: RuntimeState, record: GuardTelemetryRecord): void {
+export function appendRailTelemetry(state: RuntimeState, record: RailTelemetryRecord): void {
   const config = state.config;
   if (!config || telemetryMode(config) === "off" || !state.appendEntry) return;
   try {
-    state.appendEntry(GUARD_TELEMETRY_TYPE, redactTelemetryRecord(record, telemetryMode(config)));
+    state.appendEntry(RAIL_TELEMETRY_TYPE, redactTelemetryRecord(record, telemetryMode(config)));
   } catch {
     // Best-effort: a session that cannot persist entries must not affect the tool call.
   }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { describeAction, GUARDED_TOOLS } from "../src/guarded-tools.ts";
+import { describeAction, INTERCEPTED_TOOLS } from "../src/intercepted-tools.ts";
 
 describe("describeAction", () => {
   it("describes bash by its command", () => {
@@ -18,7 +18,7 @@ describe("describeAction", () => {
   });
 
   it("adds the write size when contentLength is present", () => {
-    const summary = GUARDED_TOOLS.write!.project({ path: "/repo/a.txt", content: "x".repeat(1500) });
+    const summary = INTERCEPTED_TOOLS.write!.project({ path: "/repo/a.txt", content: "x".repeat(1500) });
     assert.equal(describeAction("write", summary), "write: /repo/a.txt (writes 1500 chars)");
   });
 

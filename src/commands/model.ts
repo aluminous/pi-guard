@@ -11,11 +11,11 @@ function persist(ctx: ExtensionContext, update: { enabled?: boolean; model?: str
   try {
     updatePersistentClassifierSettings(update);
   } catch (error) {
-    ctx.ui.notify(`Could not persist guard classifier setting: ${formatError(error)}`, "warning");
+    ctx.ui.notify(`Could not persist rail classifier setting: ${formatError(error)}`, "warning");
   }
 }
 
-/** Handles `/guard model [auto|current|off|status|provider/model]`; no arg opens the selector in TUI mode. */
+/** Handles `/rail model [auto|current|off|status|provider/model]`; no arg opens the selector in TUI mode. */
 export async function runModelCommand(args: string, ctx: ExtensionContext, state: RuntimeState): Promise<void> {
   const config = state.config ?? loadConfig(ctx);
   const arg = args.trim();
@@ -27,7 +27,7 @@ export async function runModelCommand(args: string, ctx: ExtensionContext, state
   if (arg === "off") {
     state.classifier.enabledOverride = false;
     persist(ctx, { enabled: false });
-    show("Guard classifier disabled and saved.");
+    show("Rail classifier disabled and saved.");
     return;
   }
   if (arg === "auto") {
@@ -35,7 +35,7 @@ export async function runModelCommand(args: string, ctx: ExtensionContext, state
     state.classifier.modelOverride = "auto";
     persist(ctx, { enabled: true, model: "auto" });
     const resolved = resolveClassifierModel(ctx, config, state.classifier);
-    show(`Guard classifier enabled in auto mode and saved${resolved ? `; currently resolves to ${resolved.provider}/${resolved.id}` : "; no known-good model is available yet"}.`);
+    show(`Rail classifier enabled in auto mode and saved${resolved ? `; currently resolves to ${resolved.provider}/${resolved.id}` : "; no known-good model is available yet"}.`);
     return;
   }
   if (arg === "current") {
@@ -46,7 +46,7 @@ export async function runModelCommand(args: string, ctx: ExtensionContext, state
     state.classifier.enabledOverride = true;
     state.classifier.modelOverride = "current";
     persist(ctx, { enabled: true, model: "current" });
-    show(`Guard classifier enabled using current model and saved: ${ctx.model.provider}/${ctx.model.id}`);
+    show(`Rail classifier enabled using current model and saved: ${ctx.model.provider}/${ctx.model.id}`);
     return;
   }
   if (arg && arg !== "status") {
@@ -59,7 +59,7 @@ export async function runModelCommand(args: string, ctx: ExtensionContext, state
     state.classifier.enabledOverride = true;
     state.classifier.modelOverride = `${model.provider}/${model.id}`;
     persist(ctx, { enabled: true, model: state.classifier.modelOverride });
-    show(`Guard classifier enabled and saved using ${model.provider}/${model.id}`);
+    show(`Rail classifier enabled and saved using ${model.provider}/${model.id}`);
     return;
   }
 
@@ -91,11 +91,14 @@ export async function runModelCommand(args: string, ctx: ExtensionContext, state
   const selected = resolveClassifierModel(ctx, config, state.classifier);
   const available = ctx.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`).slice(0, 30);
   show([
-    `Classifier: ${classifierEnabled(config, state.classifier) ? "enabled" : "disabled"}`,
-    `Configured model: ${state.classifier.modelOverride ?? config.classifier.model}`,
-    `Resolved model: ${selected ? `${selected.provider}/${selected.id}` : "(none)"}`,
+    `Reviewers: ${classifierEnabled(config, state.classifier) ? "enabled" : "disabled"}`,
+    `Configured namer model: ${state.classifier.modelOverride ?? config.classifier.model}`,
+    `Resolved namer model: ${selected ? `${selected.provider}/${selected.id}` : "(none)"}`,
+    `Judge model: ${config.classifier.judgeModel}`,
     `Persistent config: ${getPersistentConfigPath()}`,
-    state.classifier.lastDecision ? `Last decision: ${state.classifier.lastDecision.decision} ${state.classifier.lastDecision.reason}` : undefined,
+    state.classifier.lastDecision
+      ? `Last decision: ${state.classifier.lastDecision.decision} (${state.classifier.lastDecision.labels.join(", ")}) ${state.classifier.lastDecision.reason}`
+      : undefined,
     state.classifier.lastError ? `Last error: ${state.classifier.lastError}` : undefined,
     "",
     "Available models:",

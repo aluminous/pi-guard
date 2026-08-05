@@ -1,18 +1,21 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { describe, it } from "node:test";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { createRuntimeState, resetTurnStats } from "../src/state.ts";
-import { formatGuardPolicy, formatGuardStatus, statusLineVisible } from "../src/status.ts";
-import { showGuardView, toggleGuardView } from "../src/live-view.ts";
+import { CONFIG_DIR_NAME, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { recordCapabilityOutcome, recordScreenVerdict } from "../src/capabilities.ts";
+import { globalRailConfigPath, mergeConfig } from "../src/config.ts";
+import { createRuntimeState, recordCapabilityDecision, resetTurnStats } from "../src/state.ts";
+import { formatRailPolicy, formatRailStatus, statusLineVisible } from "../src/status.ts";
+import { showRailView, toggleRailView } from "../src/live-view.ts";
 import { testConfig } from "./helpers.ts";
 
-describe("guard status restriction labels", () => {
+describe("rail status restriction labels", () => {
   it("distinguishes unrestricted policies from disabled networking", () => {
     const config = testConfig((c) => {
       c.filesystem.enabled = false;
       c.network.enabled = false;
     });
-    const status = formatGuardStatus(createRuntimeState(), config);
+    const status = formatRailStatus(createRuntimeState(), config);
     assert.match(status, /Network: restrictions disabled \(unrestricted\)/);
     assert.match(status, /Filesystem restrictions: disabled \(unrestricted\)/);
     assert.doesNotMatch(status, /network off/i);
@@ -24,24 +27,35 @@ describe("guard status restriction labels", () => {
       c.network.allowedDomains = [];
       c.network.deniedDomains = ["*"];
     });
-    const status = formatGuardStatus(createRuntimeState(), config);
+    const status = formatRailStatus(createRuntimeState(), config);
     assert.match(status, /Network: blocked \(deny all\)/);
   });
 });
 
-describe("guard status session sections", () => {
-  it("shows session guidance entries and the exempt-read counter", () => {
+describe("rail status session sections", () => {
+  it("shows session guidance entries and the exempt counter", () => {
     const state = createRuntimeState();
     state.classifier.sessionGuidance = ["User allowed bash (npm run deploy) with comment: staging deploys are fine"];
     state.stats.classifierSkips = 3;
-    const status = formatGuardStatus(state, testConfig());
+    const status = formatRailStatus(state, testConfig());
     assert.match(status, /Session guidance/);
     assert.match(status, /staging deploys are fine/);
-    assert.match(status, /Exempt \(reads\/commands\): 3/);
+    assert.match(status, /Exempt \(no model consulted\): 3/);
+  });
+
+  it("summarizes per-class capability stats for classes seen this session", () => {
+    const state = createRuntimeState();
+    recordCapabilityDecision(state, "bash", { labels: ["off-machine-effects"], decision: "deny", disposition: "ask", reason: "denied", reviewed: true });
+    recordCapabilityOutcome(state.capabilities, ["off-machine-effects"], "ask-denied");
+    recordScreenVerdict(state.capabilities, ["off-machine-effects"], true);
+    const status = formatRailStatus(state, testConfig());
+    assert.match(status, /Capabilities seen this session/);
+    assert.match(status, /off-machine-effects\s+1 hit\(s\)\s+ask-denied 1\s+screen 1 tripped \/ 0 clean/);
+    assert.doesNotMatch(status, /read-project/, "classes never seen stay out of the session view");
   });
 });
 
-describe("guard status token cache reporting", () => {
+describe("rail status token cache reporting", () => {
   it("shows the hit rate when cache reads were reported", () => {
     const state = createRuntimeState();
     state.stats.classifierHits = 5;
@@ -49,7 +63,7 @@ describe("guard status token cache reporting", () => {
     state.stats.classifierCacheReadTokens = 400;
     state.stats.classifierCacheWriteTokens = 100;
     state.stats.classifierOutputTokens = 80;
-    const status = formatGuardStatus(state, testConfig());
+    const status = formatRailStatus(state, testConfig());
     assert.match(status, /Tokens: 1000 in \(40% cached\) \/ 80 out/);
   });
 
@@ -59,7 +73,7 @@ describe("guard status token cache reporting", () => {
     state.stats.classifierInputTokens = 200;
     state.stats.classifierCacheWriteTokens = 800;
     state.stats.classifierOutputTokens = 40;
-    const status = formatGuardStatus(state, testConfig());
+    const status = formatRailStatus(state, testConfig());
     assert.match(status, /Tokens: 1000 in \(0% cached, cache warming\) \/ 40 out/);
   });
 
@@ -68,41 +82,59 @@ describe("guard status token cache reporting", () => {
     state.stats.classifierHits = 4;
     state.stats.classifierInputTokens = 1200;
     state.stats.classifierOutputTokens = 90;
-    const status = formatGuardStatus(state, testConfig());
+    const status = formatRailStatus(state, testConfig());
     assert.match(status, /Tokens: 1200 in \(cache activity not reported\) \/ 90 out/);
     assert.doesNotMatch(status, /% cached/);
   });
 
   it("omits the cache parenthetical before any review has happened", () => {
-    const status = formatGuardStatus(createRuntimeState(), testConfig());
+    const status = formatRailStatus(createRuntimeState(), testConfig());
     assert.match(status, /Tokens: 0 in \/ 0 out/);
     assert.doesNotMatch(status, /cached|cache warming|cache activity/);
   });
 });
 
-describe("formatGuardPolicy", () => {
-  it("includes deterministic policy and every classifier rule list", () => {
+describe("formatRailPolicy", () => {
+  it("is the mechanism report: rules, not the disposition table", () => {
     const config = testConfig();
-    const policy = formatGuardPolicy(createRuntimeState(), config);
-    assert.match(policy, /# Pi Guard Policy/);
-    assert.match(policy, /Classifier allow rules \(\d+\)/);
-    assert.match(policy, /soft-deny rules \(ask without authorization\)/);
-    assert.match(policy, /hard-deny rules \(never allowed\)/);
-    assert.match(policy, /Local Validation/);
-    assert.match(policy, /Safety-Check Bypass/);
+    const policy = formatRailPolicy(createRuntimeState(), config);
+    assert.match(policy, /# Pi Rail Policy Rules/);
+    assert.match(policy, /\/rail policy opens it/);
+    assert.doesNotMatch(policy, /## Capability dispositions/, "the table lives on the interactive page now");
+    assert.match(policy, /## Filesystem/);
+    assert.match(policy, /## Network/);
+    assert.match(policy, /## Environment scrubbing/);
     assert.match(policy, /Config sources/);
+    assert.ok(policy.indexOf("## Filesystem") < policy.indexOf("## Config sources"));
   });
 
   it("notes that lists still route classifier exemptions when enforcement is off", () => {
     const config = testConfig((c) => {
       c.filesystem.enabled = false;
     });
-    const policy = formatGuardPolicy(createRuntimeState(), config);
+    const policy = formatRailPolicy(createRuntimeState(), config);
     assert.match(policy, /disabled \(lists still route classifier exemptions\)/);
+  });
+
+  it("annotates provenance: legend and per-entry list sources", () => {
+    const projectPath = path.join("/repo", CONFIG_DIR_NAME, "rail.json");
+    const afterGlobal = mergeConfig(testConfig(), { filesystem: { denyRead: ["/secret/global"] } }, globalRailConfigPath());
+    const config = mergeConfig(afterGlobal, { environment: { allow: ["PATH", "HOME"] } }, projectPath);
+    const policy = formatRailPolicy(createRuntimeState(), config);
+    assert.match(policy, /unmarked entries are built-in defaults/);
+    assert.match(policy, /• \/secret\/global \[global\]/);
+    assert.match(policy, /Allow: PATH, HOME \[project\]/);
+    assert.doesNotMatch(policy, /\[default\]/, "default entries stay unmarked");
+  });
+
+  it("no longer reports legacy classifier rule tiers", () => {
+    const policy = formatRailPolicy(createRuntimeState(), testConfig());
+    assert.doesNotMatch(policy, /Legacy/i);
+    assert.doesNotMatch(policy, /soft-deny|hard-deny/i);
   });
 });
 
-describe("guard live views over RPC", () => {
+describe("rail live views over RPC", () => {
   function widgetCtx() {
     const calls: Array<{ key: string; lines: string[] | undefined }> = [];
     const ctx = {
@@ -117,8 +149,8 @@ describe("guard live views over RPC", () => {
     const { ctx, calls } = widgetCtx();
     const state = createRuntimeState();
     let content = ["line one"];
-    toggleGuardView(ctx, state, "status", () => content);
-    assert.deepEqual(calls, [{ key: "guard-status", lines: ["line one"] }]);
+    toggleRailView(ctx, state, "status", () => content);
+    assert.deepEqual(calls, [{ key: "rail-status", lines: ["line one"] }]);
     assert.equal(state.liveView?.kind, "status");
 
     state.liveView?.refresh();
@@ -126,32 +158,32 @@ describe("guard live views over RPC", () => {
 
     content = ["line two"];
     state.liveView?.refresh();
-    assert.deepEqual(calls.at(-1), { key: "guard-status", lines: ["line two"] });
+    assert.deepEqual(calls.at(-1), { key: "rail-status", lines: ["line two"] });
     assert.equal(calls.length, 2);
 
-    toggleGuardView(ctx, state, "status", () => content);
-    assert.deepEqual(calls.at(-1), { key: "guard-status", lines: undefined });
+    toggleRailView(ctx, state, "status", () => content);
+    assert.deepEqual(calls.at(-1), { key: "rail-status", lines: undefined });
     assert.equal(state.liveView, undefined);
   });
 
   it("replaces a different-kind view instead of stacking", () => {
     const { ctx, calls } = widgetCtx();
     const state = createRuntimeState();
-    toggleGuardView(ctx, state, "status", () => ["status"]);
-    toggleGuardView(ctx, state, "policy", () => ["policy"]);
+    toggleRailView(ctx, state, "status", () => ["status"]);
+    toggleRailView(ctx, state, "policy", () => ["policy"]);
     assert.deepEqual(
       calls.map((c) => `${c.key}:${c.lines ? "set" : "clear"}`),
-      ["guard-status:set", "guard-status:clear", "guard-policy:set"],
+      ["rail-status:set", "rail-status:clear", "rail-policy:set"],
     );
     assert.equal(state.liveView?.kind, "policy");
   });
 
-  it("showGuardView replaces a same-kind report instead of toggling it closed", () => {
+  it("showRailView replaces a same-kind report instead of toggling it closed", () => {
     const { ctx, calls } = widgetCtx();
     const state = createRuntimeState();
-    showGuardView(ctx, state, "report", () => ["first critique"]);
-    showGuardView(ctx, state, "report", () => ["second critique"]);
-    assert.deepEqual(calls.at(-1), { key: "guard-report", lines: ["second critique"] });
+    showRailView(ctx, state, "report", () => ["first critique"]);
+    showRailView(ctx, state, "report", () => ["second critique"]);
+    assert.deepEqual(calls.at(-1), { key: "rail-report", lines: ["second critique"] });
     assert.equal(state.liveView?.kind, "report");
   });
 
@@ -162,7 +194,7 @@ describe("guard live views over RPC", () => {
     const original = console.error;
     console.error = (message: string) => void errors.push(message);
     try {
-      showGuardView(ctx, state, "report", () => ["secret rules"]);
+      showRailView(ctx, state, "report", () => ["secret rules"]);
     } finally {
       console.error = original;
     }
@@ -190,11 +222,11 @@ describe("statusLineVisible", () => {
     assert.equal(statusLineVisible("never", state), false);
   });
 
-  it("auto mode hides a healthy quiet guard", () => {
+  it("auto mode hides a healthy quiet rail", () => {
     assert.equal(statusLineVisible("auto", enforcingState()), false);
   });
 
-  it("auto mode shows when the guard is disabled or erroring", () => {
+  it("auto mode shows when the rail is disabled or erroring", () => {
     const disabled = enforcingState();
     disabled.enabled = false;
     assert.equal(statusLineVisible("auto", disabled), true);

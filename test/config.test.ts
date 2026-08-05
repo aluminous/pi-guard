@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { describe, it } from "node:test";
-import { DEFAULT_CONFIG, mergeConfig } from "../src/config.ts";
-import { testConfig } from "./helpers.ts";
+import { CONFIG_DIR_NAME, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  DEFAULT_CONFIG,
+  globalRailConfigPath,
+  loadConfig,
+  mergeConfig,
+  resolveConfigFile,
+  type RailConfig,
+} from "../src/config.ts";
+import { getEffectiveDisposition } from "../src/capabilities.ts";
+import { makeFixtureDir, testConfig, withTempAgentDir } from "./helpers.ts";
 
 describe("mergeConfig", () => {
   it("overrides scalar and nested fields and records the source", () => {
@@ -65,59 +76,257 @@ describe("mergeConfig", () => {
     assert.deepEqual(afterProject.sources, ["defaults", "global.json", "project.json"]);
   });
 
-  it("merges classifier rules by name: override in place, delete with empty body, append new", () => {
+  it("loads a config carrying retired classifier.rules with one diagnostic and no error", () => {
     const merged = mergeConfig(
       testConfig(),
-      {
-        classifier: {
-          rules: {
-            soft_deny: [
-              "Git Push to Default Branch:",
-              "Production Deploy: deploying to the staging cluster is routine; only prod-* deploys need approval.",
-              "My Custom Rule: never touch the vendor directory.",
-            ],
-          },
-        },
-      },
+      { classifier: { enabled: true, rules: { allow: ["My Rule: fine."], soft_deny: [], hard_deny: ["Whatever:"] } } } as Partial<RailConfig>,
       "test.json",
     );
-    const softDeny = merged.classifier.rules.soft_deny;
-    assert.equal(softDeny.some((rule) => rule.startsWith("Git Push to Default Branch:")), false);
-    const deployIndex = softDeny.findIndex((rule) => rule.startsWith("Production Deploy:"));
-    assert.equal(softDeny[deployIndex], "Production Deploy: deploying to the staging cluster is routine; only prod-* deploys need approval.");
-    assert.equal(deployIndex, DEFAULT_CONFIG.classifier.rules.soft_deny.findIndex((rule) => rule.startsWith("Production Deploy:")) - 1, "override keeps position (one earlier rule was deleted)");
-    assert.equal(softDeny.at(-1), "My Custom Rule: never touch the vendor directory.");
-    assert.equal(merged.classifier.rules.allow.length, DEFAULT_CONFIG.classifier.rules.allow.length, "untouched lists keep defaults");
-    assert.deepEqual(merged.diagnostics, []);
-  });
-
-  it("warns when deleting an unknown rule name", () => {
-    const merged = mergeConfig(testConfig(), { classifier: { rules: { allow: ["No Such Rule:"] } } }, "test.json");
     assert.equal(merged.diagnostics.length, 1);
-    assert.match(merged.diagnostics[0]!, /cannot delete unknown rule "No Such Rule"/);
-  });
-
-  it("replaces rule lists wholesale when replace is true", () => {
-    const merged = mergeConfig(
-      testConfig(),
-      { classifier: { rules: { replace: true, allow: ["Only Rule: nothing else."], soft_deny: [] } } },
-      "test.json",
-    );
-    assert.deepEqual(merged.classifier.rules.allow, ["Only Rule: nothing else."]);
-    assert.deepEqual(merged.classifier.rules.soft_deny, []);
-    assert.deepEqual(merged.classifier.rules.hard_deny, DEFAULT_CONFIG.classifier.rules.hard_deny, "omitted lists keep defaults even with replace");
-  });
-
-  it("lets a project layer re-override a global rule override by name", () => {
-    const afterGlobal = mergeConfig(testConfig(), { classifier: { rules: { hard_deny: ["Data Exfiltration: global version."] } } }, "global.json");
-    const afterProject = mergeConfig(afterGlobal, { classifier: { rules: { hard_deny: ["Data Exfiltration: project version."] } } }, "project.json");
-    const matches = afterProject.classifier.rules.hard_deny.filter((rule) => rule.startsWith("Data Exfiltration:"));
-    assert.deepEqual(matches, ["Data Exfiltration: project version."]);
+    assert.match(merged.diagnostics[0]!, /Ignoring test\.json\.classifier\.rules/);
+    assert.match(merged.diagnostics[0]!, /disposition table/);
+    assert.match(merged.diagnostics[0]!, /capabilities\.definitions/);
+    // The rest of the classifier block still applies, and nothing rule-shaped survives.
+    assert.equal(merged.classifier.enabled, true);
+    assert.equal((merged.classifier as unknown as Record<string, unknown>).rules, undefined);
   });
 
   it("does not mutate DEFAULT_CONFIG through merges", () => {
     const before = structuredClone(DEFAULT_CONFIG);
-    mergeConfig(testConfig(), { filesystem: { denyRead: ["/mutated"] }, classifier: { rules: { allow: ["mutated"] } } }, "test.json");
+    mergeConfig(testConfig(), { filesystem: { denyRead: ["/mutated"] } }, "test.json");
     assert.deepEqual(DEFAULT_CONFIG, before);
+  });
+});
+
+describe("config provenance", () => {
+  it("seeds every default list entry with source \"default\"", () => {
+    const config = testConfig();
+    assert.equal(config.provenance.lists["filesystem.denyRead"]["~/.ssh"], "default");
+    assert.equal(config.provenance.lists["environment.allow"]["PATH"], "default");
+    assert.equal(config.provenance.lists["commands.allow"]["grep *"], "default");
+  });
+
+  it("labels replaced arrays with the writing source, entry by entry", () => {
+    const merged = mergeConfig(testConfig(), { filesystem: { denyRead: ["/only/this"] }, environment: { unset: ["MY_SECRET"] } }, "global.json");
+    assert.deepEqual(merged.provenance.lists["filesystem.denyRead"], { "/only/this": "global.json" });
+    assert.deepEqual(merged.provenance.lists["environment.unset"], { MY_SECRET: "global.json" });
+    assert.equal(merged.provenance.lists["filesystem.allowWrite"]["."], "default", "untouched lists keep default provenance");
+  });
+
+  it("tracks last-writer-wins across layered global then project merges", () => {
+    const afterGlobal = mergeConfig(testConfig(), { network: { allowedDomains: ["global.example"] } }, "global.json");
+    assert.deepEqual(afterGlobal.provenance.lists["network.allowedDomains"], { "global.example": "global.json" });
+    const afterProject = mergeConfig(afterGlobal, { network: { allowedDomains: ["project.example"] } }, "project.json");
+    assert.deepEqual(afterProject.provenance.lists["network.allowedDomains"], { "project.example": "project.json" });
+  });
+});
+
+describe("capabilities config", () => {
+  const globalPath = globalRailConfigPath();
+  const projectPath = "/repo/.pi/rail.json";
+
+  it("parses custom classes, defaulting name to the id and disposition to ask", () => {
+    const config = mergeConfig(
+      testConfig(),
+      { capabilities: { classes: [{ id: "touches-customer-data", definition: "Customer records." }] } },
+      globalPath,
+    );
+    assert.deepEqual(config.capabilities.classes, [
+      { id: "touches-customer-data", name: "touches-customer-data", definition: "Customer records.", default: "ask" },
+    ]);
+    assert.equal(config.provenance.capabilityClasses["touches-customer-data"], globalPath);
+  });
+
+  it("skips invalid class entries with a diagnostic and still loads the rest", () => {
+    const config = mergeConfig(
+      testConfig(),
+      {
+        capabilities: {
+          classes: [
+            { id: "Not Kebab", definition: "x" },
+            { id: "read-project", definition: "shadowing a built-in" },
+            { id: "no-definition" },
+            { id: "bad-disposition", definition: "x", disposition: "maybe" },
+            { id: "good-one", definition: "A real class." },
+          ],
+        },
+      },
+      globalPath,
+    );
+    assert.deepEqual(config.capabilities.classes.map((entry) => entry.id), ["good-one"]);
+    const diagnostics = config.diagnostics.join("\n");
+    assert.match(diagnostics, /classes\[0\]: id must be kebab-case/);
+    assert.match(diagnostics, /classes\[1\]: "read-project" is a built-in class/);
+    assert.match(diagnostics, /classes\[2\]: definition must be a non-empty string/);
+    assert.match(diagnostics, /classes\[3\]: disposition must be/);
+  });
+
+  it("merges classes by id across layers, keeping position so the namer prefix does not shuffle", () => {
+    const base = mergeConfig(
+      testConfig(),
+      {
+        capabilities: {
+          classes: [
+            { id: "alpha", definition: "Global alpha." },
+            { id: "beta", definition: "Global beta." },
+          ],
+        },
+      },
+      globalPath,
+    );
+    const merged = mergeConfig(base, { capabilities: { classes: [{ id: "alpha", definition: "Project alpha." }] } }, projectPath);
+    assert.deepEqual(merged.capabilities.classes.map((entry) => entry.id), ["alpha", "beta"], "position is preserved");
+    assert.equal(merged.capabilities.classes[0]!.definition, "Project alpha.", "project wins per id");
+    assert.equal(merged.provenance.capabilityClasses.alpha, projectPath);
+    assert.equal(merged.provenance.capabilityClasses.beta, globalPath, "untouched classes keep their source");
+  });
+
+  it("accepts built-in definition overrides and rejects unknown keys", () => {
+    const config = mergeConfig(
+      testConfig(),
+      { capabilities: { definitions: { "read-project": "New wording.", "made-up": "nope" } } },
+      globalPath,
+    );
+    assert.deepEqual(config.capabilities.definitions, { "read-project": "New wording." });
+    assert.equal(config.provenance.capabilityDefinitions["read-project"], globalPath);
+    assert.match(config.diagnostics.join("\n"), /definitions\.made-up: not a built-in capability class/);
+  });
+
+  it("lets a config set a disposition for a class it defines in the same file", () => {
+    const config = mergeConfig(
+      testConfig(),
+      {
+        capabilities: { classes: [{ id: "touches-customer-data", definition: "Customer records." }] },
+        dispositions: { "touches-customer-data": "deny" },
+      },
+      globalPath,
+    );
+    assert.equal(config.dispositions["touches-customer-data"], "deny");
+    assert.equal(getEffectiveDisposition(config, undefined, "touches-customer-data").disposition, "deny");
+  });
+
+  it("still rejects a disposition for a class nobody declared", () => {
+    const config = mergeConfig(testConfig(), { dispositions: { "never-declared": "deny" } }, globalPath);
+    assert.match(config.diagnostics.join("\n"), /dispositions\.never-declared: unknown capability class/);
+  });
+});
+
+// The pi-guard → pi-rail compatibility seam. rail.json is the name now, but a
+// user whose live config is still guard.json must keep working — and must not
+// end up with half their settings in each file.
+describe("rail.json / legacy guard.json resolution", () => {
+  const writeJson = (dir: string, name: string, body: unknown) => {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, name), JSON.stringify(body), "utf8");
+  };
+
+  it("prefers rail.json, falls back to guard.json, and defaults to rail.json when neither exists", () => {
+    const fixture = makeFixtureDir();
+    try {
+      assert.deepEqual(resolveConfigFile(fixture.dir), { path: path.join(fixture.dir, "rail.json"), legacy: false });
+
+      writeJson(fixture.dir, "guard.json", {});
+      assert.deepEqual(resolveConfigFile(fixture.dir), { path: path.join(fixture.dir, "guard.json"), legacy: true });
+
+      writeJson(fixture.dir, "rail.json", {});
+      assert.deepEqual(resolveConfigFile(fixture.dir), {
+        path: path.join(fixture.dir, "rail.json"),
+        legacy: false,
+        ignoredLegacyPath: path.join(fixture.dir, "guard.json"),
+      });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  /** loadConfig against a throwaway agent dir and project dir; both layers start empty. */
+  function withLayers(fn: (layers: { globalDir: string; projectDir: string; load: () => ReturnType<typeof loadConfig> }) => void): void {
+    withTempAgentDir((agentDir) => {
+      const project = makeFixtureDir();
+      try {
+        const ctx = { cwd: project.dir, isProjectTrusted: () => true } as unknown as ExtensionContext;
+        fn({
+          globalDir: path.join(agentDir, "extensions"),
+          projectDir: path.join(project.dir, CONFIG_DIR_NAME),
+          load: () => loadConfig(ctx),
+        });
+      } finally {
+        project.cleanup();
+      }
+    });
+  }
+
+  it("loads a legacy global guard.json exactly as before, with one advisory", () => {
+    withLayers(({ globalDir, load }) => {
+      writeJson(globalDir, "guard.json", { backend: "none", network: { enabled: false } });
+      const config = load();
+      assert.equal(config.backend, "none");
+      assert.equal(config.network.enabled, false);
+      assert.equal(config.sources.at(-1), path.join(globalDir, "guard.json"));
+      const advisory = config.diagnostics.filter((line) => line.includes("guard.json"));
+      assert.equal(advisory.length, 1);
+      assert.match(advisory[0]!, /Loaded legacy .*guard\.json/);
+      assert.match(advisory[0]!, /rename it to rail\.json/);
+    });
+  });
+
+  it("loads a global rail.json with no advisory at all", () => {
+    withLayers(({ globalDir, load }) => {
+      writeJson(globalDir, "rail.json", { backend: "none" });
+      const config = load();
+      assert.equal(config.backend, "none");
+      assert.deepEqual(config.diagnostics, []);
+    });
+  });
+
+  it("lets rail.json win over a guard.json beside it and says the guard.json was ignored", () => {
+    withLayers(({ globalDir, load }) => {
+      writeJson(globalDir, "guard.json", { backend: "none", statusLine: "never" });
+      writeJson(globalDir, "rail.json", { backend: "seatbelt" });
+      const config = load();
+      assert.equal(config.backend, "seatbelt");
+      assert.equal(config.statusLine, "always", "nothing from the shadowed guard.json leaks in");
+      assert.equal(config.sources.at(-1), path.join(globalDir, "rail.json"));
+      const advisory = config.diagnostics.filter((line) => line.includes("guard.json"));
+      assert.equal(advisory.length, 1);
+      assert.match(advisory[0]!, /Ignored .*guard\.json/);
+      assert.match(advisory[0]!, /rail\.json takes precedence/);
+    });
+  });
+
+  it("applies the same fallback and precedence to the project layer", () => {
+    withLayers(({ projectDir, load }) => {
+      writeJson(projectDir, "guard.json", { statusLine: "never" });
+      const legacy = load();
+      assert.equal(legacy.statusLine, "never");
+      assert.match(legacy.diagnostics.join("\n"), /Loaded legacy .*guard\.json/);
+
+      writeJson(projectDir, "rail.json", { statusLine: "auto" });
+      const both = load();
+      assert.equal(both.statusLine, "auto");
+      assert.match(both.diagnostics.join("\n"), /Ignored .*guard\.json/);
+    });
+  });
+
+  it("layers a legacy global guard.json under a project rail.json", () => {
+    withLayers(({ globalDir, projectDir, load }) => {
+      writeJson(globalDir, "guard.json", { backend: "none", statusLine: "never" });
+      writeJson(projectDir, "rail.json", { statusLine: "auto" });
+      const config = load();
+      assert.equal(config.backend, "none", "the legacy global layer still applies");
+      assert.equal(config.statusLine, "auto", "the project layer still wins");
+      assert.deepEqual(config.sources, ["defaults", path.join(globalDir, "guard.json"), path.join(projectDir, "rail.json")]);
+    });
+  });
+
+  it("resolves the global path to whichever file exists", () => {
+    withTempAgentDir((agentDir) => {
+      const globalDir = path.join(agentDir, "extensions");
+      assert.equal(globalRailConfigPath(), path.join(globalDir, "rail.json"));
+      writeJson(globalDir, "guard.json", {});
+      assert.equal(globalRailConfigPath(), path.join(globalDir, "guard.json"));
+      writeJson(globalDir, "rail.json", {});
+      assert.equal(globalRailConfigPath(), path.join(globalDir, "rail.json"));
+    });
   });
 });

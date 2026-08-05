@@ -1,12 +1,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { EffectivePolicy } from "./backends/types.ts";
+import { capabilityRegistry, usedCapabilityStats } from "./capabilities.ts";
 import { classifierEnabled, resolveClassifierModel } from "./classifier.ts";
-import type { ResolvedGuardConfig, StatusLineMode } from "./config.ts";
+import { configSourceLabel, type ProvenanceListKey, type ResolvedRailConfig, type StatusLineMode } from "./config.ts";
 import { getPersistentConfigPath } from "./persistent-settings.ts";
-import type { GuardEvent, GuardStats, RuntimeState } from "./state.ts";
+import { resolveConfigPath } from "./policy.ts";
+import type { RailEvent, RailStats, RuntimeState } from "./state.ts";
 
-function decisionLabel(decision: GuardEvent["decision"]): string {
+function decisionLabel(decision: RailEvent["decision"]): string {
   if (decision === "allow") return "ALLOW";
   if (decision === "deny") return "DENY";
   if (decision === "block") return "BLOCK";
@@ -40,7 +42,7 @@ function formatCompactTokens(tokens: number): string {
  * cache activity at all it reads "cache activity not reported", and before
  * any review the parenthetical is omitted.
  */
-function formatTokensWithCache(stats: GuardStats): string {
+function formatTokensWithCache(stats: RailStats): string {
   const totalPrompt = stats.classifierInputTokens + stats.classifierCacheReadTokens + stats.classifierCacheWriteTokens;
   const cachePart =
     stats.classifierCacheReadTokens > 0
@@ -74,13 +76,13 @@ function sandboxFidelityLines(effective: EffectivePolicy | undefined, max: numbe
   ];
 }
 
-export function networkPolicyLabel(config: ResolvedGuardConfig): string {
+export function networkPolicyLabel(config: ResolvedRailConfig): string {
   if (!config.network.enabled) return "network unrestricted";
   return config.network.allowedDomains.length > 0 ? `${config.network.allowedDomains.length} domains` : "network blocked";
 }
 
 /** Compact classifier label: "classifier off", "auto (provider/id)", "provider/id", or "model unavailable (spec)". */
-export function classifierModelLabel(ctx: ExtensionContext, config: ResolvedGuardConfig | undefined, state: RuntimeState): string {
+export function classifierModelLabel(ctx: ExtensionContext, config: ResolvedRailConfig | undefined, state: RuntimeState): string {
   if (!config || !classifierEnabled(config, state.classifier)) return "classifier off";
   const spec = state.classifier.modelOverride ?? config.classifier.model;
   const model = resolveClassifierModel(ctx, config, state.classifier);
@@ -88,17 +90,17 @@ export function classifierModelLabel(ctx: ExtensionContext, config: ResolvedGuar
   return spec === "auto" ? `auto (${model.provider}/${model.id})` : `${model.provider}/${model.id}`;
 }
 
-/** In "auto" mode the statusline appears only when something needs attention: the guard is off or erroring, or a call was denied/blocked since the last user message. */
+/** In "auto" mode the statusline appears only when something needs attention: the rail is off or erroring, or a call was denied/blocked since the last user message. */
 export function statusLineVisible(mode: StatusLineMode, state: RuntimeState): boolean {
   if (mode === "never") return false;
   if (mode === "always") return true;
   return !state.enabled || state.lastError !== undefined || state.stats.turnClassifierDenials > 0 || state.stats.turnBlocked > 0;
 }
 
-export function updateGuardStatus(ctx: ExtensionContext, state: RuntimeState): void {
+export function updateRailStatus(ctx: ExtensionContext, state: RuntimeState): void {
   state.liveView?.refresh();
   if (!statusLineVisible(state.config?.statusLine ?? "always", state)) {
-    ctx.ui.setStatus("guard", undefined);
+    ctx.ui.setStatus("rail", undefined);
     return;
   }
   const theme = ctx.ui.theme;
@@ -115,21 +117,35 @@ export function updateGuardStatus(ctx: ExtensionContext, state: RuntimeState): v
     `↓${formatCompactTokens(stats.classifierOutputTokens)}`,
   ].join(" ");
   if (state.lastError) {
-    ctx.ui.setStatus("guard", error(`Guard: error ${compact}`));
+    ctx.ui.setStatus("rail", error(`Rail: error ${compact}`));
     return;
   }
   if (!state.enabled) {
     const label = state.disabledForNextAgent && !ctx.isIdle() ? "off this turn" : state.disabledForNextAgent ? "off next turn" : "disabled";
-    ctx.ui.setStatus("guard", warning(`Guard: ${label} ${compact}`));
+    ctx.ui.setStatus("rail", warning(`Rail: ${label} ${compact}`));
     return;
   }
   const backend = `${state.backend?.name ?? config?.backend ?? "unknown"}${state.readOnly ? " RO" : ""}`;
   const network = config ? networkPolicyLabel(config) : "network unknown";
   const hasImportantStats = stats.classifierDenials > 0 || stats.blocked > 0 || stats.errors > 0;
-  ctx.ui.setStatus("guard", `${muted(`Guard: ${backend}, ${network}, ${classifierModelLabel(ctx, config, state)} `)}${hasImportantStats ? warning(compact) : muted(compact)}`);
+  ctx.ui.setStatus("rail", `${muted(`Rail: ${backend}, ${network}, ${classifierModelLabel(ctx, config, state)} `)}${hasImportantStats ? warning(compact) : muted(compact)}`);
 }
 
-export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConfig): string {
+/** Per-class hits and outcomes, for classes actually seen; the editable table is the /rail policy page. */
+function capabilityStatLines(state: RuntimeState): string[] {
+  const used = usedCapabilityStats(state.capabilities, capabilityRegistry(state.config, state.capabilities));
+  if (used.length === 0) return ["  (none yet)"];
+  return used.map(({ id, stats }) => {
+    const outcomes = Object.entries(stats.outcomes)
+      .filter(([, count]) => count > 0)
+      .map(([name, count]) => `${name} ${count}`)
+      .join(", ");
+    const screen = stats.screenTripped + stats.screenClean > 0 ? `  screen ${stats.screenTripped} tripped / ${stats.screenClean} clean` : "";
+    return `  ${id.padEnd(21)} ${stats.hits} hit(s)${outcomes ? `  ${outcomes}` : ""}${screen}`;
+  });
+}
+
+export function formatRailStatus(state: RuntimeState, config: ResolvedRailConfig): string {
   const classifierOn = classifierEnabled(config, state.classifier);
   const health = state.enabled && state.initialized ? "enforcing" : state.enabled ? "enabled but not initialized" : state.disabledForNextAgent ? "disabled for next agent turn" : "disabled";
   const effective = state.backend?.describeEffectivePolicy(config);
@@ -153,7 +169,7 @@ export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConf
       ]
     : ["  Filesystem restrictions: disabled (unrestricted)"];
   const lines = [
-    "# Pi Guard",
+    "# Pi Rail",
     "",
     "## Status",
     `  ${health}`,
@@ -162,17 +178,21 @@ export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConf
     `  ${network}`,
     state.lastError ? `  Last error: ${state.lastError}` : undefined,
     "",
-    "## Classifier",
-    `  ${classifierOn ? "enabled" : "disabled"}`,
-    `  Model: ${state.classifier.modelOverride ?? config.classifier.model}`,
+    "## Reviewers",
+    `  Namer: ${classifierOn ? "enabled" : "disabled"}`,
+    `  Namer model: ${state.classifier.modelOverride ?? config.classifier.model}`,
+    `  Judge model: ${config.classifier.judgeModel}`,
     `  Fail closed: ${config.classifier.failClosed ? "yes" : "no"}`,
     `  Telemetry: ${config.classifier.telemetry}`,
     state.classifier.lastError ? `  Last error: ${state.classifier.lastError}` : undefined,
     "",
     "## Decisions this session",
     `  Reviewed: ${state.stats.reviewed}  Allowed: ${state.stats.allowed}  Denied: ${state.stats.denied}  Asked: ${state.stats.asked}`,
-    `  Policy blocks: ${state.stats.blocked}  Exempt (reads/commands): ${state.stats.classifierSkips}  Errors: ${state.stats.errors}`,
+    `  Policy blocks: ${state.stats.blocked}  Exempt (no model consulted): ${state.stats.classifierSkips}  Errors: ${state.stats.errors}`,
     `  Tokens: ${formatTokensWithCache(state.stats)}`,
+    "",
+    "## Capabilities seen this session",
+    ...capabilityStatLines(state),
     "",
     "## Session approvals",
     `  Read paths: ${state.approvals.read.length > 0 ? state.approvals.read.join(", ") : "(none)"}`,
@@ -185,7 +205,7 @@ export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConf
     "",
     "## Recent decisions",
     ...(state.recent.length > 0
-      ? state.recent.map((event) => `  [${decisionLabel(event.decision)}] ${event.toolName}${event.risk ? `/${event.risk}` : ""} - ${event.reason} (${formatAge(event.at)})`)
+      ? state.recent.map((event) => `  [${decisionLabel(event.decision)}] ${event.toolName}${event.capabilities?.length ? ` (${event.capabilities.join(", ")})` : ""} - ${event.reason} (${formatAge(event.at)})`)
       : ["  (none yet)"]),
     "",
     "## Policy summary",
@@ -201,13 +221,13 @@ export function formatGuardStatus(state: RuntimeState, config: ResolvedGuardConf
   return lines.join("\n");
 }
 
-interface GuardLineTheme {
+interface RailLineTheme {
   fg(name: string, text: string): string;
   bold(text: string): string;
 }
 
-/** Styles one line of a guard report (status or policy) for terminal display. */
-export function styleGuardLine(line: string, theme: GuardLineTheme): string {
+/** Styles one line of a rail report (status or policy) for terminal display. */
+export function styleRailLine(line: string, theme: RailLineTheme): string {
   if (line.startsWith("# ")) return theme.fg("accent", theme.bold(line.slice(2)));
   if (line.startsWith("## ")) return theme.fg("toolTitle", theme.bold(`─ ${line.slice(3)} `));
   if (line.includes("[ALLOW]")) return theme.fg("success", line);
@@ -219,65 +239,83 @@ export function styleGuardLine(line: string, theme: GuardLineTheme): string {
 }
 
 /**
- * Renders pi-guard custom messages in the transcript. Nothing posts new
- * guard messages anymore (reports were dropped from the conversation because
+ * Renders pi-rail custom messages in the transcript. Nothing posts new
+ * rail messages anymore (reports were dropped from the conversation because
  * custom messages enter agent context); this stays registered so sessions
- * recorded before that change still render their guard reports.
+ * recorded before that change still render their reports. "pi-guard" is the
+ * renderer name those older sessions recorded, so it is registered too — the
+ * name is a lookup key baked into session files, not something the rename can
+ * reach back and change.
  */
-export function registerGuardMessageRenderer(pi: ExtensionAPI): void {
-  pi.registerMessageRenderer("pi-guard", (message, _options, theme) => {
+export function registerRailMessageRenderer(pi: ExtensionAPI): void {
+  const render = (message: { content?: unknown }, _options: unknown, theme: RailLineTheme) => {
     const raw = String(message.content ?? "");
     const rendered = raw
       .split("\n")
-      .map((line) => styleGuardLine(line, theme))
+      .map((line) => styleRailLine(line, theme))
       .join("\n");
-    return new Text(theme.fg("accent", theme.bold("[guard]")) + "\n" + rendered, 0, 0);
-  });
+    return new Text(theme.fg("accent", theme.bold("[rail]")) + "\n" + rendered, 0, 0);
+  };
+  pi.registerMessageRenderer("pi-rail", render);
+  pi.registerMessageRenderer("pi-guard", render);
 }
 
-/** The resolved policy view for /guard policy: deterministic rules plus classifier rules. */
-export function formatGuardPolicy(state: RuntimeState, config: ResolvedGuardConfig): string {
+/** The resolved mechanism view for /rail policy rules: the deterministic filesystem/network/environment/command policy, provenance-annotated. */
+export function formatRailPolicy(state: RuntimeState, config: ResolvedRailConfig): string {
   const effective = state.backend?.describeEffectivePolicy(config);
-  const rules = config.classifier.rules;
-  const ruleSection = (title: string, entries: string[]) => [
-    `## ${title} (${entries.length})`,
-    ...(entries.length > 0 ? entries.map((rule) => `  • ${rule}`) : ["  (none)"]),
-    "",
-  ];
+
+  // Effective (backend) lists hold resolved literals while provenance is keyed
+  // by config pattern, so each list's lookup also indexes the resolved form.
+  const listAnnotator = (listKey: ProvenanceListKey, resolvePaths: boolean) => {
+    const lookup = new Map<string, string>();
+    for (const [entry, source] of Object.entries(config.provenance.lists[listKey])) {
+      lookup.set(entry, source);
+      if (resolvePaths) lookup.set(resolveConfigPath(process.cwd(), entry), source);
+    }
+    return (entry: string) => {
+      const source = lookup.get(entry);
+      return !source || source === "default" ? entry : `${entry} [${configSourceLabel(source)}]`;
+    };
+  };
+  /** One trailing suffix for inline (comma-joined) lists — wholesale replacement makes the source uniform. */
+  const inlineListSuffix = (listKey: ProvenanceListKey) => {
+    const sources = [...new Set(Object.values(config.provenance.lists[listKey]))].filter((source) => source !== "default");
+    return sources.length === 0 ? "" : ` [${sources.map(configSourceLabel).join(", ")}]`;
+  };
+  const annotateAll = (listKey: ProvenanceListKey, entries: string[], resolvePaths = true) => entries.map(listAnnotator(listKey, resolvePaths));
+
   const lines = [
-    "# Pi Guard Policy",
+    "# Pi Rail Policy Rules",
+    "  unmarked entries are built-in defaults; [global]/[project] name the config that set them",
+    "  the decision policy itself is the disposition table — /rail policy opens it",
     "",
     "## Filesystem",
     `  Restrictions: ${config.filesystem.enabled ? "enabled" : "disabled (lists still route classifier exemptions)"}`,
     `  Read mode: ${config.filesystem.allowRead.length === 0 ? "blacklist (all paths except deny read)" : "whitelist"}`,
     ...(config.filesystem.allowRead.length > 0
-      ? ["  Allow read:", ...bulletList(effective?.filesystem.allowRead ?? config.filesystem.allowRead, Number.POSITIVE_INFINITY)]
+      ? ["  Allow read:", ...bulletList(annotateAll("filesystem.allowRead", effective?.filesystem.allowRead ?? config.filesystem.allowRead), Number.POSITIVE_INFINITY)]
       : ["  Allow read: (all)"]),
     "  Allow write:",
-    ...bulletList(effective?.filesystem.allowWrite ?? config.filesystem.allowWrite, Number.POSITIVE_INFINITY),
+    ...bulletList(annotateAll("filesystem.allowWrite", effective?.filesystem.allowWrite ?? config.filesystem.allowWrite), Number.POSITIVE_INFINITY),
     "  Deny read:",
-    ...bulletList(effective?.filesystem.denyRead ?? config.filesystem.denyRead, Number.POSITIVE_INFINITY),
+    ...bulletList(annotateAll("filesystem.denyRead", effective?.filesystem.denyRead ?? config.filesystem.denyRead), Number.POSITIVE_INFINITY),
     "  Deny write:",
-    ...bulletList(effective?.filesystem.denyWrite ?? config.filesystem.denyWrite, Number.POSITIVE_INFINITY),
+    ...bulletList(annotateAll("filesystem.denyWrite", effective?.filesystem.denyWrite ?? config.filesystem.denyWrite), Number.POSITIVE_INFINITY),
     ...sandboxFidelityLines(effective, Number.POSITIVE_INFINITY),
     "",
     "## Network",
     `  Restrictions: ${config.network.enabled ? "enabled" : "disabled (unrestricted)"}`,
     "  Allowed domains:",
-    ...bulletList(config.network.enabled ? (effective?.network.allowedDomains ?? config.network.allowedDomains) : [], Number.POSITIVE_INFINITY),
-    `  Denied domains: ${formatArray(config.network.deniedDomains)}`,
+    ...bulletList(annotateAll("network.allowedDomains", config.network.enabled ? (effective?.network.allowedDomains ?? config.network.allowedDomains) : [], false), Number.POSITIVE_INFINITY),
+    `  Denied domains: ${formatArray(config.network.deniedDomains)}${inlineListSuffix("network.deniedDomains")}`,
     "",
     "## Environment scrubbing",
-    `  Allow: ${formatArray(config.environment.allow)}`,
-    `  Unset: ${formatArray(config.environment.unset)}`,
+    `  Allow: ${formatArray(config.environment.allow)}${inlineListSuffix("environment.allow")}`,
+    `  Unset: ${formatArray(config.environment.unset)}${inlineListSuffix("environment.unset")}`,
     "",
-    "## Classifier",
-    `  ${classifierEnabled(config, state.classifier) ? "enabled" : "disabled"} · model ${state.classifier.modelOverride ?? config.classifier.model} · fail ${config.classifier.failClosed ? "closed" : "open"}`,
+    "## Reviewers",
+    `  namer ${classifierEnabled(config, state.classifier) ? "enabled" : "disabled"} · model ${state.classifier.modelOverride ?? config.classifier.model} · judge model ${config.classifier.judgeModel} · fail ${config.classifier.failClosed ? "closed" : "open"}`,
     "",
-    ...ruleSection("Classifier allow rules", rules.allow),
-    ...ruleSection("Classifier soft-deny rules (ask without authorization)", rules.soft_deny),
-    ...ruleSection("Classifier hard-deny rules (never allowed)", rules.hard_deny),
-    ...ruleSection("Classifier environment assumptions", rules.environment),
     "## Config sources",
     ...config.sources.map((source) => `  • ${source}`),
   ];

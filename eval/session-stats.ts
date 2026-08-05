@@ -1,6 +1,7 @@
-// Aggregates guard decision telemetry from pi's own session logs. Scans all
+// Aggregates rail decision telemetry from pi's own session logs. Scans all
 // session files under the pi agent dir for `custom` entries written by the
-// guard extension (customType "guard") and reports decision rates, fast-path
+// rail extension (customType "rail", or "guard" before the rename) and
+// reports decision rates, fast-path
 // usage, latency, token cost, retries, and errors across real sessions.
 //
 // Usage:
@@ -15,7 +16,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import type { GuardTelemetryRecord } from "../src/telemetry.ts";
+import { RAIL_TELEMETRY_TYPES, type RailTelemetryRecord } from "../src/telemetry.ts";
 
 interface SessionEntry {
   type?: string;
@@ -54,7 +55,7 @@ function percentile(sorted: number[], p: number): number {
   return sorted[index] ?? 0;
 }
 
-function commandOf(record: GuardTelemetryRecord): string | undefined {
+function commandOf(record: RailTelemetryRecord): string | undefined {
   if (record.kind !== "review" || !record.projection) return undefined;
   const command = record.projection.inputSummary.command;
   return typeof command === "string" && command.trim() ? command : undefined;
@@ -62,7 +63,7 @@ function commandOf(record: GuardTelemetryRecord): string | undefined {
 
 function laterExecuted(entries: SessionEntry[], fromIndex: number, command: string): boolean {
   // A later assistant tool call containing the exact command string means the
-  // denied/rejected command eventually ran (approved on retry, guard disabled,
+  // denied/rejected command eventually ran (approved on retry, rail disabled,
   // or another agent step) — a false-positive candidate.
   const needle = JSON.stringify(command).slice(1, -1);
   for (let i = fromIndex + 1; i < entries.length; i++) {
@@ -80,14 +81,16 @@ const dumpCases = args.includes("--cases");
 const sessionsDir = path.join(getAgentDir(), "sessions");
 const files = [...sessionFiles(sessionsDir)];
 
-const records: Array<{ file: string; index: number; record: GuardTelemetryRecord }> = [];
+const records: Array<{ file: string; index: number; record: RailTelemetryRecord }> = [];
 const fileEntries = new Map<string, SessionEntry[]>();
 for (const file of files) {
   const entries = parseEntries(file);
   fileEntries.set(file, entries);
   entries.forEach((entry, index) => {
-    if (entry.type === "custom" && entry.customType === "guard" && entry.data && typeof entry.data === "object") {
-      records.push({ file, index, record: entry.data as GuardTelemetryRecord });
+    // Both customTypes: sessions recorded before the pi-guard → pi-rail rename
+    // still carry "guard", and the corpus is the point of this script.
+    if (entry.type === "custom" && RAIL_TELEMETRY_TYPES.includes(entry.customType ?? "") && entry.data && typeof entry.data === "object") {
+      records.push({ file, index, record: entry.data as RailTelemetryRecord });
     }
   });
 }
@@ -97,9 +100,12 @@ const blocks = records.filter((r) => r.record.kind === "block");
 const approvals = records.filter((r) => r.record.kind === "approval");
 const errors = records.filter((r) => r.record.kind === "error");
 
-const decisions = { allow: 0, deny: 0, ask: 0 };
+const decisions: Record<string, number> = { allow: 0, deny: 0, ask: 0 };
 const models = new Map<string, number>();
-let fastPath = 0;
+const labelCounts = new Map<string, number>();
+let judged = 0;
+let screenTripped = 0;
+let screenApplied = 0;
 let retried = 0;
 let inputTokens = 0;
 let outputTokens = 0;
@@ -109,7 +115,12 @@ const latencies: number[] = [];
 for (const { record } of reviews) {
   if (record.kind !== "review") continue;
   decisions[record.decision] = (decisions[record.decision] ?? 0) + 1;
-  if (record.fastPath) fastPath++;
+  if (record.judge) judged++;
+  if (record.screenTripped !== undefined) {
+    screenApplied++;
+    if (record.screenTripped) screenTripped++;
+  }
+  for (const label of record.labels ?? []) labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
   if ((record.attempts ?? 1) > 1) retried++;
   if (record.model) models.set(record.model, (models.get(record.model) ?? 0) + 1);
   inputTokens += record.usage?.input ?? 0;
@@ -117,6 +128,7 @@ for (const { record } of reviews) {
   cacheReadTokens += record.usage?.cacheRead ?? 0;
   cacheWriteTokens += record.usage?.cacheWrite ?? 0;
   if (typeof record.latencyMs === "number") latencies.push(record.latencyMs);
+  if (record.judge?.latencyMs) latencies.push(record.judge.latencyMs);
 }
 const totalPromptTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
 const sortedLatencies = [...latencies].sort((a, b) => a - b);
@@ -131,7 +143,9 @@ const summary = {
   reviews: {
     total: reviews.length,
     decisions,
-    fastPathRate: reviews.length ? fastPath / reviews.length : 0,
+    capabilities: Object.fromEntries([...labelCounts.entries()].sort((a, b) => b[1] - a[1])),
+    judgeRate: reviews.length ? judged / reviews.length : 0,
+    screenTripRate: screenApplied ? screenTripped / screenApplied : 0,
     retryRate: reviews.length ? retried / reviews.length : 0,
     asksRejectedByUser: asksRejected.length,
     latencyMs: {
@@ -155,7 +169,7 @@ const summary = {
 
 if (dumpCases) {
   const candidates = [...reviews.filter((r) => r.record.kind === "review" && (r.record.decision === "deny" || r.record.userApproved === false))].map((r) => {
-    const record = r.record as Extract<GuardTelemetryRecord, { kind: "review" }>;
+    const record = r.record as Extract<RailTelemetryRecord, { kind: "review" }>;
     const command = commandOf(record);
     return {
       tool: record.tool,
@@ -179,11 +193,13 @@ if (asJson) {
 }
 
 const pct = (n: number) => `${(n * 100).toFixed(1)}%`;
-console.log(`Sessions scanned: ${summary.sessionsScanned} (${summary.sessionsWithTelemetry} with guard telemetry)`);
+console.log(`Sessions scanned: ${summary.sessionsScanned} (${summary.sessionsWithTelemetry} with rail telemetry)`);
 console.log(`Records: ${summary.records}`);
 console.log("");
 console.log(`Reviews: ${summary.reviews.total}  (allow ${decisions.allow}, deny ${decisions.deny}, ask ${decisions.ask})`);
-console.log(`  Fast-path rate: ${pct(summary.reviews.fastPathRate)}  Retry rate: ${pct(summary.reviews.retryRate)}`);
+console.log(`  Judge rate: ${pct(summary.reviews.judgeRate)}  Screen trip rate: ${pct(summary.reviews.screenTripRate)}  Retry rate: ${pct(summary.reviews.retryRate)}`);
+const topLabels = Object.entries(summary.reviews.capabilities).slice(0, 6);
+if (topLabels.length > 0) console.log(`  Capabilities: ${topLabels.map(([label, count]) => `${label} ${count}`).join(", ")}`);
 console.log(`  Latency ms: p50 ${summary.reviews.latencyMs.p50}  p95 ${summary.reviews.latencyMs.p95}  max ${summary.reviews.latencyMs.max}`);
 console.log(
   `  Tokens: ${totalPromptTokens} prompt (${summary.reviews.tokens.cacheRead} cached reads, ${pct(summary.reviews.tokens.cacheHitRate)} hit rate) / ${summary.reviews.tokens.output} out`,
@@ -195,5 +211,5 @@ console.log(`Path approvals: ${summary.pathApprovals.total} (${summary.pathAppro
 console.log(`Classifier errors: ${summary.errors}`);
 if (summary.records === 0 || summary.reviews.total === 0) {
   console.log("");
-  console.log("No guard telemetry found yet. Telemetry is written once classifier.telemetry (default \"minimal\") records decisions in session logs.");
+  console.log("No rail telemetry found yet. Telemetry is written once classifier.telemetry (default \"minimal\") records decisions in session logs.");
 }

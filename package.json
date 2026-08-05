@@ -1,17 +1,17 @@
 {
-  "name": "pi-extension-guard",
+  "name": "pi-rail",
   "private": true,
   "version": "0.1.0",
-  "description": "Defense-in-depth command and file-tool guardrails for Pi",
+  "description": "Pi Rail: defense-in-depth command and file-tool guardrails for Pi",
   "license": "MIT",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aluminous/pi-guard.git"
+    "url": "git+https://github.com/aluminous/pi-rail.git"
   },
-  "homepage": "https://github.com/aluminous/pi-guard#readme",
+  "homepage": "https://github.com/aluminous/pi-rail#readme",
   "bugs": {
-    "url": "https://github.com/aluminous/pi-guard/issues"
+    "url": "https://github.com/aluminous/pi-rail/issues"
   },
   "keywords": [
     "pi-package",

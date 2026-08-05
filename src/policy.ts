@@ -1,15 +1,15 @@
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
-import type { ResolvedGuardConfig } from "./config.ts";
+import type { ResolvedRailConfig } from "./config.ts";
 import { expandHome } from "./paths.ts";
-import { unique } from "./util.ts";
+import { textPrefix, unique } from "./util.ts";
 
 export type AccessKind = "read" | "write";
 
 export type PolicyDenialCode = "denied-by-pattern" | "outside-roots" | "unresolvable";
 
 export type PolicyDecision =
-  | { allowed: true; normalizedPath: string }
+  | { allowed: true; normalizedPath: string; matchedRoot?: string }
   | { allowed: false; code: PolicyDenialCode; reason: string; normalizedPath: string };
 
 function stripAtPrefix(value: string): string {
@@ -164,7 +164,7 @@ export interface CompiledFilesystemPolicy {
  * reported in `degraded` rather than silently losing their wider
  * policy-engine semantics in the sandbox.
  */
-export function compileFilesystemPolicy(config: ResolvedGuardConfig, cwd: string): CompiledFilesystemPolicy {
+export function compileFilesystemPolicy(config: ResolvedRailConfig, cwd: string): CompiledFilesystemPolicy {
   const patterns: Record<FilesystemListName, string[]> = {
     allowRead: [...config.filesystem.allowRead],
     denyRead: [...config.filesystem.denyRead],
@@ -193,15 +193,20 @@ export function summarizeDegradedPatterns(degraded: DegradedPattern[]): string |
   return `Filesystem patterns enforced for file tools but not for bash (Seatbelt takes literal paths only): ${names.join(", ")}`;
 }
 
-function isAllowedByRoots(cwd: string, candidate: string, roots: string[]): boolean {
-  return roots.some((root) => patternMatches(cwd, candidate, root));
+function matchingRoot(cwd: string, candidate: string, roots: string[]): string | undefined {
+  return roots.find((root) => patternMatches(cwd, candidate, root));
 }
 
-function isDenied(cwd: string, candidate: string, patterns: string[]): string | undefined {
+/** The first configured pattern that matches the candidate path under policy-engine semantics, if any. */
+export function findMatchingPattern(cwd: string, candidate: string, patterns: string[]): string | undefined {
   return patterns.find((pattern) => patternMatches(cwd, candidate, pattern));
 }
 
-export function decidePathAccess(config: ResolvedGuardConfig, cwd: string, inputPath: string, kind: AccessKind): PolicyDecision {
+function isDenied(cwd: string, candidate: string, patterns: string[]): string | undefined {
+  return findMatchingPattern(cwd, candidate, patterns);
+}
+
+export function decidePathAccess(config: ResolvedRailConfig, cwd: string, inputPath: string, kind: AccessKind): PolicyDecision {
   const normalizedPath = normalizeUserPath(cwd, inputPath);
   if (!config.filesystem.enabled) return { allowed: true, normalizedPath };
 
@@ -224,9 +229,11 @@ export function decidePathAccess(config: ResolvedGuardConfig, cwd: string, input
     return { allowed: false, code: "denied-by-pattern", normalizedPath: checkedPath, reason: `${kind} denied by pattern ${deniedBy}` };
   }
   if (kind === "write" || allowRoots.length > 0) {
-    if (!isAllowedByRoots(checkedCwd, checkedPath, allowRoots)) {
-      return { allowed: false, code: "outside-roots", normalizedPath: checkedPath, reason: `${kind} outside allowed roots` };
+    const root = matchingRoot(checkedCwd, checkedPath, allowRoots);
+    if (root === undefined) {
+      return { allowed: false, code: "outside-roots", normalizedPath: checkedPath, reason: `${kind} outside allowed roots (${textPrefix(allowRoots.join(", "), 160) || "none configured"})` };
     }
+    return { allowed: true, normalizedPath: checkedPath, matchedRoot: root };
   }
   return { allowed: true, normalizedPath: checkedPath };
 }
@@ -236,26 +243,45 @@ export function decidePathAccess(config: ResolvedGuardConfig, cwd: string, input
  * canonical path is inside the session cwd or matches an explicit allowRead
  * entry, and does not match denyRead. Evaluated regardless of
  * filesystem.enabled — the configured lists express user trust even when
- * enforcement is off. Reads only: the guard's read projection never carries
+ * enforcement is off. Reads only: the rail's read projection never carries
  * file content, so an allowlisted path is the whole action; write/edit
  * content still needs review no matter how trusted the path is.
  */
-export function isClassifierExemptRead(config: ResolvedGuardConfig, cwd: string, inputPath: string): boolean {
+export function isClassifierExemptRead(config: ResolvedRailConfig, cwd: string, inputPath: string): boolean {
+  return classifierExemptReadReason(config, cwd, inputPath) !== undefined;
+}
+
+/**
+ * The denyRead pattern this path matches, if any. Evaluated regardless of
+ * filesystem.enabled, like the exemption routing: the list expresses "these
+ * are secrets" even when blocking is off, and capability mode uses it as the
+ * deterministic `credentials` label rather than as a hard block.
+ */
+export function denyReadMatch(config: ResolvedRailConfig, cwd: string, inputPath: string): string | undefined {
+  const canonical = canonicalizeExistingPath(normalizeUserPath(cwd, inputPath));
+  const canonicalCwd = canonicalizeExistingPath(cwd);
+  if (!canonical.ok || !canonicalCwd.ok) return undefined;
+  return isDenied(canonicalCwd.path, canonical.path, config.filesystem.denyRead);
+}
+
+/** Which exemption condition applies ("in session cwd" / "matches allowRead '…'"), or undefined when the read is not exempt. */
+export function classifierExemptReadReason(config: ResolvedRailConfig, cwd: string, inputPath: string): string | undefined {
   const normalizedPath = normalizeUserPath(cwd, inputPath);
   const canonical = canonicalizeExistingPath(normalizedPath);
-  if (!canonical.ok) return false;
+  if (!canonical.ok) return undefined;
   const canonicalCwd = canonicalizeExistingPath(cwd);
-  if (!canonicalCwd.ok) return false;
-  if (isDenied(canonicalCwd.path, canonical.path, config.filesystem.denyRead)) return false;
-  if (isInside(canonicalCwd.path, canonical.path)) return true;
-  return isAllowedByRoots(canonicalCwd.path, canonical.path, config.filesystem.allowRead);
+  if (!canonicalCwd.ok) return undefined;
+  if (isDenied(canonicalCwd.path, canonical.path, config.filesystem.denyRead)) return undefined;
+  if (isInside(canonicalCwd.path, canonical.path)) return "in session cwd";
+  const root = matchingRoot(canonicalCwd.path, canonical.path, config.filesystem.allowRead);
+  return root === undefined ? undefined : `matches allowRead '${root}'`;
 }
 
 function wildcardMatches(value: string, pattern: string): boolean {
   return globToRegex(pattern).test(value);
 }
 
-export function scrubEnvironment(env: NodeJS.ProcessEnv | undefined, config: ResolvedGuardConfig): Record<string, string> {
+export function scrubEnvironment(env: NodeJS.ProcessEnv | undefined, config: ResolvedRailConfig): Record<string, string> {
   const source = env ?? process.env;
   const result: Record<string, string> = {};
   const allow = config.environment.allow;
@@ -269,7 +295,7 @@ export function scrubEnvironment(env: NodeJS.ProcessEnv | undefined, config: Res
   return result;
 }
 
-export function summarizePolicy(config: ResolvedGuardConfig): string[] {
+export function summarizePolicy(config: ResolvedRailConfig): string[] {
   const network = !config.network.enabled
     ? "disabled (unrestricted)"
     : config.network.allowedDomains.length > 0

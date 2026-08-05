@@ -1,5 +1,11 @@
 # Permission System Audit & Redesign Proposals — August 2026
 
+> **Naming note.** This document was written while the project was called
+> pi-guard; it has since been renamed to **Pi Rail** (`/rail`, `rail.json`,
+> `--no-rail`). Every "guard" below is left as written — it is a record of the
+> discussion as it happened, and rewriting it would misquote it. Read "guard"
+> as "rail" throughout.
+
 Status: discussion draft. Nothing here is implemented; Stage 0 items are
 candidates regardless of which architecture wins.
 
@@ -485,3 +491,44 @@ taxonomy actually decide, for real telemetry. Final decision path:
   exercises namer → table → judge without agent turns; manual tmux pass
   over the settings page (toggle, highlight, Ctrl+S, live stats) and the
   decision paths on implementation.
+
+### Adopted (2026-08-05): the class vocabulary becomes editable
+
+This lifts "Adding/editing/defining classes in-page: explicitly deferred" from
+the disposition-settings-page section above, at maintainer direction. The page
+was shipped first with a fixed taxonomy to get the table itself right; with
+that settled, the deferral is over and the page now adds, edits, and deletes
+classes. Decisions:
+
+- **Built-ins are editable but not deletable.** Their definitions are prompt
+  text and can be rewritten freely, but the twelve ids are referenced as
+  literals by deterministic paths — interceptor attribution, the command
+  allowlist tags, `READ_ONLY_PRESET_DENY` — so deleting one would leave those
+  pointing at nothing. The page refuses `d` on a built-in and names the two
+  real alternatives: set it to deny, or edit its definition. Custom classes
+  have no such references and delete freely.
+- **New classes default to `ask`.** A class the user bothered to name is by
+  construction an intent they want to think about, and `ask` is the only
+  default that cannot silently widen what the agent may do. `judge` would
+  spend a model call on a class whose shape the user has just told us; `allow`
+  would be a footgun.
+- **Custom classes enter the namer's vocabulary immediately, at session
+  scope.** Same semantics as a disposition edit: live on the next action,
+  persisted only by Ctrl+S. The alternative — requiring a save before the
+  class is usable — would make the page's "try it and see" loop useless, which
+  is the loop that gets definitions right.
+- **Cache-prefix invalidation on registry change is accepted.** The class
+  definitions head the namer payload precisely because they are stable; editing
+  them moves the cacheable prefix and costs one full-price call per provider
+  cache. Editing is rare and deliberate, the payload is still byte-stable for
+  an unchanged registry, and the alternative (freezing the taxonomy for the
+  session, or versioning prefixes) buys less than it costs in surprise.
+
+An id that no layer defines — a label naming a class deleted mid-session, or one
+the namer invented — resolves to `ask`/`default` rather than inheriting a stale
+override. Labels can outlive their class within a session; the safe direction
+for an orphaned one is to bring the user in.
+
+`/guard policy rules` also stops being its own view and becomes the second tab
+of the policy page, so the mechanism report and the table it annotates are one
+surface. Non-TUI clients keep the standalone widget: tabs are a TUI affordance.

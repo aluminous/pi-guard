@@ -1,0 +1,33 @@
+{
+  "enabled": true,
+  "backend": "seatbelt",
+  "filesystem": {
+    "enabled": false
+  },
+  "network": {
+    "enabled": false
+  },
+  "environment": {
+    "allow": [],
+    "unset": []
+  },
+  "classifier": {
+    "enabled": true,
+    "model": "auto",
+    "failClosed": true
+  },
+  "dispositions": {
+    "read-project": "allow",
+    "run-dev-tools": "allow",
+    "read-system": "deny",
+    "modify-project": "deny",
+    "install-dependencies": "deny",
+    "network-fetch": "deny",
+    "off-machine-effects": "deny",
+    "modify-system": "deny",
+    "credentials": "deny",
+    "local-destructive": "deny",
+    "persistence": "deny",
+    "unclassified": "deny"
+  }
+}
