@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import type { EffectivePolicy } from "./backends/types.ts";
-import { usedCapabilityStats } from "./capabilities.ts";
+import { capabilityRegistry, usedCapabilityStats } from "./capabilities.ts";
 import { classifierEnabled, resolveClassifierModel } from "./classifier.ts";
 import { configSourceLabel, ruleProvenanceKey, type ClassifierRuleListKey, type ProvenanceListKey, type ResolvedGuardConfig, type StatusLineMode } from "./config.ts";
 import { getPersistentConfigPath } from "./persistent-settings.ts";
@@ -133,7 +133,7 @@ export function updateGuardStatus(ctx: ExtensionContext, state: RuntimeState): v
 
 /** Per-class hits and outcomes, for classes actually seen; the editable table is the /guard policy page. */
 function capabilityStatLines(state: RuntimeState): string[] {
-  const used = usedCapabilityStats(state.capabilities);
+  const used = usedCapabilityStats(state.capabilities, capabilityRegistry(state.config, state.capabilities));
   if (used.length === 0) return ["  (none yet)"];
   return used.map(({ id, stats }) => {
     const outcomes = Object.entries(stats.outcomes)

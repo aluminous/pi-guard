@@ -48,6 +48,13 @@ export interface GuardLiveView {
   kind: GuardViewKind;
   refresh(): void;
   close(): void;
+  /**
+   * Tabbed panels only (the policy page): retarget the open panel instead of
+   * closing it, so `/guard policy rules` with the dispositions tab up switches
+   * tabs rather than toggling the whole panel away.
+   */
+  selectTab?(tab: string): void;
+  activeTab?(): string;
 }
 
 export interface RuntimeState {

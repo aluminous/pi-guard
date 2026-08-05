@@ -3,10 +3,12 @@ import { getPackageDir, type ExtensionContext } from "@earendil-works/pi-coding-
 import { askGuardApproval } from "./approvals.ts";
 import {
   capabilityName,
+  capabilityRegistry,
   recordCapabilityHits,
   recordCapabilityOutcome,
   recordScreenVerdict,
   resolveCapabilities,
+  type CapabilityClass,
   type CapabilityId,
   type CapabilityOutcome,
   type CapabilityResolution,
@@ -391,7 +393,7 @@ async function runInterceptStages(
     const startedAt = performance.now();
     namerModel = describeModel(() => resolveClassifierModel(ctx, config, state.classifier));
     try {
-      named = await nameToolCall({ ctx, config, state: state.classifier, toolName: event.toolName, input: event.input, completeFn });
+      named = await nameToolCall({ ctx, config, state: state.classifier, toolName: event.toolName, input: event.input, completeFn, capabilities: state.capabilities });
       namerLatencyMs = Math.round(performance.now() - startedAt);
       state.classifier.lastError = undefined;
       addTraceStage(
@@ -476,14 +478,14 @@ function describeResolution(resolution: CapabilityResolution): string {
 }
 
 /** "off-machine-effects, which you have set to ask (default)" — the attribution line every block and prompt carries. */
-function attribution(resolution: CapabilityResolution): string {
+function attribution(resolution: CapabilityResolution, registry: CapabilityClass[]): string {
   const decided = resolution.decidedBy;
   const scope =
     decided.scope === "config" ? configSourceLabel(decided.source ?? "config")
     : decided.scope === "preset" ? `${decided.source} preset`
     : decided.scope === "session" ? "this session"
     : "default";
-  return `${decided.id} (${capabilityName(decided.id)}), which is set to ${decided.disposition} (${scope})`;
+  return `${decided.id} (${capabilityName(decided.id, registry)}), which is set to ${decided.disposition} (${scope})`;
 }
 
 interface EnforceParams {
@@ -510,10 +512,11 @@ async function enforceCapabilities(params: EnforceParams): Promise<ToolCallBlock
 
   const projection = projectToolCall(event.toolName, event.input, ctx.cwd, config);
   const subject = describeAction(event.toolName, projection.inputSummary);
+  const registry = capabilityRegistry(config, state.capabilities);
   let disposition = resolution.disposition;
   let judge: JudgeResult | undefined;
   let judgeTelemetry: GuardJudgeTelemetry | undefined;
-  let reason = `${subject} is ${attribution(resolution)}`;
+  let reason = `${subject} is ${attribution(resolution, registry)}`;
 
   if (disposition === "judge") {
     const outcome = await runJudgeStage(params, resolution);
@@ -563,7 +566,7 @@ async function enforceCapabilities(params: EnforceParams): Promise<ToolCallBlock
   if (disposition === "allow") return finish("allow", judge ? "judge-allow" : "allow");
 
   if (disposition === "deny") {
-    const denyReason = judge ? `Guard judge denied: ${reason}` : `Guard denied: ${subject} is ${attribution(resolution)}`;
+    const denyReason = judge ? `Guard judge denied: ${reason}` : `Guard denied: ${subject} is ${attribution(resolution, registry)}`;
     return finish("deny", judge ? "judge-deny" : "deny", {
       block: true,
       reason: `${denyReason}. Do not work around this denial; choose a safer path or ask the user.`,
@@ -666,6 +669,7 @@ async function runJudgeStage(
       authorizationEvidence: params.named?.authorizationEvidence,
       recentGuardDecisions: recentDecisionsForJudge(state),
       completeFn: params.completeFn,
+      capabilities: state.capabilities,
     });
     const latencyMs = Math.round(performance.now() - startedAt);
     addTraceStage(trace, "judge", judge.decision, `${judge.decision} · ${judge.reason} (model ${model ?? "unknown"}, ${latencyMs}ms)`);

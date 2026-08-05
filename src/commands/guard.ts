@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { CapabilityId, Disposition } from "../capabilities.ts";
+import { addUserGuidance, clearSessionGuidance, sessionGuidanceCount } from "../classifier.ts";
 import { loadConfig, type StatusLineMode } from "../config.ts";
+import type { DispositionPersistence } from "../dispositions.ts";
 import { formatDecisionTrace, formatEmptyTrace } from "../decision-trace.ts";
 import { updatePersistentStatusLine } from "../persistent-settings.ts";
 import type { RuntimeState } from "../state.ts";
@@ -19,15 +20,17 @@ export interface GuardCommandDeps {
   disableGuard(ctx: ExtensionContext, scope: "next-agent" | "session"): Promise<void>;
   runGuardSmoke(ctx: ExtensionContext): Promise<void>;
   runCritique(args: string, ctx: ExtensionContext): Promise<void>;
-  /** Disposition persist boundary; defaults to the global config writer, overridden in tests. */
-  persistDisposition?: (id: CapabilityId, disposition: Disposition | undefined) => void;
+  /** Disposition persist boundary; defaults to the global config writers, overridden in tests. */
+  persistDisposition?: Partial<DispositionPersistence>;
 }
 
 const SUBCOMMANDS: Array<{ value: string; description: string }> = [
   { value: "status", description: "Toggle the live status popup" },
-  { value: "policy", description: "Open the capability disposition page (edit rows for this session; Ctrl+S saves)" },
-  { value: "policy rules", description: "Show the resolved mechanism policy: filesystem, network, environment, legacy rules" },
+  { value: "policy", description: "Open the capability policy page (edit rows and classes for this session; Ctrl+S saves)" },
+  { value: "policy rules", description: "Open the policy page on the resolved mechanism rules: filesystem, network, environment" },
   { value: "set", description: "Set one class for this session: set <class> [allow|judge|ask|deny]" },
+  { value: "guide", description: "Add classifier guidance for this session: guide <text> (or bare to be prompted)" },
+  { value: "guide clear", description: "Drop every guidance entry collected this session" },
   { value: "explain", description: "Show the newest decision trace (explain <n> for older ones)" },
   { value: "test", description: "Dry-run a shell command through the guard without executing it" },
   { value: "test read", description: "Dry-run a file read through the guard (test read <path>)" },
@@ -52,7 +55,41 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     ctx.ui.notify(message, level);
   };
 
-  const dispositions = createDispositionCommands({ state, persist: deps.persistDisposition, notify: show });
+  const dispositions = createDispositionCommands({
+    state,
+    persist: deps.persistDisposition,
+    notify: show,
+    // The rules tab renders the same report the standalone view did; computed
+    // per refresh so provenance and backend changes show up live.
+    policyLines: (ctx) => formatGuardPolicy(state, state.config ?? loadConfig(ctx)).split("\n"),
+  });
+
+  /**
+   * `/guard guide`: volunteer classifier guidance instead of waiting to be
+   * asked. Entries join the same session ring approval comments feed, so the
+   * namer and judge see them on the next action.
+   */
+  async function runGuide(args: string, ctx: ExtensionContext): Promise<void> {
+    const trimmed = args.trim();
+    if (trimmed.toLowerCase() === "clear") {
+      const removed = clearSessionGuidance(state.classifier);
+      show(ctx, removed === 0 ? "No session guidance to clear." : `Cleared ${removed} guidance entr${removed === 1 ? "y" : "ies"}.`);
+      return;
+    }
+    let text = trimmed;
+    if (!text) {
+      if (!ctx.hasUI) {
+        show(ctx, "Usage: /guard guide <text>", "warning");
+        return;
+      }
+      // Cancel and empty submit both resolve falsy here, and both mean no-op.
+      text = (await ctx.ui.input("Guidance for the guard this session", "e.g. this repo's deploy script is expected to push")) ?? "";
+      if (!text.trim()) return;
+    }
+    addUserGuidance(state.classifier, text);
+    const { count, limit } = sessionGuidanceCount(state.classifier);
+    show(ctx, `Guidance added for this session (${count}/${limit}).`);
+  }
 
   async function enable(ctx: ExtensionContext): Promise<void> {
     try {
@@ -194,8 +231,10 @@ export function createGuardCommand(deps: GuardCommandDeps) {
       case "status":
         return showView(ctx, "status");
       case "dispositions":
-        return dispositions.openSettings(ctx);
+        return dispositions.openSettings(ctx, "dispositions");
       case "policy-rules":
+        // Same routing as `/guard policy rules`: a tab of the page in the TUI.
+        if (ctx.mode === "tui" && ctx.hasUI) return dispositions.openSettings(ctx, "rules");
         return showView(ctx, "policy");
       case "explain":
         return showExplain(ctx, "");
@@ -220,15 +259,20 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     // into a clean no-op (pickFromList resolves undefined) or stderr error.
     if (!sub) return openPanel(ctx);
     if (sub === "status") return showView(ctx, "status");
-    // /guard policy IS the disposition page now; the mechanism report moved one level down.
+    // /guard policy IS the disposition page now; the mechanism report is its
+    // second tab in the TUI, and still a standalone widget everywhere else.
     if (sub === "policy") {
       const target = rest.trim().toLowerCase();
-      if (!target) return dispositions.openSettings(ctx);
-      if (target === "rules") return showView(ctx, "policy");
+      if (!target) return dispositions.openSettings(ctx, "dispositions");
+      if (target === "rules") {
+        if (ctx.mode === "tui" && ctx.hasUI) return dispositions.openSettings(ctx, "rules");
+        return showView(ctx, "policy");
+      }
       show(ctx, "Usage: /guard policy [rules]", "warning");
       return;
     }
     if (sub === "set") return dispositions.runSet(rest, ctx);
+    if (sub === "guide") return runGuide(rest, ctx);
     if (sub === "explain") return showExplain(ctx, rest);
     if (sub === "test") return runGuardTest(rest, ctx);
     if (sub === "why" && !rest) return runGuardWhy(ctx);
@@ -242,7 +286,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     if (sub === "smoke" && !rest) return deps.runGuardSmoke(ctx);
     if (sub === "critique") return deps.runCritique(rest, ctx);
 
-    show(ctx, "Usage: /guard [status|policy [rules]|set <class> [disposition]|explain [n]|test …|why|on|off|off session|readonly|model …|smoke|critique …]", "warning");
+    show(ctx, "Usage: /guard [status|policy [rules]|set <class> [disposition]|guide <text>|guide clear|explain [n]|test …|why|on|off|off session|readonly|model …|smoke|critique …]", "warning");
   }
 
   function getArgumentCompletions(argumentPrefix: string) {

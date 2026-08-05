@@ -1,6 +1,12 @@
 import { complete, type Message, type Model, type Api } from "@earendil-works/pi-ai/compat";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CAPABILITY_CLASSES, getEffectiveDisposition, type CapabilityId, type CapabilityState } from "./capabilities.ts";
+import {
+  capabilityRegistry,
+  capabilityRegistryIds,
+  getEffectiveDisposition,
+  type CapabilityId,
+  type CapabilityState,
+} from "./capabilities.ts";
 import type { ResolvedGuardConfig } from "./config.ts";
 import {
   buildJudgeText,
@@ -60,6 +66,28 @@ const SESSION_GUIDANCE_LIMIT = 12;
 export function addSessionGuidance(state: ClassifierState, decision: "allowed" | "denied", toolName: string, subject: string, comment: string): void {
   const entry = `User ${decision} ${toolName} (${textPrefix(subject, 120)}) with comment: ${textPrefix(comment.trim(), 400)}`;
   state.sessionGuidance = [...(state.sessionGuidance ?? []), entry].slice(-SESSION_GUIDANCE_LIMIT);
+}
+
+/**
+ * Guidance the user volunteered rather than one collected from an approval
+ * answer (`/guard guide`). Same ring and same limit, so a session that talks a
+ * lot to the guard still cannot grow the payload without bound.
+ */
+export function addUserGuidance(state: ClassifierState, text: string): void {
+  const entry = `User guidance: ${textPrefix(text.trim(), 400)}`;
+  state.sessionGuidance = [...(state.sessionGuidance ?? []), entry].slice(-SESSION_GUIDANCE_LIMIT);
+}
+
+/** Drops all session guidance; returns how many entries went away, for the notification. */
+export function clearSessionGuidance(state: ClassifierState): number {
+  const count = state.sessionGuidance?.length ?? 0;
+  state.sessionGuidance = undefined;
+  return count;
+}
+
+/** Guidance entries currently in the ring, and the cap they are counted against. */
+export function sessionGuidanceCount(state: ClassifierState): { count: number; limit: number } {
+  return { count: state.sessionGuidance?.length ?? 0, limit: SESSION_GUIDANCE_LIMIT };
 }
 
 export type CompleteFn = typeof complete;
@@ -260,20 +288,23 @@ export async function runNaming(params: {
   toolName: string;
   input: unknown;
   sessionGuidance?: string[];
+  /** Session taxonomy edits; folded into the registry the namer is shown and validated against. */
+  capabilities?: CapabilityState;
 }): Promise<NamerResult> {
   const projection = projectToolCall(params.toolName, params.input, params.io.cwd, params.config);
+  const registry = capabilityRegistry(params.config, params.capabilities);
   const budget: RetryBudget = { attempts: 0, maxAttempts: 5 };
   const usage: ClassifierTokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   const response = await completeText({
     model: params.model,
     io: params.io,
     systemPrompt: NAMER_SYSTEM_PROMPT,
-    text: buildNamerText(params.io.recentUserMessages(), projection, params.sessionGuidance ?? []),
+    text: buildNamerText(registry, params.io.recentUserMessages(), projection, params.sessionGuidance ?? []),
     timeoutMs: params.config.classifier.timeoutMs,
     budget,
   });
   addUsage(usage, response.usage);
-  const named = parseNamerResult(response.text);
+  const named = parseNamerResult(response.text, capabilityRegistryIds(registry));
   return { ...named, tokenUsage: usage, attempts: budget.attempts };
 }
 
@@ -288,6 +319,7 @@ export async function runJudging(params: {
   authorizationEvidence?: string;
   sessionGuidance?: string[];
   recentGuardDecisions?: string[];
+  capabilities?: CapabilityState;
 }): Promise<JudgeResult> {
   const projection = projectToolCall(params.toolName, params.input, params.io.cwd, params.config);
   const budget: RetryBudget = { attempts: 0, maxAttempts: 5 };
@@ -297,6 +329,7 @@ export async function runJudging(params: {
     io: params.io,
     systemPrompt: JUDGE_SYSTEM_PROMPT,
     text: buildJudgeText({
+      registry: capabilityRegistry(params.config, params.capabilities),
       recentUserMessages: params.io.recentUserMessages(),
       projection,
       sessionGuidance: params.sessionGuidance,
@@ -318,6 +351,7 @@ export async function nameToolCall(params: {
   toolName: string;
   input: unknown;
   completeFn?: CompleteFn;
+  capabilities?: CapabilityState;
 }): Promise<NamerResult> {
   const model = resolveClassifierModel(params.ctx, params.config, params.state);
   if (!model) throw new ClassifierModelUnavailableError(`Classifier model not found: ${params.state.modelOverride ?? params.config.classifier.model}`);
@@ -328,6 +362,7 @@ export async function nameToolCall(params: {
     toolName: params.toolName,
     input: params.input,
     sessionGuidance: params.state.sessionGuidance,
+    capabilities: params.capabilities,
   });
 }
 
@@ -341,6 +376,7 @@ export async function judgeToolCall(params: {
   authorizationEvidence?: string;
   recentGuardDecisions?: string[];
   completeFn?: CompleteFn;
+  capabilities?: CapabilityState;
 }): Promise<JudgeResult> {
   const model = resolveJudgeModel(params.ctx, params.config);
   if (!model) throw new ClassifierModelUnavailableError(`Judge model not found: ${params.config.classifier.judgeModel}`);
@@ -354,12 +390,13 @@ export async function judgeToolCall(params: {
     authorizationEvidence: params.authorizationEvidence,
     sessionGuidance: params.state.sessionGuidance,
     recentGuardDecisions: params.recentGuardDecisions,
+    capabilities: params.capabilities,
   });
 }
 
 /** What /guard critique reviews: the prompts, the class definitions, the table, and the screen's coverage. */
 export function buildCapabilityPromptForCritique(config: ResolvedGuardConfig, capabilities: CapabilityState | undefined): string {
-  const table = CAPABILITY_CLASSES.map((entry) => {
+  const table = capabilityRegistry(config, capabilities).map((entry) => {
     const effective = getEffectiveDisposition(config, capabilities, entry.id);
     return `- ${entry.id}: ${effective.disposition} (${effective.scope})\n  ${entry.definition}`;
   });

@@ -12,7 +12,7 @@
  */
 import type { ResolvedGuardConfig } from "./config.ts";
 
-export const CAPABILITY_IDS = [
+export const BUILTIN_CAPABILITY_IDS = [
   "read-project",
   "read-system",
   "run-dev-tools",
@@ -27,7 +27,16 @@ export const CAPABILITY_IDS = [
   "unclassified",
 ] as const;
 
-export type CapabilityId = (typeof CAPABILITY_IDS)[number];
+/** The twelve classes that ship with the guard; deterministic code paths reference these ids as literals. */
+export type BuiltinCapabilityId = (typeof BUILTIN_CAPABILITY_IDS)[number];
+
+/**
+ * Any class id. Custom classes make the vocabulary open, so this is a plain
+ * string: an id reaching the table may be a built-in, a config-defined class, a
+ * class this session added, or — briefly — one a session deletion just removed.
+ * Use isBuiltinCapabilityId when a code path genuinely needs a built-in.
+ */
+export type CapabilityId = string;
 
 /**
  * What the user wants to happen to a class. `judge` delegates the decision to
@@ -50,7 +59,7 @@ export interface CapabilityClass {
   default: Disposition;
 }
 
-export const CAPABILITY_CLASSES: CapabilityClass[] = [
+export const BUILTIN_CAPABILITY_CLASSES: CapabilityClass[] = [
   {
     id: "read-project",
     name: "Read project",
@@ -137,22 +146,34 @@ export const CAPABILITY_CLASSES: CapabilityClass[] = [
   },
 ];
 
-const CLASSES_BY_ID = new Map<CapabilityId, CapabilityClass>(CAPABILITY_CLASSES.map((entry) => [entry.id, entry]));
+const BUILTIN_BY_ID = new Map<CapabilityId, CapabilityClass>(BUILTIN_CAPABILITY_CLASSES.map((entry) => [entry.id, entry]));
 
-export function isCapabilityId(value: unknown): value is CapabilityId {
-  return typeof value === "string" && CLASSES_BY_ID.has(value as CapabilityId);
+/**
+ * Built-in membership. This is the check for code that must reason about the
+ * twelve shipped classes specifically — config validation refusing to let a
+ * custom class shadow one, and the "built-ins cannot be deleted" rule. Naming
+ * and table lookups go through the registry instead, since those must see
+ * custom classes too.
+ */
+export function isBuiltinCapabilityId(value: unknown): value is BuiltinCapabilityId {
+  return typeof value === "string" && BUILTIN_BY_ID.has(value);
+}
+
+/** Custom class ids are kebab-case and cannot collide with a built-in; the namer sees them verbatim. */
+export const CUSTOM_CLASS_ID_PATTERN = /^[a-z][a-z0-9-]{1,40}$/;
+
+export function isValidCustomClassId(value: unknown): value is string {
+  return typeof value === "string" && CUSTOM_CLASS_ID_PATTERN.test(value) && !isBuiltinCapabilityId(value);
 }
 
 export function isDisposition(value: unknown): value is Disposition {
   return value === "allow" || value === "judge" || value === "ask" || value === "deny";
 }
 
-export function capabilityClass(id: CapabilityId): CapabilityClass {
-  return CLASSES_BY_ID.get(id)!;
-}
-
-export function capabilityName(id: CapabilityId): string {
-  return CLASSES_BY_ID.get(id)?.name ?? id;
+/** Human label for a class: the registry's name when it is known, else the raw id (labels outlive deleted classes). */
+export function capabilityName(id: CapabilityId, registry?: CapabilityClass[]): string {
+  const found = registry?.find((entry) => entry.id === id);
+  return found?.name ?? BUILTIN_BY_ID.get(id)?.name ?? id;
 }
 
 /** The strictest of the given dispositions (deny > ask > judge > allow); allow when the list is empty. */
@@ -168,9 +189,10 @@ export function isStricter(a: Disposition, b: Disposition): boolean {
   return SEVERITY[a] > SEVERITY[b];
 }
 
-export const DEFAULT_DISPOSITIONS: Record<CapabilityId, Disposition> = Object.fromEntries(
-  CAPABILITY_CLASSES.map((entry) => [entry.id, entry.default]),
-) as Record<CapabilityId, Disposition>;
+/** Exhaustive over the built-ins: adding a class to the tuple without a default is a type error. */
+export const DEFAULT_DISPOSITIONS: Record<BuiltinCapabilityId, Disposition> = Object.fromEntries(
+  BUILTIN_CAPABILITY_CLASSES.map((entry) => [entry.id, entry.default]),
+) as Record<BuiltinCapabilityId, Disposition>;
 
 // ── Session scope and per-class stats ────────────────────────────────────────
 
@@ -214,12 +236,22 @@ export interface CapabilityState {
    * this. A preset can only tighten — it is severity-maxed against whatever
    * the config and session overrides resolved to.
    */
-  preset?: { name: string; deny: CapabilityId[] };
+  preset?: { name: string; deny: BuiltinCapabilityId[] };
   stats: Partial<Record<CapabilityId, CapabilityStats>>;
+  /**
+   * Classes added this session. Like disposition overrides these are live
+   * immediately — the namer sees them on the next call — and stay session-local
+   * until Ctrl+S writes them to the global config.
+   */
+  customClasses: CapabilityClass[];
+  /** Session edits to any class's definition (built-in or custom), keyed by id. */
+  definitionEdits: Record<string, string>;
+  /** Persisted custom classes this session removed; they drop out of the registry until saved or the session ends. */
+  deletedCustom: string[];
 }
 
 export function createCapabilityState(): CapabilityState {
-  return { overrides: {}, stats: {} };
+  return { overrides: {}, stats: {}, customClasses: [], definitionEdits: {}, deletedCustom: [] };
 }
 
 export function createCapabilityStats(): CapabilityStats {
@@ -231,8 +263,13 @@ export function createCapabilityStats(): CapabilityStats {
   };
 }
 
-/** Classes read-only mode denies. Writes and edits are already blocked deterministically; this covers bash. */
-export const READ_ONLY_PRESET_DENY: CapabilityId[] = [
+/**
+ * Classes read-only mode denies. Writes and edits are already blocked
+ * deterministically; this covers bash. Built-in ids by construction: the preset
+ * is a fixed guarantee about read-only mode, so it cannot depend on classes a
+ * user may rename or delete.
+ */
+export const READ_ONLY_PRESET_DENY: BuiltinCapabilityId[] = [
   "modify-project",
   "modify-system",
   "local-destructive",
@@ -256,6 +293,52 @@ export function clearSessionDisposition(state: CapabilityState, id: CapabilityId
   delete state.overrides[id];
 }
 
+// ── The class registry ───────────────────────────────────────────────────────
+
+/**
+ * Every class the guard currently knows, in a deterministic order: the twelve
+ * built-ins in tuple order, then config-defined custom classes, then classes
+ * this session added. Definition edits layer session-over-config-over-built-in;
+ * custom classes this session deleted are dropped.
+ *
+ * Order is load-bearing beyond tidiness: this array is what
+ * capabilityDefinitionsForPrompt serializes into the namer payload, and that
+ * payload heads the cacheable prefix. Same registry ⇒ byte-identical prefix.
+ * Editing the taxonomy therefore invalidates the provider's prompt cache once,
+ * which is the accepted cost of an editable vocabulary.
+ */
+export function capabilityRegistry(
+  config: { capabilities?: { classes: CapabilityClass[]; definitions: Record<string, string> } } | undefined,
+  state: CapabilityState | undefined,
+): CapabilityClass[] {
+  const configDefinitions = config?.capabilities?.definitions ?? {};
+  const sessionDefinitions = state?.definitionEdits ?? {};
+  const withDefinition = (entry: CapabilityClass): CapabilityClass => {
+    const definition = sessionDefinitions[entry.id] ?? configDefinitions[entry.id] ?? entry.definition;
+    return definition === entry.definition ? entry : { ...entry, definition };
+  };
+
+  const deleted = new Set(state?.deletedCustom ?? []);
+  const registry = BUILTIN_CAPABILITY_CLASSES.map(withDefinition);
+  const seen = new Set(registry.map((entry) => entry.id));
+  for (const entry of config?.capabilities?.classes ?? []) {
+    if (deleted.has(entry.id) || seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    registry.push(withDefinition(entry));
+  }
+  for (const entry of state?.customClasses ?? []) {
+    if (seen.has(entry.id)) continue;
+    seen.add(entry.id);
+    registry.push(withDefinition(entry));
+  }
+  return registry;
+}
+
+/** The id set the namer's labels are validated against. */
+export function capabilityRegistryIds(registry: CapabilityClass[]): Set<string> {
+  return new Set(registry.map((entry) => entry.id));
+}
+
 export type DispositionScope = "default" | "config" | "session" | "preset";
 
 export interface EffectiveDisposition {
@@ -272,20 +355,46 @@ export interface EffectiveDisposition {
  * active preset then applies severity-max on top, so a session preset can
  * tighten but never loosen what the user configured.
  */
+/**
+ * The class default for an id, mirroring capabilityRegistry's precedence
+ * (built-in, then config class, then session-added class). `known: false` means
+ * the id is in no layer at all — a label naming a class that was just deleted.
+ */
+function classDefault(
+  config: ResolvedGuardConfig | undefined,
+  state: CapabilityState | undefined,
+  id: CapabilityId,
+): { disposition: Disposition; known: boolean } {
+  if (isBuiltinCapabilityId(id)) return { disposition: DEFAULT_DISPOSITIONS[id], known: true };
+  if (!state?.deletedCustom.includes(id)) {
+    const fromConfig = config?.capabilities.classes.find((entry) => entry.id === id);
+    if (fromConfig) return { disposition: fromConfig.default, known: true };
+  }
+  const fromSession = state?.customClasses.find((entry) => entry.id === id);
+  if (fromSession) return { disposition: fromSession.default, known: true };
+  return { disposition: "ask", known: false };
+}
+
 export function getEffectiveDisposition(
   config: ResolvedGuardConfig | undefined,
   state: CapabilityState | undefined,
   id: CapabilityId,
 ): EffectiveDisposition {
-  let resolved: EffectiveDisposition = { id, disposition: DEFAULT_DISPOSITIONS[id], scope: "default" };
+  const base = classDefault(config, state, id);
+  // A label can outlive its class: deleting a custom class mid-session leaves
+  // in-flight labels pointing at nothing. Resolve those to ask rather than
+  // inheriting a stale override — the safe direction is to bring the user in.
+  if (!base.known) return { id, disposition: "ask", scope: "default" };
+  let resolved: EffectiveDisposition = { id, disposition: base.disposition, scope: "default" };
   const source = config?.provenance.dispositions[id];
-  if (config && source && source !== "default") {
-    resolved = { id, disposition: config.dispositions[id], scope: "config", source };
+  const configured = config?.dispositions[id];
+  if (configured && source && source !== "default") {
+    resolved = { id, disposition: configured, scope: "config", source };
   }
   const override = state?.overrides[id];
   if (override) resolved = { id, disposition: override, scope: "session" };
   const preset = state?.preset;
-  if (preset && preset.deny.includes(id) && isStricter("deny", resolved.disposition)) {
+  if (preset && isBuiltinCapabilityId(id) && preset.deny.includes(id) && isStricter("deny", resolved.disposition)) {
     resolved = { id, disposition: "deny", scope: "preset", source: preset.name };
   }
   return resolved;
@@ -324,9 +433,49 @@ export function capabilityStats(state: CapabilityState, id: CapabilityId): Capab
   return created;
 }
 
-/** Read-only view for panels: only classes seen this session, in taxonomy order. */
-export function usedCapabilityStats(state: CapabilityState): Array<{ id: CapabilityId; stats: CapabilityStats }> {
-  return CAPABILITY_IDS.filter((id) => state.stats[id]).map((id) => ({ id, stats: state.stats[id]! }));
+/**
+ * Read-only view for panels: only classes seen this session, in registry order.
+ * Stats-bearing ids the registry no longer lists (a class deleted after it was
+ * already named) trail at the end rather than vanishing — the hits happened.
+ */
+export function usedCapabilityStats(state: CapabilityState, registry: CapabilityClass[]): Array<{ id: CapabilityId; stats: CapabilityStats }> {
+  const ordered = registry.filter((entry) => state.stats[entry.id]).map((entry) => ({ id: entry.id, stats: state.stats[entry.id]! }));
+  const listed = new Set(ordered.map((entry) => entry.id));
+  const orphaned = Object.keys(state.stats)
+    .filter((id) => !listed.has(id) && state.stats[id])
+    .map((id) => ({ id, stats: state.stats[id]! }));
+  return [...ordered, ...orphaned];
+}
+
+// ── Session class edits ──────────────────────────────────────────────────────
+
+/** Adds a class at session scope. The namer sees it on the very next call; Ctrl+S makes it persistent. */
+export function addSessionClass(state: CapabilityState, entry: CapabilityClass): void {
+  state.deletedCustom = state.deletedCustom.filter((id) => id !== entry.id);
+  state.customClasses = [...state.customClasses.filter((existing) => existing.id !== entry.id), entry];
+}
+
+/** Edits any class's definition at session scope. Editing back to the original text drops the edit. */
+export function setSessionDefinition(state: CapabilityState, id: CapabilityId, definition: string): void {
+  const session = state.customClasses.find((entry) => entry.id === id);
+  if (session) {
+    session.definition = definition;
+    return;
+  }
+  state.definitionEdits = { ...state.definitionEdits, [id]: definition };
+}
+
+/**
+ * Removes a custom class at session scope. A class this session added is simply
+ * forgotten; a persisted one is recorded as deleted so Ctrl+S can remove it
+ * from the config too.
+ */
+export function deleteSessionClass(state: CapabilityState, id: CapabilityId): void {
+  const wasSessionAdded = state.customClasses.some((entry) => entry.id === id);
+  state.customClasses = state.customClasses.filter((entry) => entry.id !== id);
+  const { [id]: _dropped, ...rest } = state.definitionEdits;
+  state.definitionEdits = rest;
+  if (!wasSessionAdded && !state.deletedCustom.includes(id)) state.deletedCustom = [...state.deletedCustom, id];
 }
 
 export function recordCapabilityHits(state: CapabilityState, labels: CapabilityId[]): void {
@@ -345,7 +494,11 @@ export function recordScreenVerdict(state: CapabilityState, labels: CapabilityId
   }
 }
 
-/** The taxonomy block sent to the namer and the judge; static per build, so it heads the cacheable prefix. */
-export function capabilityDefinitionsForPrompt(): Array<{ id: CapabilityId; definition: string }> {
-  return CAPABILITY_CLASSES.map((entry) => ({ id: entry.id, definition: entry.definition }));
+/**
+ * The taxonomy block sent to the namer and the judge. Fixed for a given
+ * registry, so it heads the cacheable prefix; editing the taxonomy is the one
+ * thing that moves it (see capabilityRegistry on the accepted cache cost).
+ */
+export function capabilityDefinitionsForPrompt(registry: CapabilityClass[]): Array<{ id: CapabilityId; definition: string }> {
+  return registry.map((entry) => ({ id: entry.id, definition: entry.definition }));
 }

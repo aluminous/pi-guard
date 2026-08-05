@@ -1,18 +1,31 @@
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
-import { Container, matchesKey, Text } from "@earendil-works/pi-tui";
+import { Container, Input, matchesKey, Text, visibleWidth } from "@earendil-works/pi-tui";
 import type { CapabilityId } from "../capabilities.ts";
 import { dispositionCell, type DispositionRow } from "../dispositions.ts";
+import { styleGuardLine } from "../status.ts";
 import type { PanelTheme, PanelTui } from "./report-panel.ts";
 import type { Keybindings } from "./select-list.ts";
 
 // Two clear columns: the longest class id is 20 wide, so 22 keeps a gutter.
 const ID_WIDTH = 22;
 const DISPOSITION_WIDTH = 16;
+const PAGE_STEP = 10;
+
+/** The page's two tabs: the editable table, and the read-only mechanism policy. */
+export type DispositionTab = "dispositions" | "rules";
+
+const TABS: DispositionTab[] = ["dispositions", "rules"];
+const TAB_LABELS: Record<DispositionTab, string> = { dispositions: "dispositions", rules: "rules" };
+
+/** List mode edits rows; the two form modes replace the list inside the same panel body. */
+type PageMode = "list" | "add" | "edit";
 
 export interface DispositionPageParams {
   tui: PanelTui;
   theme: PanelTheme;
   keybindings: Keybindings;
+  /** Which tab to open on: `/guard policy` lands on the table, `/guard policy rules` on the rules view. */
+  initialTab?: DispositionTab;
   /** Current rows, re-read on every refresh so live stats and preset changes land. */
   rows(): DispositionRow[];
   /** Cycles one row's disposition at session scope; the page re-reads rows() after. */
@@ -21,20 +34,68 @@ export interface DispositionPageParams {
   save(): void;
   /** One-line note about an active session preset, when there is one. */
   banner(): string | undefined;
+  /** formatGuardPolicy lines for the rules tab, re-read each refresh (never snapshotted). */
+  policyLines(): string[];
+  /** Adds a class at session scope; returns a validation error to keep the user in the form. */
+  addClass(input: { id: string; definition: string }): string | undefined;
+  /** Edits a class definition at session scope; returns a validation error. */
+  editDefinition(id: CapabilityId, definition: string): string | undefined;
+  /** Deletes a custom class at session scope; returns a refusal for built-ins. */
+  deleteClass(id: CapabilityId): string | undefined;
+  /** Page-level notifications (class added, deletion refused). */
+  notify(message: string, level?: "info" | "warning" | "error"): void;
   done(value: undefined): void;
 }
 
 /**
- * The disposition settings page: THE policy surface. One row per capability
- * class with its disposition and this session's hit stats, docked in the
- * editor area like the other guard views (DynamicBorder chrome, non-overlay
- * custom UI, agent streaming above).
+ * Renders a labelled single-line field by borrowing Input's own rendering, the
+ * same trick InlineCommentRow uses: give Input the remaining columns plus its
+ * two-column prompt, then strip the prompt so the cursor still lands right.
+ */
+class FormField implements Component {
+  private label: string;
+  private input: Input;
+  private theme: PanelTheme;
+  private active: boolean;
+
+  constructor(label: string, input: Input, theme: PanelTheme, active: boolean) {
+    this.label = label;
+    this.input = input;
+    this.theme = theme;
+    this.active = active;
+  }
+
+  invalidate(): void {}
+
+  render(width: number): string[] {
+    const marker = this.active ? this.theme.fg("accent", "→ ") : "  ";
+    const label = this.active ? this.theme.fg("accent", this.label) : this.theme.fg("muted", this.label);
+    const prefix = `${marker}${label}  `;
+    const available = width - visibleWidth(prefix);
+    if (available <= 0) return [prefix];
+    const line = this.input.render(available + 2)[0] ?? "> ";
+    return [prefix + line.slice(2)];
+  }
+}
+
+/** Structural slice of pi-tui's Component, so the panel does not depend on the full type. */
+interface Component {
+  invalidate(): void;
+  render(width: number): string[];
+}
+
+/**
+ * The disposition settings page: THE policy surface. Two tabs — the editable
+ * capability table, and the read-only mechanism policy that `/guard policy
+ * rules` used to render as its own view. Docked in the editor area like the
+ * other guard views (DynamicBorder chrome, non-overlay custom UI, agent
+ * streaming above).
  *
- * Every edit applies immediately at session scope — that is the point of the
- * page, since classes like local-destructive are meant to be re-scoped per
- * session. Rows moved off their persisted value are coloured; Ctrl+S persists
- * them (and the colour clears), Esc just closes and leaves the session
- * overrides in force.
+ * Every edit — a disposition, a new class, a definition rewrite, a deletion —
+ * applies immediately at session scope, since classes like local-destructive
+ * are meant to be re-scoped per session. Rows moved off their persisted value
+ * are coloured and new/edited classes are tagged; Ctrl+S persists everything
+ * (and the marks clear), Esc just closes and leaves the session state in force.
  */
 export class DispositionPage extends Container {
   /** Focusable: set by the TUI when focus changes. */
@@ -43,10 +104,20 @@ export class DispositionPage extends Container {
   private params: DispositionPageParams;
   private body = new Container();
   private selected = 0;
+  private tab: DispositionTab;
+  private mode: PageMode = "list";
+  private scroll = 0;
+  /** Add-form fields; reused across openings so a cancelled form starts clean. */
+  private idInput = new Input();
+  private definitionInput = new Input();
+  private formField: "id" | "definition" = "id";
+  private formError: string | undefined;
+  private editingId: CapabilityId | undefined;
 
   constructor(params: DispositionPageParams) {
     super();
     this.params = params;
+    this.tab = params.initialTab ?? "dispositions";
     // jiti caveat: pi's DynamicBorder default color reads a global theme that
     // extensions may not share — always pass the explicit color function.
     const border = () => new DynamicBorder((text) => params.theme.fg("border", text));
@@ -61,68 +132,154 @@ export class DispositionPage extends Container {
     return this.params.rows()[this.selected]?.id;
   }
 
+  activeTab(): DispositionTab {
+    return this.tab;
+  }
+
+  /** Switches tabs from outside (a second `/guard policy rules` while the table tab is up). */
+  selectTab(tab: DispositionTab): void {
+    if (this.tab === tab) return;
+    this.tab = tab;
+    this.scroll = 0;
+    this.refresh();
+  }
+
   refresh(): void {
     const theme = this.params.theme;
-    const rows = this.params.rows();
-    if (this.selected >= rows.length) this.selected = Math.max(0, rows.length - 1);
     this.body.clear();
-    this.body.addChild(new Text(theme.fg("accent", theme.bold("Capability dispositions")), 0, 0));
+    this.body.addChild(new Text(theme.fg("accent", theme.bold("Capability policy")), 0, 0));
+    this.body.addChild(new Text(this.renderTabHeader(), 0, 0));
+    if (this.tab === "rules") this.renderRules();
+    else if (this.mode === "list") this.renderList();
+    else this.renderForm();
+    this.params.tui.requestRender();
+  }
+
+  /** `Tab: dispositions | rules` with the active word accent-coloured, like pi's model selector scope line. */
+  private renderTabHeader(): string {
+    const theme = this.params.theme;
+    const names = TABS.map((tab) => (tab === this.tab ? theme.fg("accent", TAB_LABELS[tab]) : theme.fg("muted", TAB_LABELS[tab])));
+    return `  ${theme.fg("muted", "Tab:")} ${names.join(theme.fg("muted", " | "))}`;
+  }
+
+  private renderList(): void {
+    const theme = this.params.theme;
+    const rows = this.params.rows();
+    if (this.selected > rows.length) this.selected = rows.length;
     const banner = this.params.banner();
     if (banner) this.body.addChild(new Text(theme.fg("warning", `  ${banner}`), 0, 0));
 
-    const maxVisible = Math.max(4, this.params.tui.terminal.rows - 12);
-    const start = Math.max(0, Math.min(this.selected - Math.floor(maxVisible / 2), rows.length - maxVisible));
-    const end = Math.min(start + maxVisible, rows.length);
+    // The add row is a virtual last entry, so index rows.length is "＋ Add class…".
+    const total = rows.length + 1;
+    const maxVisible = Math.max(4, this.params.tui.terminal.rows - 13);
+    const start = Math.max(0, Math.min(this.selected - Math.floor(maxVisible / 2), total - maxVisible));
+    const end = Math.min(start + maxVisible, total);
     for (let i = start; i < end; i++) {
+      if (i === rows.length) {
+        const selected = i === this.selected;
+        const label = "＋ Add class…";
+        this.body.addChild(new Text(`${selected ? theme.fg("accent", "→ ") : "  "}${selected ? theme.fg("accent", label) : theme.fg("muted", label)}`, 0, 0));
+        continue;
+      }
       const row = rows[i];
       if (!row) continue;
       this.body.addChild(new Text(this.renderRow(row, i === this.selected), 0, 0));
     }
-    if (start > 0 || end < rows.length) {
-      this.body.addChild(new Text(theme.fg("muted", `  (${this.selected + 1}/${rows.length})`), 0, 0));
+    if (start > 0 || end < total) {
+      this.body.addChild(new Text(theme.fg("muted", `  (${this.selected + 1}/${total})`), 0, 0));
     }
 
     const current = rows[this.selected];
     if (current) this.body.addChild(new Text(theme.fg("muted", `  ${current.definition}`), 0, 0));
-    this.body.addChild(new Text(theme.fg("muted", "  ↑↓ row · ←→/Enter cycle (applies to this session) · Ctrl+S saves · Esc closes"), 0, 0));
-    this.params.tui.requestRender();
+    this.body.addChild(new Text(theme.fg("muted", "  ↑↓ row · ←→/Enter cycle · a add · e edit · d delete · Tab switches view · Ctrl+S saves · Esc closes"), 0, 0));
   }
 
   /**
    * Selection colours the class id, modification colours the disposition cell:
    * two different segments, so a modified row stays visibly modified while it
-   * is highlighted.
+   * is highlighted. Session-scoped class changes get their own warning tag.
    */
   private renderRow(row: DispositionRow, selected: boolean): string {
     const theme = this.params.theme;
     const prefix = selected ? theme.fg("accent", "→ ") : "  ";
     const id = row.id.padEnd(ID_WIDTH);
     const cell = dispositionCell(row).padEnd(DISPOSITION_WIDTH);
+    const tag = row.sessionNew ? " (new)" : row.sessionEdited ? " (edited)" : "";
     return [
       prefix,
       selected ? theme.fg("accent", id) : id,
       row.modified ? theme.fg("warning", cell) : cell,
-      row.statsLabel ? theme.fg("muted", row.statsLabel) : "",
+      tag ? theme.fg("warning", tag) : "",
+      row.statsLabel ? theme.fg("muted", ` ${row.statsLabel}`) : "",
     ].join("");
   }
 
+  /** The read-only mechanism policy, scrolled like GuardReportPanel and re-read from formatGuardPolicy each refresh. */
+  private renderRules(): void {
+    const theme = this.params.theme;
+    const lines = this.params.policyLines();
+    const maxVisible = Math.max(8, this.params.tui.terminal.rows - 13);
+    const maxScroll = Math.max(0, lines.length - maxVisible);
+    if (this.scroll > maxScroll) this.scroll = maxScroll;
+    for (const line of lines.slice(this.scroll, this.scroll + maxVisible)) {
+      this.body.addChild(new Text(styleGuardLine(line, theme), 0, 0));
+    }
+    const footer: string[] = [];
+    if (maxScroll > 0) footer.push(`${this.scroll + 1}-${Math.min(lines.length, this.scroll + maxVisible)}/${lines.length} · ↑↓ scroll`);
+    footer.push("Tab switches view");
+    footer.push("Esc closes");
+    this.body.addChild(new Text(theme.fg("muted", `  ${footer.join(" · ")}`), 0, 0));
+  }
+
+  private renderForm(): void {
+    const theme = this.params.theme;
+    const adding = this.mode === "add";
+    this.body.addChild(new Text(theme.fg("accent", `  ${adding ? "New capability class" : `Edit ${this.editingId}`}`), 0, 0));
+    if (adding) {
+      this.body.addChild(new FormField("id        ", this.idInput, theme, this.formField === "id"));
+    }
+    this.body.addChild(new FormField("definition", this.definitionInput, theme, this.formField === "definition" || !adding));
+    if (this.formError) this.body.addChild(new Text(theme.fg("error", `  ${this.formError}`), 0, 0));
+    this.body.addChild(new Text(theme.fg("muted", "  The definition is prompt text the namer reads verbatim; write it as a decision boundary."), 0, 0));
+    // Enter commits rather than inserting a newline: these are Input fields, not
+    // a multi-line Editor, so there is no newline to insert. Ctrl+S commits too,
+    // which keeps the "save" gesture meaning the same thing in both modes.
+    this.body.addChild(new Text(theme.fg("muted", `  ${adding ? "Tab switches field · " : ""}Enter or Ctrl+S commits (session scope) · Esc cancels`), 0, 0));
+  }
+
   handleInput(data: string): void {
+    if (this.mode !== "list") return this.handleFormInput(data);
+
+    if (this.params.keybindings.matches(data, "tui.input.tab")) {
+      this.tab = TABS[(TABS.indexOf(this.tab) + 1) % TABS.length]!;
+      this.scroll = 0;
+      this.refresh();
+      return;
+    }
+    if (this.tab === "rules") return this.handleRulesInput(data);
+
     const rows = this.params.rows();
+    const total = rows.length + 1;
     if (this.params.keybindings.matches(data, "tui.select.up")) {
-      if (rows.length === 0) return;
-      this.selected = this.selected === 0 ? rows.length - 1 : this.selected - 1;
+      this.selected = this.selected === 0 ? total - 1 : this.selected - 1;
       this.refresh();
       return;
     }
     if (this.params.keybindings.matches(data, "tui.select.down")) {
-      if (rows.length === 0) return;
-      this.selected = this.selected === rows.length - 1 ? 0 : this.selected + 1;
+      this.selected = this.selected === total - 1 ? 0 : this.selected + 1;
       this.refresh();
       return;
     }
-    if (matchesKey(data, "left")) return this.cycle(-1);
-    if (matchesKey(data, "right")) return this.cycle(1);
-    if (this.params.keybindings.matches(data, "tui.select.confirm")) return this.cycle(1);
+    const onAddRow = this.selected === rows.length;
+    if (this.params.keybindings.matches(data, "tui.select.confirm")) {
+      if (onAddRow) return this.openAddForm();
+      return this.cycle(1);
+    }
+    if (matchesKey(data, "left")) return onAddRow ? undefined : this.cycle(-1);
+    if (matchesKey(data, "right")) return onAddRow ? undefined : this.cycle(1);
+    if (data === "a") return this.openAddForm();
+    if (data === "e") return this.openEditForm();
+    if (data === "d") return this.deleteSelected();
     if (matchesKey(data, "ctrl+s")) {
       this.params.save();
       this.refresh();
@@ -131,6 +288,122 @@ export class DispositionPage extends Container {
     if (this.params.keybindings.matches(data, "tui.select.cancel")) {
       this.params.done(undefined);
     }
+  }
+
+  private handleRulesInput(data: string): void {
+    if (this.params.keybindings.matches(data, "tui.select.up")) {
+      this.scroll = Math.max(0, this.scroll - 1);
+      this.refresh();
+      return;
+    }
+    if (this.params.keybindings.matches(data, "tui.select.down")) {
+      this.scroll += 1;
+      this.refresh();
+      return;
+    }
+    if (matchesKey(data, "pageUp")) {
+      this.scroll = Math.max(0, this.scroll - PAGE_STEP);
+      this.refresh();
+      return;
+    }
+    if (matchesKey(data, "pageDown")) {
+      this.scroll += PAGE_STEP;
+      this.refresh();
+      return;
+    }
+    if (this.params.keybindings.matches(data, "tui.select.cancel")) {
+      this.params.done(undefined);
+    }
+  }
+
+  private handleFormInput(data: string): void {
+    if (this.params.keybindings.matches(data, "tui.select.cancel")) {
+      this.closeForm();
+      return;
+    }
+    if (this.mode === "add" && this.params.keybindings.matches(data, "tui.input.tab")) {
+      this.formField = this.formField === "id" ? "definition" : "id";
+      this.refresh();
+      return;
+    }
+    if (this.params.keybindings.matches(data, "tui.select.confirm") || matchesKey(data, "ctrl+s")) {
+      this.commitForm();
+      return;
+    }
+    const field = this.mode === "add" && this.formField === "id" ? this.idInput : this.definitionInput;
+    field.handleInput(data);
+    this.refresh();
+  }
+
+  private openAddForm(): void {
+    this.mode = "add";
+    this.formField = "id";
+    this.formError = undefined;
+    this.idInput.setValue("");
+    this.definitionInput.setValue("");
+    this.idInput.focused = true;
+    this.definitionInput.focused = true;
+    this.refresh();
+  }
+
+  private openEditForm(): void {
+    const row = this.params.rows()[this.selected];
+    if (!row) return;
+    this.mode = "edit";
+    this.editingId = row.id;
+    this.formField = "definition";
+    this.formError = undefined;
+    // Definition only, for built-ins and custom classes alike: the id is the
+    // namer's vocabulary and the name is cosmetic, while the definition is the
+    // thing that actually changes how actions get labelled.
+    this.definitionInput.setValue(row.fullDefinition);
+    this.definitionInput.focused = true;
+    this.refresh();
+  }
+
+  private closeForm(): void {
+    this.mode = "list";
+    this.formError = undefined;
+    this.editingId = undefined;
+    this.refresh();
+  }
+
+  private commitForm(): void {
+    if (this.mode === "add") {
+      const id = this.idInput.getValue().trim();
+      const error = this.params.addClass({ id, definition: this.definitionInput.getValue() });
+      if (error) {
+        this.formError = error;
+        this.refresh();
+        return;
+      }
+      this.params.notify(`${id} added for this session, default ask. Ctrl+S saves it.`);
+      this.closeForm();
+      return;
+    }
+    const id = this.editingId;
+    if (!id) return this.closeForm();
+    const error = this.params.editDefinition(id, this.definitionInput.getValue());
+    if (error) {
+      this.formError = error;
+      this.refresh();
+      return;
+    }
+    this.params.notify(`${id} definition updated for this session. Ctrl+S saves it.`);
+    this.closeForm();
+  }
+
+  private deleteSelected(): void {
+    const row = this.params.rows()[this.selected];
+    if (!row) return;
+    const error = this.params.deleteClass(row.id);
+    if (error) {
+      this.params.notify(error, "warning");
+      this.refresh();
+      return;
+    }
+    this.params.notify(`${row.id} removed for this session. Ctrl+S saves it.`);
+    this.refresh();
   }
 
   private cycle(step: 1 | -1): void {

@@ -2,7 +2,16 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CAPABILITY_IDS, DEFAULT_DISPOSITIONS, isCapabilityId, isDisposition, type CapabilityId, type Disposition } from "./capabilities.ts";
+import {
+  BUILTIN_CAPABILITY_IDS,
+  CUSTOM_CLASS_ID_PATTERN,
+  DEFAULT_DISPOSITIONS,
+  isBuiltinCapabilityId,
+  isDisposition,
+  type CapabilityClass,
+  type CapabilityId,
+  type Disposition,
+} from "./capabilities.ts";
 import { DEFAULT_CLASSIFIER_RULES } from "./classifier-rules.ts";
 import { DEFAULT_COMMAND_ALLOWLIST } from "./command-allowlist.ts";
 
@@ -48,6 +57,21 @@ export interface ResolvedClassifierConfig {
   rules: Required<Omit<ClassifierRulesConfig, "replace">>;
 }
 
+/** One persisted custom capability class. `definition` is prompt text the namer reads verbatim. */
+export interface CapabilityClassConfig {
+  id?: unknown;
+  name?: unknown;
+  definition?: unknown;
+  disposition?: unknown;
+}
+
+export interface CapabilitiesConfig {
+  /** Custom classes that join the taxonomy. Merged by id across layers. */
+  classes?: CapabilityClassConfig[];
+  /** Replacement prompt text for built-in classes, keyed by built-in class id. */
+  definitions?: Record<string, string>;
+}
+
 export interface GuardConfig {
   enabled?: boolean;
   backend?: GuardBackendName;
@@ -73,6 +97,8 @@ export interface GuardConfig {
   };
   /** Capability disposition table: class id → allow | judge | ask | deny. Omitted classes keep their default. */
   dispositions?: Record<string, string>;
+  /** Custom capability classes and built-in definition overrides — the editable half of the taxonomy. */
+  capabilities?: CapabilitiesConfig;
   classifier?: ClassifierConfig;
   seatbelt?: Record<string, unknown>;
   container?: Record<string, unknown>;
@@ -108,6 +134,10 @@ export interface ConfigProvenance {
   deletedRules: Record<ClassifierRuleListKey, Record<string, string>>;
   /** Capability class id → source; "default" until a config file sets the row. */
   dispositions: Record<CapabilityId, string>;
+  /** Custom class id → the config file that defined it. Per-id, like dispositions: classes merge by id, not wholesale. */
+  capabilityClasses: Record<string, string>;
+  /** Built-in class id → the config file that overrode its definition. */
+  capabilityDefinitions: Record<string, string>;
 }
 
 export interface ResolvedGuardConfig {
@@ -135,6 +165,13 @@ export interface ResolvedGuardConfig {
   };
   /** Fully resolved disposition table: every capability class has a row. */
   dispositions: Record<CapabilityId, Disposition>;
+  /** Resolved taxonomy edits; capabilityRegistry() folds these over the built-ins. */
+  capabilities: {
+    /** Custom classes in declaration order, already validated and defaulted. */
+    classes: CapabilityClass[];
+    /** Built-in id → replacement definition. */
+    definitions: Record<string, string>;
+  };
   classifier: ResolvedClassifierConfig;
   seatbelt: Record<string, unknown>;
   container: Record<string, unknown>;
@@ -270,7 +307,9 @@ function defaultProvenance(config: Omit<ResolvedGuardConfig, "provenance">): Con
       environment: ruleListProvenance(config.classifier.rules.environment, "default"),
     },
     deletedRules: { allow: {}, soft_deny: {}, hard_deny: {}, environment: {} },
-    dispositions: Object.fromEntries(CAPABILITY_IDS.map((id) => [id, "default"])) as Record<CapabilityId, string>,
+    dispositions: Object.fromEntries(BUILTIN_CAPABILITY_IDS.map((id) => [id, "default"])) as Record<CapabilityId, string>,
+    capabilityClasses: {},
+    capabilityDefinitions: {},
   };
 }
 
@@ -311,6 +350,7 @@ const DEFAULTS_SANS_PROVENANCE: Omit<ResolvedGuardConfig, "provenance"> = {
     allow: [...DEFAULT_COMMAND_ALLOWLIST],
   },
   dispositions: { ...DEFAULT_DISPOSITIONS },
+  capabilities: { classes: [], definitions: {} },
   classifier: {
     enabled: false,
     model: "auto",
@@ -406,6 +446,88 @@ function mergeRuleList(base: string[], incoming: string[], listName: string, dia
   return result;
 }
 
+/**
+ * Validates one custom class entry. Invalid entries are skipped with a
+ * diagnostic rather than failing the load: a typo in one class must not cost
+ * the user their whole guard config.
+ */
+function parseCapabilityClass(entry: unknown, index: number, source: string, diagnostics: string[]): CapabilityClass | undefined {
+  const where = `${source}.capabilities.classes[${index}]`;
+  if (!isObject(entry)) {
+    diagnostics.push(`Ignoring ${where}: expected an object`);
+    return undefined;
+  }
+  const { id, name, definition, disposition } = entry as CapabilityClassConfig;
+  if (typeof id !== "string" || !CUSTOM_CLASS_ID_PATTERN.test(id)) {
+    diagnostics.push(`Ignoring ${where}: id must be kebab-case, 2-41 characters, starting with a letter`);
+    return undefined;
+  }
+  if (isBuiltinCapabilityId(id)) {
+    diagnostics.push(`Ignoring ${where}: "${id}" is a built-in class — use capabilities.definitions to change its wording`);
+    return undefined;
+  }
+  if (typeof definition !== "string" || !definition.trim()) {
+    diagnostics.push(`Ignoring ${where}: definition must be a non-empty string`);
+    return undefined;
+  }
+  if (disposition !== undefined && !isDisposition(disposition)) {
+    diagnostics.push(`Ignoring ${where}: disposition must be "allow", "judge", "ask", or "deny"`);
+    return undefined;
+  }
+  if (name !== undefined && typeof name !== "string") {
+    diagnostics.push(`Ignoring ${where}: name must be a string`);
+    return undefined;
+  }
+  return {
+    id,
+    name: typeof name === "string" && name.trim() ? name.trim() : id,
+    definition: definition.trim(),
+    // New classes default to ask: an unnamed intent the user cared enough to
+    // name is exactly the case for bringing them in, and it is the one default
+    // that cannot silently widen what the agent may do.
+    default: (disposition as Disposition | undefined) ?? "ask",
+  };
+}
+
+/** Merges the capabilities section by id, so a project config adding one class keeps the global ones. */
+function mergeCapabilities(next: ResolvedGuardConfig, override: CapabilitiesConfig, source: string, diagnostics: string[]): void {
+  if (override.classes !== undefined) {
+    if (!Array.isArray(override.classes)) {
+      diagnostics.push(`Ignoring ${source}.capabilities.classes: expected an array`);
+    } else {
+      override.classes.forEach((raw, index) => {
+        const parsed = parseCapabilityClass(raw, index, source, diagnostics);
+        if (!parsed) return;
+        const at = next.capabilities.classes.findIndex((entry) => entry.id === parsed.id);
+        // Same-id override keeps its position, so the namer payload order (and
+        // with it the cacheable prefix) does not shuffle when a project config
+        // refines a class the global config already declared.
+        if (at === -1) next.capabilities.classes.push(parsed);
+        else next.capabilities.classes[at] = parsed;
+        next.provenance.capabilityClasses[parsed.id] = source;
+      });
+    }
+  }
+
+  if (override.definitions === undefined) return;
+  if (!isObject(override.definitions)) {
+    diagnostics.push(`Ignoring ${source}.capabilities.definitions: expected an object of class id → definition`);
+    return;
+  }
+  for (const [key, value] of Object.entries(override.definitions)) {
+    if (!isBuiltinCapabilityId(key)) {
+      diagnostics.push(`Ignoring ${source}.capabilities.definitions.${key}: not a built-in capability class`);
+      continue;
+    }
+    if (typeof value !== "string" || !value.trim()) {
+      diagnostics.push(`Ignoring ${source}.capabilities.definitions.${key}: expected a non-empty string`);
+      continue;
+    }
+    next.capabilities.definitions[key] = value.trim();
+    next.provenance.capabilityDefinitions[key] = source;
+  }
+}
+
 export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardConfig>, source: string): ResolvedGuardConfig {
   const diagnostics = [...base.diagnostics];
   const next: ResolvedGuardConfig = {
@@ -415,6 +537,7 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
     network: { ...base.network },
     commands: { ...base.commands },
     dispositions: { ...base.dispositions },
+    capabilities: { classes: [...base.capabilities.classes], definitions: { ...base.capabilities.definitions } },
     classifier: { ...base.classifier },
     seatbelt: { ...base.seatbelt },
     container: { ...base.container },
@@ -462,12 +585,23 @@ export function mergeConfig(base: ResolvedGuardConfig, override: Partial<GuardCo
     next.commands.allow = setList("commands.allow", asStringArray(override.commands.allow, `${source}.commands.allow`, diagnostics), next.commands.allow);
   }
 
+  // Taxonomy before table: a config may define a custom class and set its
+  // disposition in the same file, so the class has to exist by the time the
+  // disposition rows are validated.
+  if (isObject(override.capabilities)) {
+    mergeCapabilities(next, override.capabilities as CapabilitiesConfig, source, diagnostics);
+  } else if (override.capabilities !== undefined) {
+    diagnostics.push(`Ignoring ${source}.capabilities: expected an object`);
+  }
+
+  const knownClassId = (key: string) => isBuiltinCapabilityId(key) || next.capabilities.classes.some((entry) => entry.id === key);
+
   // Per-row merge, unlike the wholesale lists: the disposition table is the
   // user-facing policy surface, so a project config that sets one row must not
   // silently reset the eleven it did not mention.
   if (isObject(override.dispositions)) {
     for (const [key, value] of Object.entries(override.dispositions)) {
-      if (!isCapabilityId(key)) {
+      if (!knownClassId(key)) {
         diagnostics.push(`Ignoring ${source}.dispositions.${key}: unknown capability class`);
         continue;
       }

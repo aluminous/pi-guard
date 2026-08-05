@@ -1,4 +1,4 @@
-import { capabilityDefinitionsForPrompt, isCapabilityId, type CapabilityId } from "./capabilities.ts";
+import { capabilityDefinitionsForPrompt, type CapabilityClass, type CapabilityId } from "./capabilities.ts";
 import type { ResolvedGuardConfig } from "./config.ts";
 import { GUARDED_TOOLS } from "./guarded-tools.ts";
 import { summarizePolicy } from "./policy.ts";
@@ -101,13 +101,14 @@ export function projectToolCall(toolName: string, input: unknown, cwd: string, c
  * to the system prompt alone.
  */
 export function buildNamerText(
+  registry: CapabilityClass[],
   recentUserMessages: string[],
   projection: ReviewProjection,
   sessionGuidance: string[] = [],
 ): string {
   return JSON.stringify(
     {
-      capabilityClasses: capabilityDefinitionsForPrompt(),
+      capabilityClasses: capabilityDefinitionsForPrompt(registry),
       activePolicy: projection.policySummary,
       cwd: projection.cwd,
       ...(sessionGuidance.length > 0 ? { userSessionGuidance: sessionGuidance } : {}),
@@ -125,6 +126,7 @@ export function buildNamerText(
  * after two denials is signal). Same cache discipline — pendingAction last.
  */
 export function buildJudgeText(params: {
+  registry: CapabilityClass[];
   recentUserMessages: string[];
   projection: ReviewProjection;
   sessionGuidance?: string[];
@@ -135,7 +137,7 @@ export function buildJudgeText(params: {
   const guidance = params.sessionGuidance ?? [];
   return JSON.stringify(
     {
-      capabilityClasses: capabilityDefinitionsForPrompt(),
+      capabilityClasses: capabilityDefinitionsForPrompt(params.registry),
       activePolicy: params.projection.policySummary,
       cwd: params.projection.cwd,
       ...(guidance.length > 0 ? { userSessionGuidance: guidance } : {}),
@@ -166,8 +168,12 @@ function extractJson(text: string): unknown {
  * class ids are dropped instead (the taxonomy can shrink between releases, and
  * a hallucinated id is not a protocol break), and a label set that ends up
  * empty becomes `unclassified` — the completeness valve, not an allow.
+ *
+ * `validIds` is the caller's registry, not the built-in set: a custom class is
+ * a real label the moment it exists, and a class deleted mid-call is dropped
+ * here rather than resolving against a table row that no longer exists.
  */
-export function parseNamerResult(text: string): { labels: CapabilityId[]; authorizationEvidence?: string } {
+export function parseNamerResult(text: string, validIds: ReadonlySet<string>): { labels: CapabilityId[]; authorizationEvidence?: string } {
   const parsed = extractJson(text);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("namer JSON is not an object");
   const obj = parsed as Record<string, unknown>;
@@ -175,7 +181,7 @@ export function parseNamerResult(text: string): { labels: CapabilityId[]; author
   if (!obj.labels.every((label) => typeof label === "string")) throw new Error("invalid namer labels: expected strings");
   const evidence = obj.authorizationEvidence;
   if (evidence !== undefined && typeof evidence !== "string") throw new Error("invalid namer authorizationEvidence");
-  const labels = [...new Set(obj.labels.filter(isCapabilityId))];
+  const labels = [...new Set(obj.labels.filter((label): label is string => typeof label === "string" && validIds.has(label)))];
   return {
     labels: labels.length > 0 ? labels : ["unclassified"],
     authorizationEvidence: typeof evidence === "string" && evidence.trim() ? evidence.trim() : undefined,

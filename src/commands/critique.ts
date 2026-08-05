@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { complete, type Message } from "@earendil-works/pi-ai/compat";
-import { CAPABILITY_CLASSES, getEffectiveDisposition } from "../capabilities.ts";
+import { capabilityRegistry, getEffectiveDisposition } from "../capabilities.ts";
 import { buildCapabilityPromptForCritique } from "../classifier.ts";
 import { loadConfig, type ResolvedGuardConfig } from "../config.ts";
 import { showGuardView } from "../live-view.ts";
@@ -21,7 +21,7 @@ Critique the definitions and the screen for:
 The taxonomy is deliberately capped at twelve classes: propose sharper wording before proposing a thirteenth, and say plainly if a proposed class is edge-case disease. Be concise and constructive; comment only where something could be improved.`;
 
 function formatTableForCritique(config: ResolvedGuardConfig, state: RuntimeState): string {
-  return CAPABILITY_CLASSES.map((entry) => {
+  return capabilityRegistry(config, state.capabilities).map((entry) => {
     const effective = getEffectiveDisposition(config, state.capabilities, entry.id);
     return `- ${entry.id} (${entry.name}) → ${effective.disposition} [${effective.scope}]\n  ${entry.definition}`;
   }).join("\n");
