@@ -11,7 +11,7 @@
  */
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -117,6 +117,11 @@ test("pi TUI: guard startup, status/policy page and its tabs, no [guard] convers
     git("init", "--quiet");
     writeFileSync(path.join(projectDir, "README.md"), "# pi-guard TUI test fixture\n");
     writeFileSync(path.join(projectDir, "hello.txt"), "hello\n");
+    // Pin what the assertions depend on: the developer's global guard config
+    // leaks into the session (the project layer merges over it), and a global
+    // statusLine of "auto"/"never" would fail the statusline gate below.
+    mkdirSync(path.join(projectDir, ".pi"));
+    writeFileSync(path.join(projectDir, ".pi", "guard.json"), `${JSON.stringify({ statusLine: "always" })}\n`);
     git("add", ".");
     git("-c", "user.name=pi-guard-test", "-c", "user.email=pi-guard-test@example.invalid", "commit", "--quiet", "-m", "fixture");
 
