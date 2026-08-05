@@ -19,7 +19,7 @@ describe("guard argument completions", () => {
   it("lists all subcommands for an empty prefix", () => {
     const items = makeCommand().getArgumentCompletions("");
     assert.ok(items);
-    assert.deepEqual(items.map((i) => i.value), ["status", "policy", "explain", "on", "off", "off session", "readonly", "model", "smoke", "critique"]);
+    assert.deepEqual(items.map((i) => i.value), ["status", "policy", "explain", "test", "test read", "test write", "on", "off", "off session", "readonly", "model", "smoke", "critique"]);
     assert.ok(items.every((i) => i.description));
   });
 

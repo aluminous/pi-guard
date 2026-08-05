@@ -8,6 +8,7 @@ import { showGuardView, toggleGuardView } from "../live-view.ts";
 import { pickFromList, type SelectItem } from "../tui/select-list.ts";
 import { formatError } from "../util.ts";
 import { runModelCommand } from "./model.ts";
+import { createGuardTest } from "./test.ts";
 
 export interface GuardCommandDeps {
   state: RuntimeState;
@@ -21,6 +22,9 @@ const SUBCOMMANDS: Array<{ value: string; description: string }> = [
   { value: "status", description: "Toggle the live status popup" },
   { value: "policy", description: "Show the resolved policy and classifier rules" },
   { value: "explain", description: "Show the newest decision trace (explain <n> for older ones)" },
+  { value: "test", description: "Dry-run a shell command through the guard without executing it" },
+  { value: "test read", description: "Dry-run a file read through the guard (test read <path>)" },
+  { value: "test write", description: "Dry-run a file write through the guard (test write <path>)" },
   { value: "on", description: "Enable the guard" },
   { value: "off", description: "Disable for the next agent turn, then re-enable" },
   { value: "off session", description: "Disable until the session ends (unguarded!)" },
@@ -32,6 +36,7 @@ const SUBCOMMANDS: Array<{ value: string; description: string }> = [
 
 export function createGuardCommand(deps: GuardCommandDeps) {
   const { state } = deps;
+  const runGuardTest = createGuardTest({ state });
 
   const show = (ctx: ExtensionContext, message: string, level: "info" | "warning" | "error" = "info") => {
     if (!ctx.hasUI) console.log(message);
@@ -202,6 +207,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     if (!sub) return openPanel(ctx);
     if (sub === "status" || sub === "policy") return showView(ctx, sub);
     if (sub === "explain") return showExplain(ctx, rest);
+    if (sub === "test") return runGuardTest(rest, ctx);
     if (sub === "on" || sub === "enable") return enable(ctx);
     if (sub === "off" || sub === "disable") {
       if (rest.toLowerCase() === "session") return disableSession(ctx);
@@ -212,7 +218,7 @@ export function createGuardCommand(deps: GuardCommandDeps) {
     if (sub === "smoke" && !rest) return deps.runGuardSmoke(ctx);
     if (sub === "critique") return deps.runCritique(rest, ctx);
 
-    show(ctx, "Usage: /guard [status|policy|explain [n]|on|off|off session|readonly|model …|smoke|critique …]", "warning");
+    show(ctx, "Usage: /guard [status|policy|explain [n]|test …|on|off|off session|readonly|model …|smoke|critique …]", "warning");
   }
 
   function getArgumentCompletions(argumentPrefix: string) {

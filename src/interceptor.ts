@@ -154,7 +154,7 @@ async function enforcePathPolicy(
  * and allowlisted reads skip review entirely — whether or not filesystem
  * enforcement is on; enabled:false only disables blocking, not trust.
  */
-function exemptReadCallReason(spec: GuardedToolSpec, input: Record<string, unknown>, cwd: string, config: ResolvedGuardConfig, allowedReadPath: string | undefined): string | undefined {
+export function exemptReadCallReason(spec: GuardedToolSpec, input: Record<string, unknown>, cwd: string, config: ResolvedGuardConfig, allowedReadPath: string | undefined): string | undefined {
   if (!spec.access.includes("read") || spec.access.includes("write")) return undefined;
   const target = spec.path?.(input);
   if (typeof target !== "string") return undefined;
