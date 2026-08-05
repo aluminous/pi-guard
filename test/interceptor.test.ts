@@ -163,6 +163,60 @@ describe("classifier command exemption", () => {
   });
 });
 
+/** Interactive fake: askGuardApproval falls back to select+input outside the TUI. */
+function interactiveCtx(cwd: string, answers: string[]) {
+  const ctx = {
+    cwd,
+    hasUI: true,
+    mode: "rpc",
+    abort() {},
+    ui: {
+      notify() {},
+      select: async () => answers.shift() ?? "Deny",
+      input: async () => undefined,
+    },
+    modelRegistry: { getAvailable: () => [], find: () => undefined },
+    sessionManager: { getBranch: () => [] },
+    signal: undefined,
+  };
+  return ctx as unknown as ExtensionContext;
+}
+
+describe("out-of-roots writes resolve through modify-system", () => {
+  const cwd = path.join(fixture.dir, "project");
+  const outside = path.join(fixture.dir, "elsewhere", "out.txt");
+
+  it("asks via the path dialog and remembers the approval for the session", async () => {
+    const state = guardedState(testConfig((c) => {
+      c.filesystem.allowWrite = ["."];
+      c.classifier.enabled = false;
+    }));
+    const ctx = interactiveCtx(cwd, ["Allow"]);
+    const first = await interceptToolCall({ toolName: "write", input: { path: outside, content: "x" } }, ctx, state);
+    assert.equal(first, undefined);
+    assert.equal(state.approvals.write.length, 1);
+    assert.deepEqual(state.recent[0]?.decision, "allow");
+
+    // Second write to the same path reuses the session memory: no second dialog
+    // (the fake would answer "Deny" if one were shown).
+    const second = await interceptToolCall({ toolName: "write", input: { path: outside, content: "y" } }, ctx, state);
+    assert.equal(second, undefined);
+    assert.equal(state.approvals.write.length, 1);
+  });
+
+  it("blocks when the user denies, counting the ask once", async () => {
+    const state = guardedState(testConfig((c) => {
+      c.filesystem.allowWrite = ["."];
+      c.classifier.enabled = false;
+    }));
+    const result = await interceptToolCall({ toolName: "write", input: { path: outside, content: "x" } }, interactiveCtx(cwd, ["Deny"]), state);
+    assert.equal(result?.block, true);
+    assert.match(result.reason, /approval denied/);
+    assert.equal(state.stats.asked, 1, "the path dialog owns the counters; the table must not double-count");
+    assert.equal(state.stats.ruleHits, 1);
+  });
+});
+
 describe("classifier failure handling", () => {
   it("stops only the current turn after fail-closed retries are exhausted", () => {
     let abortCalls = 0;

@@ -3,6 +3,7 @@ import { getPackageDir, type ExtensionContext } from "@earendil-works/pi-coding-
 import { askGuardApproval } from "./approvals.ts";
 import {
   capabilityName,
+  recordCapabilityHits,
   recordCapabilityOutcome,
   recordScreenVerdict,
   resolveCapabilities,
@@ -581,7 +582,11 @@ async function enforceCapabilities(params: EnforceParams): Promise<ToolCallBlock
       reason: params.pathApproval.reason,
       trace,
     });
-    return finish(approval ? "deny" : "allow", approval ? "ask-denied" : "ask-approved", approval);
+    // askPathApproval owns the counters, telemetry, and recent event for this
+    // dialog; only the per-class stats are still ours to record.
+    recordCapabilityHits(state.capabilities, resolution.labels);
+    recordCapabilityOutcome(state.capabilities, resolution.labels, approval ? "ask-denied" : "ask-approved");
+    return approval;
   }
 
   if (!ctx.hasUI) {
