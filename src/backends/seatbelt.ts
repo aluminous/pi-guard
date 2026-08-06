@@ -4,7 +4,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SandboxRuntimeConfig } from "@anthropic-ai/sandbox-runtime";
 import type { ResolvedRailConfig } from "../config.ts";
 import { existingRealPath } from "../paths.ts";
-import { compileFilesystemPolicy, resolveConfigPath } from "../policy.ts";
+import { compileFilesystemPolicy, findMatchingPattern, resolveConfigPath } from "../policy.ts";
 import { asStringArray, formatError, unique } from "../util.ts";
 import type { EffectivePolicy, RailBackend, WrappedCommand } from "./types.ts";
 
@@ -60,15 +60,51 @@ function tempReadWriteAllowlist(): string[] {
   return unique(["/tmp", "/private/tmp", os.tmpdir(), existingRealPath(os.tmpdir())]);
 }
 
+/**
+ * Keychain stores the profile re-allows for reading.
+ *
+ * A macOS keychain lookup runs in the caller's own process: `security` — and
+ * every CLI that keeps its token there, e.g. `gl` — opens the keychain file
+ * itself and only talks to securityd (already reachable: the base profile
+ * allows mach-lookup of com.apple.securityd.xpc and com.apple.SecurityServer)
+ * to unlock and decrypt it. Denying reads of ~/Library/Keychains therefore does
+ * not produce an error: the login keychain silently drops out of the search
+ * list, `security list-keychains` returns only /Library/Keychains/System.keychain,
+ * and every lookup reports "could not be found" as if the token were missing.
+ *
+ * Reads only. These paths are never added to allowWrite, and sandbox-runtime
+ * emits its file-write-create/file-write-unlink move-blocking denies over every
+ * denyRead path before this re-allow, which lifts file-read* alone.
+ */
+const KEYCHAIN_READ_ALLOWLIST = ["~/Library/Keychains", "/Library/Keychains", "/System/Library/Keychains"];
+
+/**
+ * The keychain paths this profile may read back out of the deny list. A
+ * denyRead entry that a config file contributed is left standing: the user
+ * asked for the keychain to be unreadable, and a built-in read-back would
+ * silently undo it. Default-provenance entries — including ones an
+ * `{"replace": false}` extension carried through — are pi-rail's own doing and
+ * are the ones this lifts.
+ */
+function keychainReadAllowlist(config: ResolvedRailConfig, cwd: string): string[] {
+  const sources = config.provenance.lists["filesystem.denyRead"];
+  const configured = config.filesystem.denyRead.filter((pattern) => (sources[pattern] ?? "default") !== "default");
+  return KEYCHAIN_READ_ALLOWLIST.filter((keychainPath) => findMatchingPattern(cwd, resolveConfigPath(cwd, keychainPath), configured) === undefined);
+}
+
 export function getSeatbeltRuntimeConfig(config: ResolvedRailConfig, cwd = process.cwd()): SandboxRuntimeConfig {
   // Config pattern lists arrive pre-resolved through the shared compiler; only
   // the seatbelt-specific system allowlists are resolved here.
   const compiled = compileFilesystemPolicy(config, cwd);
   const resolveAll = (filePaths: string[]) => filePaths.map((filePath) => resolveConfigPath(cwd, filePath));
   const tempPaths = resolveAll(tempReadWriteAllowlist());
+  // sandbox-runtime's filesystem.allowRead is "re-allow within a denied region",
+  // not a whitelist — it never narrows reads — so the keychain entries belong
+  // here in both read modes.
+  const keychainPaths = resolveAll(keychainReadAllowlist(config, cwd));
   const allowRead = compiled.patterns.allowRead.length === 0
-    ? []
-    : unique([...compiled.sandboxPaths.allowRead, ...resolveAll([...SYSTEM_READ_ALLOWLIST, ...XCODE_SELECT_READ_ALLOWLIST, ...gitAndGhReadAllowlist()]), ...tempPaths]);
+    ? keychainPaths
+    : unique([...compiled.sandboxPaths.allowRead, ...resolveAll([...SYSTEM_READ_ALLOWLIST, ...XCODE_SELECT_READ_ALLOWLIST, ...gitAndGhReadAllowlist()]), ...tempPaths, ...keychainPaths]);
   const allowWrite = unique([...compiled.sandboxPaths.allowWrite, ...tempPaths]);
   const denyRead = compiled.sandboxPaths.denyRead;
   const denyWrite = compiled.sandboxPaths.denyWrite;
@@ -186,7 +222,10 @@ export class SeatbeltBackend implements RailBackend {
     const network = (runtime.network ?? {}) as Record<string, unknown>;
     return {
       filesystem: {
-        allowRead: config.filesystem.enabled ? asStringArray(filesystem.allowRead, config.filesystem.allowRead) : [],
+        // Blacklist mode reports no read roots even though the profile carries
+        // the keychain re-allow: that is a fixed part of the profile, not a
+        // configured root, and surfacing it would read as whitelist mode.
+        allowRead: config.filesystem.enabled && config.filesystem.allowRead.length > 0 ? asStringArray(filesystem.allowRead, config.filesystem.allowRead) : [],
         denyRead: config.filesystem.enabled ? asStringArray(filesystem.denyRead, config.filesystem.denyRead) : [],
         allowWrite: config.filesystem.enabled ? asStringArray(filesystem.allowWrite, config.filesystem.allowWrite) : [],
         denyWrite: config.filesystem.enabled ? asStringArray(filesystem.denyWrite, config.filesystem.denyWrite) : [],

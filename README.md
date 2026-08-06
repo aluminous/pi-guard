@@ -459,6 +459,19 @@ Reads are blacklist-based by default: tools and sandboxed commands can read ordi
 
 Writes are whitelist-based by default: tools and sandboxed commands can write to the project directory, including local `.git` metadata for normal source-control operations, temp directories, and common development caches such as npm/pnpm/yarn, Cargo registry/git caches, Gradle caches/wrapper, Maven local repository, Go module/build caches, pip caches, NuGet packages, Ivy/Coursier, Bazel, uv, Ruff, and pre-commit caches. Sensitive paths in `denyWrite` remain hard-blocked even if they overlap an allowed write root.
 
+The macOS keychain is the one place the two engines deliberately disagree.
+`~/Library/Keychains` stays in `denyRead`, so Pi's `read` tool still treats the
+keychain as credentials — but the Seatbelt profile reads it back in, because a
+keychain lookup runs inside the calling process: `security`, and any CLI that
+keeps its token there, opens the keychain file itself and only uses securityd
+to unlock it. With the store read-denied nothing errors; the login keychain
+just drops out of the search list and every lookup reports "could not be found"
+as if the token were missing. Only reads are granted — keychain writes,
+renames, and deletes stay denied — and the read-back stands down for any
+keychain deny that came from a config file rather than the built-in defaults,
+so an explicit `denyRead` of `~/Library/Keychains` (or of a directory
+containing it) is honoured for bash too.
+
 Use project or global config to narrow these defaults for more sensitive workspaces.
 
 ## Network policy

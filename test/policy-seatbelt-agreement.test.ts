@@ -9,6 +9,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { getSeatbeltRuntimeConfig } from "../src/backends/seatbelt.ts";
+import { mergeConfig } from "../src/config.ts";
 import { compileFilesystemPolicy, decidePathAccess, resolveConfigPath, type FilesystemListName } from "../src/policy.ts";
 import { makeFixtureDir, testConfig } from "./helpers.ts";
 
@@ -112,6 +113,65 @@ describe("policy and seatbelt agree on default deny paths", () => {
     assert.equal(Object.hasOwn(runtime.network, "allowedDomains"), true);
     assert.deepEqual(runtime.network.allowedDomains, []);
     assert.deepEqual(runtime.network.deniedDomains, ["*"]);
+  });
+});
+
+// The keychain is the one place the two engines deliberately disagree: bash
+// needs to read it (macOS keychain lookups happen in the caller's process, so
+// `security` and CLIs that store tokens there open the file themselves), while
+// the file tools have no business reading the encrypted blob. See
+// KEYCHAIN_READ_ALLOWLIST in src/backends/seatbelt.ts.
+describe("keychain reads", () => {
+  const keychainDir = path.join(fakeHome, "Library", "Keychains");
+  const keychainFile = path.join(keychainDir, "login.keychain-db");
+
+  before(() => {
+    mkdirSync(keychainDir, { recursive: true });
+    writeFileSync(keychainFile, "not-a-real-keychain");
+  });
+
+  const runtimeAllowRead = (config = testConfig()) =>
+    (getSeatbeltRuntimeConfig(config, cwd).filesystem as { allowRead?: string[] }).allowRead ?? [];
+
+  it("re-allows the keychain stores in the seatbelt read rules", () => {
+    const allowRead = runtimeAllowRead();
+    for (const store of [keychainDir, "/Library/Keychains", "/System/Library/Keychains"]) {
+      assert.ok(allowRead.includes(store), `seatbelt allowRead should re-allow ${store}`);
+    }
+  });
+
+  it("keeps the keychain denied for the file tools", () => {
+    const decision = decidePathAccess(testConfig(), cwd, keychainFile, "read");
+    assert.equal(decision.allowed, false);
+    assert.equal(decision.allowed === false && decision.code, "denied-by-pattern");
+  });
+
+  it("does not broaden keychain writes", () => {
+    const filesystem = getSeatbeltRuntimeConfig(testConfig(), cwd).filesystem as { allowWrite: string[]; denyRead: string[] };
+    for (const store of [keychainDir, "/Library/Keychains", "/System/Library/Keychains"]) {
+      assert.ok(!filesystem.allowWrite.includes(store), `seatbelt allowWrite must not include ${store}`);
+    }
+    // The re-allow lifts file-read* only; sandbox-runtime derives its
+    // file-write-create/file-write-unlink move blocks from denyRead, so the
+    // entry has to stay in that list for the write denial to survive.
+    assert.ok(filesystem.denyRead.includes(keychainDir));
+  });
+
+  it("stands down when a config file denies the keychain itself", () => {
+    const config = mergeConfig(testConfig(), { filesystem: { denyRead: ["~/Library/Keychains"] } }, "/tmp/rail.json");
+    assert.ok(!runtimeAllowRead(config).includes(keychainDir), "a configured deny must not be read back");
+    // The two system stores were never the user's deny, so they stay allowed.
+    assert.ok(runtimeAllowRead(config).includes("/Library/Keychains"));
+  });
+
+  it("stands down for a broader configured deny that covers the keychain", () => {
+    const config = mergeConfig(testConfig(), { filesystem: { denyRead: ["~/Library"] } }, "/tmp/rail.json");
+    assert.ok(!runtimeAllowRead(config).includes(keychainDir));
+  });
+
+  it("still re-allows when a config file replaces denyRead without the keychain", () => {
+    const config = mergeConfig(testConfig(), { filesystem: { denyRead: ["~/.ssh"] } }, "/tmp/rail.json");
+    assert.ok(runtimeAllowRead(config).includes(keychainDir));
   });
 });
 

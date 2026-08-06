@@ -29,6 +29,7 @@
     "check": "tsc --noEmit",
     "test": "node --test test/*.test.ts",
     "test:tui": "node --test test-integration/tui.ts",
+    "test:keychain": "node --test test-integration/keychain.ts",
     "eval": "node eval/run.ts",
     "telemetry": "node eval/session-stats.ts"
   },
