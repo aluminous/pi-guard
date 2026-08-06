@@ -332,6 +332,125 @@ describe("capabilities config", () => {
   });
 });
 
+describe("commands.classify config", () => {
+  const globalPath = globalRailConfigPath();
+  const projectPath = "/repo/.pi/rail.json";
+  const K8S_CLASS = { id: "k8s-ops", definition: "Cluster operations.", disposition: "ask" };
+
+  it("parses template → capability entries against the built-in classes", () => {
+    const config = mergeConfig(testConfig(), { commands: { classify: [{ template: "docker *", capability: "run-dev-tools" }] } }, globalPath);
+    assert.deepEqual(config.commands.classify, [{ template: "docker *", capability: "run-dev-tools" }]);
+    assert.equal(config.provenance.lists["commands.classify"]["docker *"], globalPath);
+    assert.deepEqual(config.diagnostics, []);
+  });
+
+  it("accepts a custom class the same file declares", () => {
+    const config = mergeConfig(
+      testConfig(),
+      { capabilities: { classes: [K8S_CLASS] }, commands: { classify: [{ template: "kubectl *", capability: "k8s-ops" }] } },
+      globalPath,
+    );
+    assert.deepEqual(config.commands.classify, [{ template: "kubectl *", capability: "k8s-ops" }]);
+    assert.deepEqual(config.diagnostics, []);
+  });
+
+  it("skips an entry naming an unknown class and keeps the rest of the list", () => {
+    const config = mergeConfig(
+      testConfig(),
+      {
+        commands: {
+          classify: [
+            { template: "kubectl *", capability: "k8s-ops" },
+            { template: "docker *", capability: "run-dev-tools" },
+          ],
+        },
+      },
+      globalPath,
+    );
+    assert.deepEqual(config.commands.classify, [{ template: "docker *", capability: "run-dev-tools" }]);
+    assert.match(config.diagnostics.join("\n"), /classify\[0\]: "k8s-ops" is not a known capability class — declare it in capabilities\.classes first/);
+  });
+
+  it("skips malformed entries entry by entry, with the array index in the diagnostic", () => {
+    const config = mergeConfig(
+      testConfig(),
+      {
+        commands: {
+          classify: [
+            "kubectl *",
+            { template: 7, capability: "read-project" },
+            { template: "", capability: "read-project" },
+            { template: "*", capability: "read-project" },
+            { template: "kubectl * pods", capability: "read-project" },
+            { template: "helm *", capability: "" },
+            { template: "helm *", capability: "read-project", disposition: "ask" },
+            { template: "docker *", capability: "run-dev-tools" },
+          ] as never,
+        },
+      },
+      globalPath,
+    );
+    assert.deepEqual(config.commands.classify, [{ template: "docker *", capability: "run-dev-tools" }]);
+    const diagnostics = config.diagnostics.join("\n");
+    assert.match(diagnostics, /classify\[0\]: expected an array of \{"template"/);
+    assert.match(diagnostics, /classify\[1\]: template must be a string/);
+    assert.match(diagnostics, /classify\[2\]: template must be a non-empty command template/);
+    assert.match(diagnostics, /classify\[3\]: a template must name a command head before `\*`/);
+    assert.match(diagnostics, /classify\[4\]: `\*` only means "any arguments" as the last word/);
+    assert.match(diagnostics, /classify\[5\]: capability must be a non-empty string/);
+    assert.match(diagnostics, /classify\[6\]: unexpected key disposition/);
+  });
+
+  it("takes both list forms, extending by default entry order", () => {
+    const base = mergeConfig(testConfig(), { commands: { classify: [{ template: "kubectl *", capability: "read-system" }] } }, globalPath);
+    const extended = mergeConfig(base, { commands: { classify: { replace: false, values: [{ template: "docker *", capability: "run-dev-tools" }] } } }, projectPath);
+    assert.deepEqual(extended.commands.classify, [
+      { template: "kubectl *", capability: "read-system" },
+      { template: "docker *", capability: "run-dev-tools" },
+    ]);
+    assert.equal(extended.provenance.lists["commands.classify"]["kubectl *"], globalPath);
+    assert.equal(extended.provenance.lists["commands.classify"]["docker *"], projectPath);
+
+    const replaced = mergeConfig(base, { commands: { classify: [{ template: "docker *", capability: "run-dev-tools" }] } }, projectPath);
+    assert.deepEqual(replaced.commands.classify, [{ template: "docker *", capability: "run-dev-tools" }]);
+    assert.deepEqual(replaced.provenance.lists["commands.classify"], { "docker *": projectPath });
+  });
+
+  it("credits the introducing layer for a restatement but the re-mapping layer for a changed class", () => {
+    const base = mergeConfig(
+      testConfig(),
+      { commands: { classify: [{ template: "kubectl *", capability: "read-system" }, { template: "docker *", capability: "run-dev-tools" }] } },
+      globalPath,
+    );
+    const merged = mergeConfig(
+      base,
+      { commands: { classify: { replace: false, values: [{ template: "docker *", capability: "run-dev-tools" }, { template: "kubectl *", capability: "off-machine-effects" }] } } },
+      projectPath,
+    );
+    assert.deepEqual(merged.commands.classify, [
+      { template: "kubectl *", capability: "off-machine-effects" },
+      { template: "docker *", capability: "run-dev-tools" },
+    ], "a re-mapped template keeps its position");
+    assert.equal(merged.provenance.lists["commands.classify"]["docker *"], globalPath, "a pure restatement credits the layer that introduced it");
+    assert.equal(merged.provenance.lists["commands.classify"]["kubectl *"], projectPath);
+  });
+
+  it("leaves the inherited list alone when the envelope itself is malformed", () => {
+    const base = mergeConfig(testConfig(), { commands: { classify: [{ template: "kubectl *", capability: "read-system" }] } }, globalPath);
+    for (const value of [{ replace: false }, { values: [] }, { replace: false, values: {} }, "kubectl *", { replace: false, values: [], merge: true }]) {
+      const merged = mergeConfig(base, { commands: { classify: value as never } }, projectPath);
+      assert.deepEqual(merged.commands.classify, base.commands.classify, JSON.stringify(value));
+      assert.deepEqual(merged.provenance.lists["commands.classify"], base.provenance.lists["commands.classify"]);
+      assert.ok(merged.diagnostics.length > base.diagnostics.length, `expected a diagnostic for ${JSON.stringify(value)}`);
+    }
+  });
+
+  it("defaults to an empty list with no provenance entries", () => {
+    assert.deepEqual(DEFAULT_CONFIG.commands.classify, []);
+    assert.deepEqual(DEFAULT_CONFIG.provenance.lists["commands.classify"], {});
+  });
+});
+
 // The pi-guard → pi-rail compatibility seam. rail.json is the name now, but a
 // user whose live config is still guard.json must keep working — and must not
 // end up with half their settings in each file.
@@ -456,15 +575,21 @@ describe("rail.json / legacy guard.json resolution", () => {
   it("carries extend and replace through the real three-layer load", () => {
     withLayers(({ globalDir, projectDir, load }) => {
       writeJson(globalDir, "rail.json", {
-        commands: { allow: { replace: false, values: ["cargo *"] } },
+        capabilities: { classes: [{ id: "k8s-ops", definition: "Cluster operations.", disposition: "ask" }] },
+        commands: { allow: { replace: false, values: ["cargo *"] }, classify: [{ template: "kubectl *", capability: "k8s-ops" }] },
         network: { allowedDomains: { replace: false, values: ["global.example"] } },
       });
       writeJson(projectDir, "rail.json", {
-        commands: { allow: { replace: false, values: ["just *"] } },
+        commands: { allow: { replace: false, values: ["just *"] }, classify: { replace: false, values: [{ template: "helm *", capability: "k8s-ops" }] } },
         network: { allowedDomains: ["project.example"] },
       });
       const config = load();
       assert.deepEqual(config.commands.allow, [...DEFAULT_CONFIG.commands.allow, "cargo *", "just *"]);
+      assert.deepEqual(config.commands.classify, [
+        { template: "kubectl *", capability: "k8s-ops" },
+        { template: "helm *", capability: "k8s-ops" },
+      ], "a project layer can classify into a class the global layer declared");
+      assert.equal(config.provenance.lists["commands.classify"]["helm *"], path.join(projectDir, "rail.json"));
       assert.deepEqual(config.network.allowedDomains, ["project.example"]);
       assert.equal(config.provenance.lists["commands.allow"]["cargo *"], path.join(globalDir, "rail.json"));
       assert.equal(config.provenance.lists["commands.allow"]["just *"], path.join(projectDir, "rail.json"));

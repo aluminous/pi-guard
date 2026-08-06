@@ -12,7 +12,7 @@ import {
   type CapabilityId,
   type Disposition,
 } from "./capabilities.ts";
-import { DEFAULT_COMMAND_ALLOWLIST } from "./command-allowlist.ts";
+import { commandTemplateProblem, DEFAULT_COMMAND_ALLOWLIST, type CommandCapabilityRule } from "./command-allowlist.ts";
 import { formatError } from "./util.ts";
 
 export type RailBackendName = "seatbelt" | "none" | "container";
@@ -72,6 +72,15 @@ export interface ConfigListOverride {
  */
 export type ConfigList = string[] | ConfigListOverride;
 
+/** One `commands.classify` entry as written in config: a template and the class it resolves to. */
+export interface CommandClassifyConfig {
+  template?: unknown;
+  capability?: unknown;
+}
+
+/** `commands.classify` in either list form; the entries are objects rather than strings. */
+export type ConfigRuleList = CommandClassifyConfig[] | { replace: boolean; values: CommandClassifyConfig[] };
+
 export interface RailConfig {
   enabled?: boolean;
   backend?: RailBackendName;
@@ -94,6 +103,7 @@ export interface RailConfig {
   };
   commands?: {
     allow?: ConfigList;
+    classify?: ConfigRuleList;
   };
   /** Capability disposition table: class id → allow | judge | ask | deny. Omitted classes keep their default. */
   dispositions?: Record<string, string>;
@@ -113,7 +123,9 @@ export type ProvenanceListKey =
   | "environment.unset"
   | "network.allowedDomains"
   | "network.deniedDomains"
-  | "commands.allow";
+  | "commands.allow"
+  /** Keyed by template: a classify entry is an object, and its template is its identity. */
+  | "commands.classify";
 
 /** Where each effective config value came from ("default" or a config file path); last writer wins. */
 export interface ConfigProvenance {
@@ -149,6 +161,8 @@ export interface ResolvedRailConfig {
   };
   commands: {
     allow: string[];
+    /** User template → capability mappings, in precedence order (first match wins). */
+    classify: CommandCapabilityRule[];
   };
   /** Fully resolved disposition table: every capability class has a row. */
   dispositions: Record<CapabilityId, Disposition>;
@@ -277,6 +291,7 @@ function defaultProvenance(config: Omit<ResolvedRailConfig, "provenance">): Conf
       "network.allowedDomains": listProvenance(config.network.allowedDomains, "default"),
       "network.deniedDomains": listProvenance(config.network.deniedDomains, "default"),
       "commands.allow": listProvenance(config.commands.allow, "default"),
+      "commands.classify": listProvenance(config.commands.classify.map((rule) => rule.template), "default"),
     },
     dispositions: Object.fromEntries(BUILTIN_CAPABILITY_IDS.map((id) => [id, "default"])) as Record<CapabilityId, string>,
     capabilityClasses: {},
@@ -319,6 +334,9 @@ const DEFAULTS_SANS_PROVENANCE: Omit<ResolvedRailConfig, "provenance"> = {
   },
   commands: {
     allow: [...DEFAULT_COMMAND_ALLOWLIST],
+    // No built-in classify rules: the whole point of the list is that the
+    // classes it reaches are the ones this user decided to name.
+    classify: [],
   },
   dispositions: { ...DEFAULT_DISPOSITIONS },
   capabilities: { classes: [], definitions: {} },
@@ -352,26 +370,31 @@ function asStringArray(value: unknown, name: string, diagnostics: string[]): str
 }
 
 const LIST_SHAPE = `expected an array of strings, or {"replace": true|false, "values": [...]}`;
+const RULE_LIST_SHAPE = `expected an array of {"template": "…", "capability": "…"} entries, or {"replace": true|false, "values": [...]}`;
+
+/** A list's envelope, before its entries are validated. `where` names the array for entry-level diagnostics. */
+interface ListEnvelope {
+  replace: boolean;
+  values: unknown;
+  where: string;
+}
 
 /**
- * Reads one config list in either form and says what the layer meant by it.
- * Returning undefined means "leave the inherited list alone" — for an absent
- * key, and equally for a malformed one, since a list is policy and a half-read
- * one is worse than the one already in force.
+ * Reads the replace/extend envelope both list forms share and says what the
+ * layer meant by it. Returning undefined means "leave the inherited list
+ * alone" — for an absent key, and equally for a malformed one, since a list is
+ * policy and a half-read one is worse than the one already in force.
  */
-function readConfigList(value: unknown, name: string, diagnostics: string[]): ConfigListOverride | undefined {
+function readListEnvelope(value: unknown, name: string, diagnostics: string[], shape: string): ListEnvelope | undefined {
   if (value === undefined) return undefined;
-  if (Array.isArray(value)) {
-    const values = asStringArray(value, name, diagnostics);
-    return values === undefined ? undefined : { replace: true, values };
-  }
+  if (Array.isArray(value)) return { replace: true, values: value, where: name };
   if (!isObject(value)) {
-    diagnostics.push(`Ignoring ${name}: ${LIST_SHAPE}`);
+    diagnostics.push(`Ignoring ${name}: ${shape}`);
     return undefined;
   }
   const unknownKeys = Object.keys(value).filter((key) => key !== "replace" && key !== "values");
   if (unknownKeys.length > 0) {
-    diagnostics.push(`Ignoring ${name}: unexpected key${unknownKeys.length > 1 ? "s" : ""} ${unknownKeys.join(", ")} — ${LIST_SHAPE}`);
+    diagnostics.push(`Ignoring ${name}: unexpected key${unknownKeys.length > 1 ? "s" : ""} ${unknownKeys.join(", ")} — ${shape}`);
     return undefined;
   }
   if (typeof value.replace !== "boolean") {
@@ -382,8 +405,61 @@ function readConfigList(value: unknown, name: string, diagnostics: string[]): Co
     diagnostics.push(`Ignoring ${name}: "values" is required`);
     return undefined;
   }
-  const values = asStringArray(value.values, `${name}.values`, diagnostics);
-  return values === undefined ? undefined : { replace: value.replace, values };
+  return { replace: value.replace, values: value.values, where: `${name}.values` };
+}
+
+/** Reads one string list in either form. */
+function readConfigList(value: unknown, name: string, diagnostics: string[]): ConfigListOverride | undefined {
+  const envelope = readListEnvelope(value, name, diagnostics, LIST_SHAPE);
+  if (!envelope) return undefined;
+  const values = asStringArray(envelope.values, envelope.where, diagnostics);
+  return values === undefined ? undefined : { replace: envelope.replace, values };
+}
+
+/**
+ * Validates one classify entry. A bad entry is skipped and the rest of the list
+ * loads, unlike a string list where one bad element voids the whole thing: each
+ * rule is an independent mapping (the capabilities.classes precedent), and the
+ * likely mistake — naming a class this config does not declare — should cost
+ * the user that rule, not their whole classification table.
+ */
+function parseClassifyRule(
+  entry: unknown,
+  where: string,
+  diagnostics: string[],
+  knownClassId: (id: string) => boolean,
+): CommandCapabilityRule | undefined {
+  if (!isObject(entry)) {
+    diagnostics.push(`Ignoring ${where}: ${RULE_LIST_SHAPE}`);
+    return undefined;
+  }
+  const unknownKeys = Object.keys(entry).filter((key) => key !== "template" && key !== "capability");
+  if (unknownKeys.length > 0) {
+    diagnostics.push(`Ignoring ${where}: unexpected key${unknownKeys.length > 1 ? "s" : ""} ${unknownKeys.join(", ")} — an entry is {"template": "…", "capability": "…"}`);
+    return undefined;
+  }
+  const { template, capability } = entry as CommandClassifyConfig;
+  if (typeof template !== "string") {
+    diagnostics.push(`Ignoring ${where}: template must be a string`);
+    return undefined;
+  }
+  const problem = commandTemplateProblem(template);
+  if (problem) {
+    diagnostics.push(`Ignoring ${where}: ${problem}`);
+    return undefined;
+  }
+  if (typeof capability !== "string" || !capability.trim()) {
+    diagnostics.push(`Ignoring ${where}: capability must be a non-empty string`);
+    return undefined;
+  }
+  if (!knownClassId(capability.trim())) {
+    // Config loads before the session exists, so a class this session added
+    // with /rail policy is not referenceable here — declare it in
+    // capabilities.classes to classify commands into it.
+    diagnostics.push(`Ignoring ${where}: "${capability.trim()}" is not a known capability class — declare it in capabilities.classes first`);
+    return undefined;
+  }
+  return { template: template.trim(), capability: capability.trim() };
 }
 
 function readJson(filePath: string, diagnostics: string[]): Partial<RailConfig> | undefined {
@@ -553,13 +629,9 @@ export function mergeConfig(base: ResolvedRailConfig, override: Partial<RailConf
     next.network.deniedDomains = setList("network.deniedDomains", override.network.deniedDomains, `${source}.network.deniedDomains`, next.network.deniedDomains);
   }
 
-  if (isObject(override.commands)) {
-    next.commands.allow = setList("commands.allow", override.commands.allow, `${source}.commands.allow`, next.commands.allow);
-  }
-
-  // Taxonomy before table: a config may define a custom class and set its
-  // disposition in the same file, so the class has to exist by the time the
-  // disposition rows are validated.
+  // Taxonomy before the table and before classify rules: a config may define a
+  // custom class, classify commands into it, and set its disposition all in the
+  // same file, so the class has to exist by the time those are validated.
   if (isObject(override.capabilities)) {
     mergeCapabilities(next, override.capabilities as CapabilitiesConfig, source, diagnostics);
   } else if (override.capabilities !== undefined) {
@@ -567,6 +639,46 @@ export function mergeConfig(base: ResolvedRailConfig, override: Partial<RailConf
   }
 
   const knownClassId = (key: string) => isBuiltinCapabilityId(key) || next.capabilities.classes.some((entry) => entry.id === key);
+
+  /**
+   * commands.classify, whose entries are objects keyed by template. Extension
+   * follows the string lists — an entry the inherited list already has is
+   * dropped, so a restatement still credits the layer that introduced it — with
+   * one addition they cannot have: a template pointed at a *different* class is
+   * a real change, so this layer re-maps it in place and takes its provenance.
+   */
+  const setClassifyList = (raw: unknown, name: string, current: CommandCapabilityRule[]): CommandCapabilityRule[] => {
+    const envelope = readListEnvelope(raw, name, diagnostics, RULE_LIST_SHAPE);
+    if (!envelope) return current;
+    if (!Array.isArray(envelope.values)) {
+      diagnostics.push(`Ignoring ${envelope.where}: ${RULE_LIST_SHAPE}`);
+      return current;
+    }
+    const incoming: CommandCapabilityRule[] = [];
+    envelope.values.forEach((entry, index) => {
+      const rule = parseClassifyRule(entry, `${envelope.where}[${index}]`, diagnostics, knownClassId);
+      if (rule) incoming.push(rule);
+    });
+    if (envelope.replace) {
+      next.provenance.lists["commands.classify"] = listProvenance(incoming.map((rule) => rule.template), source);
+      return incoming;
+    }
+    const merged = [...current];
+    const sources = next.provenance.lists["commands.classify"];
+    for (const rule of incoming) {
+      const at = merged.findIndex((entry) => entry.template === rule.template);
+      if (at !== -1 && merged[at]!.capability === rule.capability) continue;
+      if (at === -1) merged.push(rule);
+      else merged[at] = rule;
+      sources[rule.template] = source;
+    }
+    return merged;
+  };
+
+  if (isObject(override.commands)) {
+    next.commands.allow = setList("commands.allow", override.commands.allow, `${source}.commands.allow`, next.commands.allow);
+    next.commands.classify = setClassifyList(override.commands.classify, `${source}.commands.classify`, next.commands.classify);
+  }
 
   // Per-row merge, unlike the wholesale lists: the disposition table is the
   // user-facing policy surface, so a project config that sets one row must not

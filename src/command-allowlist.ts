@@ -2,18 +2,24 @@ import type { CapabilityId } from "./capabilities.ts";
 import { literalWordText, parseShellCommand, type ShellCommand, type ShellWord } from "./shell-parse.ts";
 
 /**
- * Deterministic shell-command allowlist over the parsed AST: a command is
- * allowlisted only when it parses under the minimal shell grammar and EVERY
+ * Deterministic shell-command matching over the parsed AST: a command is
+ * matched only when it parses under the minimal shell grammar and EVERY
  * simple command in every chain and pipeline matches a rule template, so
  * "grep a || grep b" passes "grep *" but "grep a; rm x" does not. Anything
  * the grammar cannot model (heredocs, process substitution, unbalanced
- * quotes) is a parse error and never allowlisted; anything it can model but
+ * quotes) is a parse error and never matches; anything it can model but
  * this layer cannot judge — expansions, redirects, subshells, background
- * jobs — parses fine and is conservatively not allowlisted.
+ * jobs — parses fine and is conservatively unmatchable.
+ *
+ * Two rule lists share this machinery and this grammar: the built-in
+ * allowlist below (`commands.allow`, whose templates are all read-only by
+ * construction) and user classification rules (`commands.classify`, which map
+ * a template to any capability class, including custom ones). They differ only
+ * in where the capability tag comes from and in which is consulted first.
  */
 
-/** An allowlist template plus the capability class a match deterministically resolves to. */
-export interface CommandAllowRule {
+/** A command template plus the capability class a match deterministically resolves to. */
+export interface CommandCapabilityRule {
   template: string;
   capability: CapabilityId;
 }
@@ -38,7 +44,7 @@ export interface CommandAllowRule {
  * path too. Machine introspection (uname, whoami, printenv) is read-system;
  * toolchain probes are run-dev-tools; everything else here is read-project.
  */
-export const DEFAULT_COMMAND_ALLOW_RULES: CommandAllowRule[] = [
+export const DEFAULT_COMMAND_ALLOW_RULES: CommandCapabilityRule[] = [
   // File and text inspection (stdout-only)
   { template: "grep *", capability: "read-project" },
   { template: "rg *", capability: "read-project" },
@@ -159,18 +165,78 @@ function matchesRule(argv: string[], ruleTokens: string[]): boolean {
   return literals.every((token, index) => argv[index] === token);
 }
 
-/** One simple command's allowlist verdict: the matched rule text, or why it can never match. */
+/**
+ * Why this string cannot serve as a template, or undefined when it can. Used at
+ * config load: a rule that can never match is a silent no-op, and the two ways
+ * to write one — a misplaced `*`, and a bare `*` — are worth a diagnostic. The
+ * bare `*` is rejected rather than supported: it would match every segment of
+ * every command, which turns the namer off for bash without ever saying so.
+ */
+export function commandTemplateProblem(template: string): string | undefined {
+  const tokens = template.trim().split(/\s+/).filter((token) => token.length > 0);
+  if (tokens.length === 0) return "template must be a non-empty command template";
+  if (tokens[0] === "*") return "a template must name a command head before `*` — a bare `*` would match every command";
+  const star = tokens.indexOf("*");
+  if (star !== -1 && star !== tokens.length - 1) return "`*` only means \"any arguments\" as the last word; anywhere else it matches literally";
+  return undefined;
+}
+
+/** Which rule list a segment matched. User `commands.classify` rules are consulted before the allowlist. */
+export type CommandRuleSource = "classify" | "allow";
+
+/**
+ * The rule lists one command is matched against. `classify` carries explicit
+ * capabilities the user wrote; `allow` is the allowlist's plain templates,
+ * whose capability comes from capabilityForTemplate.
+ */
+export interface CommandRules {
+  classify?: CommandCapabilityRule[];
+  allow: string[];
+}
+
+/** One simple command's verdict: the matched rule and its tag, or why it can never match. */
 export interface CommandSegmentVerdict {
   command: string;
   rule?: string;
   /** Capability the matched rule tags this segment with. */
   capability?: CapabilityId;
+  /** Which list the matched rule came from. */
+  source?: CommandRuleSource;
   refusal?: string;
 }
 
-export type CommandAllowlistExplanation =
-  | { allowlisted: true; segments: CommandSegmentVerdict[] }
-  | { allowlisted: false; reason: string; segments?: CommandSegmentVerdict[] };
+/** Whole-command verdict: `matched` means every simple command in it matched some rule. */
+export type CommandMatchExplanation =
+  | { matched: true; segments: CommandSegmentVerdict[] }
+  | { matched: false; reason: string; segments?: CommandSegmentVerdict[] };
+
+interface PreparedRule {
+  text: string;
+  tokens: string[];
+  capability: CapabilityId;
+  source: CommandRuleSource;
+}
+
+/**
+ * Rule precedence: user classify rules first, then allowlist templates. The
+ * order is load-bearing rather than arbitrary — every allowlist template
+ * resolves to allow by default, so consulting the allowlist first would make a
+ * classify rule unable to tighten any template the user had also allowlisted,
+ * and re-classifying a built-in template (`git *` as something stricter than
+ * read-project) would be impossible. Within a list the first match wins, so
+ * declaration order is the tiebreaker between two rules that both match.
+ */
+function prepareRules(rules: CommandRules): PreparedRule[] {
+  const prepared: PreparedRule[] = [];
+  const add = (template: string, capability: CapabilityId, source: CommandRuleSource) => {
+    const text = template.trim();
+    const tokens = text.split(/\s+/).filter((token) => token.length > 0);
+    if (tokens.length > 0) prepared.push({ text, tokens, capability, source });
+  };
+  for (const rule of rules.classify ?? []) add(rule.template, rule.capability, "classify");
+  for (const template of rules.allow) add(template, capabilityForTemplate(template), "allow");
+  return prepared;
+}
 
 /** Display form of a parsed segment: quote removal already applied, expansions kept verbatim. */
 function describeSegment(command: ShellCommand): string {
@@ -186,7 +252,7 @@ function wordText(word: ShellWord): string {
   return word.parts.map((part) => part.text).join("");
 }
 
-function segmentVerdict(command: ShellCommand, rules: Array<{ text: string; tokens: string[] }>): CommandSegmentVerdict {
+function segmentVerdict(command: ShellCommand, rules: PreparedRule[], noMatch: string): CommandSegmentVerdict {
   const text = describeSegment(command);
   if (command.kind === "subshell") return { command: text, refusal: "subshell grouping is never allowlisted" };
   if (command.redirects.length > 0) return { command: text, refusal: "redirects are never allowlisted" };
@@ -201,50 +267,63 @@ function segmentVerdict(command: ShellCommand, rules: Array<{ text: string; toke
   }
   if (argv.length === 0) return { command: text, refusal: "bare assignments have no command head to judge" };
   const matched = rules.find((rule) => matchesRule(argv, rule.tokens));
-  if (!matched) return { command: text, refusal: "no allowlist rule matches" };
-  return { command: text, rule: matched.text, capability: capabilityForTemplate(matched.text) };
+  if (!matched) return { command: text, refusal: noMatch };
+  return { command: text, rule: matched.text, capability: matched.capability, source: matched.source };
 }
 
-/** Full allowlist verdict with per-segment detail, for decision traces and /rail test. */
-export function explainCommandAllowlist(command: string, rules: string[]): CommandAllowlistExplanation {
-  const parsedRules = rules
-    .map((rule) => ({ text: rule.trim(), tokens: rule.trim().split(/\s+/) }))
-    .filter((rule) => rule.tokens.length > 0 && rule.tokens[0] !== "");
-  if (parsedRules.length === 0) return { allowlisted: false, reason: "the command allowlist is empty" };
+/**
+ * Full per-segment verdict for a command, for the interceptor, decision traces,
+ * and /rail test. The conservatism is the allowlist's, unchanged: every simple
+ * command in every chain and pipeline must match, and anything this layer
+ * cannot judge — expansions, redirects, subshells, background jobs — makes its
+ * segment unmatchable no matter which list the rule would have come from.
+ */
+export function explainCommandMatch(command: string, rules: CommandRules): CommandMatchExplanation {
+  const parsedRules = prepareRules(rules);
+  if (parsedRules.length === 0) return { matched: false, reason: "no command rules are configured" };
+  const noMatch = (rules.classify?.length ?? 0) > 0 ? "no classify or allowlist rule matches" : "no allowlist rule matches";
   const parsed = parseShellCommand(command);
-  if (!parsed.ok) return { allowlisted: false, reason: `does not parse under the allowlist grammar: ${parsed.error}` };
-  if (parsed.script.chains.length === 0) return { allowlisted: false, reason: "empty command" };
+  if (!parsed.ok) return { matched: false, reason: `does not parse under the allowlist grammar: ${parsed.error}` };
+  if (parsed.script.chains.length === 0) return { matched: false, reason: "empty command" };
   const segments: CommandSegmentVerdict[] = [];
   let background = false;
   for (const chain of parsed.script.chains) {
     if (chain.background) background = true;
     for (const pipeline of chain.pipelines) {
-      for (const cmd of pipeline.commands) segments.push(segmentVerdict(cmd, parsedRules));
+      for (const cmd of pipeline.commands) segments.push(segmentVerdict(cmd, parsedRules, noMatch));
     }
   }
-  if (background) return { allowlisted: false, reason: "background jobs (&) are never allowlisted", segments };
+  if (background) return { matched: false, reason: "background jobs (&) are never allowlisted", segments };
   const refused = segments.filter((segment) => segment.refusal);
   if (refused.length > 0) {
-    return { allowlisted: false, reason: refused.map((segment) => `\`${segment.command}\`: ${segment.refusal}`).join("; "), segments };
+    return { matched: false, reason: refused.map((segment) => `\`${segment.command}\`: ${segment.refusal}`).join("; "), segments };
   }
-  return { allowlisted: true, segments };
+  return { matched: true, segments };
 }
 
-/** True when the command parses and every simple command in it matches some rule. */
+/** True when the command parses and every simple command in it matches some allowlist rule. */
 export function isCommandAllowlisted(command: string, rules: string[]): boolean {
-  return explainCommandAllowlist(command, rules).allowlisted;
+  return explainCommandMatch(command, { allow: rules }).matched;
 }
 
 /**
- * Deterministic capability labels for an allowlisted command: the union over
+ * Deterministic capability labels for a fully matched command: the union over
  * its segments, so `grep x && git log` is one read-project label and
- * `ls && node --version` carries read-project plus run-dev-tools.
+ * `ls && node --version` carries read-project plus run-dev-tools. A partial
+ * match yields nothing — matched segments never pre-seed labels for a command
+ * the rules could not cover end to end.
  */
-export function allowlistCapabilities(explanation: CommandAllowlistExplanation): CapabilityId[] {
-  if (!explanation.allowlisted) return [];
+export function matchedCapabilities(explanation: CommandMatchExplanation): CapabilityId[] {
+  if (!explanation.matched) return [];
   const seen: CapabilityId[] = [];
   for (const segment of explanation.segments) {
     if (segment.capability && !seen.includes(segment.capability)) seen.push(segment.capability);
   }
   return seen;
+}
+
+/** Trace and report form of one matched segment: "`git status` → rule `git status *` (read-project)". */
+export function describeSegmentMatch(segment: CommandSegmentVerdict): string {
+  const kind = segment.source === "classify" ? "classify rule" : "rule";
+  return `\`${segment.command}\` → ${kind} \`${segment.rule}\` (${segment.capability})`;
 }

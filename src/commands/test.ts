@@ -8,7 +8,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { capabilityName, resolveCapabilities, type CapabilityId, type CapabilityResolution } from "../capabilities.ts";
 import { describeClassifierFailure } from "../classifier-protocol.ts";
 import { classifierEnabled, judgeModelSpec, judgeToolCall, nameToolCall, resolveClassifierModel, resolveJudgeModel, type CompleteFn, type NamerResult } from "../classifier.ts";
-import { allowlistCapabilities, explainCommandAllowlist } from "../command-allowlist.ts";
+import { describeSegmentMatch, explainCommandMatch, matchedCapabilities } from "../command-allowlist.ts";
 import { configSourceLabel, loadConfig, type ResolvedRailConfig } from "../config.ts";
 import { screenToolCall } from "../content-screen.ts";
 import { INTERCEPTED_TOOLS } from "../intercepted-tools.ts";
@@ -223,9 +223,13 @@ export function createRailTest(deps: RailTestDeps) {
 
   async function testCommand(ctx: ExtensionContext, config: ResolvedRailConfig, command: string): Promise<string[]> {
     const lines: string[] = [];
-    const explanation = explainCommandAllowlist(command, config.commands.allow);
+    const match = explainCommandMatch(command, { classify: config.commands.classify, allow: config.commands.allow });
     const enforcing = config.filesystem.enabled && state.initialized && state.backend?.name === "seatbelt";
-    const exempt = explanation.allowlisted && enforcing;
+    // What the matched rules would resolve to, which is what decides whether
+    // the deterministic verdict stands on its own or needs the sandbox.
+    const matchedLabels = matchedCapabilities(match);
+    const matchedDisposition = match.matched ? resolveCapabilities(config, state.capabilities, matchedLabels).disposition : undefined;
+    const exempt = match.matched && (matchedDisposition !== "allow" || enforcing);
     const classifierOn = classifierEnabled(config, state.classifier);
     let verdict = "would allow";
     let blocked = false;
@@ -233,7 +237,7 @@ export function createRailTest(deps: RailTestDeps) {
     if (state.readOnly) {
       lines.push("## Read-only gate");
       if (classifierOn) lines.push("  [ALLOW] on — bash is named and resolved under the read-only disposition preset");
-      else if (exempt) lines.push("  [ALLOW] on — deterministically allowlisted commands stay allowed");
+      else if (exempt) lines.push("  [ALLOW] on — deterministically classified commands stay allowed");
       else {
         lines.push("  [BLOCK] on — classifier is off, so commands cannot be reviewed for writes");
         verdict = "would block (read-only mode)";
@@ -242,26 +246,32 @@ export function createRailTest(deps: RailTestDeps) {
       lines.push("");
     }
 
-    lines.push("## Command allowlist");
-    if (explanation.allowlisted) {
-      lines.push(...explanation.segments.map((segment) => `  [ALLOW] \`${segment.command}\` → rule \`${segment.rule}\` (${segment.capability})`));
+    lines.push("## Command rules");
+    if (match.matched) {
+      lines.push(...match.segments.map((segment) => `  [ALLOW] ${describeSegmentMatch(segment)}`));
       lines.push(
-        enforcing
-          ? "  allowlisted — deterministic capability labels, no namer call while the Seatbelt sandbox enforces"
-          : "  allowlisted, but the sandbox is not enforcing (Seatbelt required) — the namer still runs",
+        matchedDisposition !== "allow"
+          ? `  every segment matched — deterministic labels resolve to ${matchedDisposition}, decided without a namer call`
+          : enforcing
+            ? "  every segment matched — deterministic capability labels, no namer call while the Seatbelt sandbox enforces"
+            : "  every segment matched and resolves to allow, but the sandbox is not enforcing (Seatbelt required) — the namer still runs",
       );
     } else {
-      lines.push(`  not allowlisted: ${explanation.reason}`);
-      for (const segment of explanation.segments ?? []) {
-        lines.push(segment.rule !== undefined ? `  [ALLOW] \`${segment.command}\` → rule \`${segment.rule}\` (${segment.capability})` : `  [BLOCK] \`${segment.command}\`: ${segment.refusal}`);
+      lines.push(`  no deterministic verdict: ${match.reason}`);
+      for (const segment of match.segments ?? []) {
+        lines.push(segment.rule !== undefined ? `  [ALLOW] ${describeSegmentMatch(segment)}` : `  [BLOCK] \`${segment.command}\`: ${segment.refusal}`);
+      }
+      if ((match.segments ?? []).some((segment) => segment.rule !== undefined)) {
+        lines.push("  partial matches carry no labels — the namer sees the whole command");
       }
     }
     lines.push("");
 
-    const labels: CapabilityId[] = exempt ? allowlistCapabilities(explanation) : [];
+    const labels: CapabilityId[] = exempt ? matchedLabels : [];
     const plan: NamingPlan = { toolName: "bash", input: { command } };
     if (blocked) plan.skip = "not reached — the call is blocked deterministically";
-    else if (exempt) plan.skip = `skipped — allowlisted while the sandbox enforces (${labels.join(", ")})`;
+    else if (exempt && matchedDisposition === "allow") plan.skip = `skipped — allowlisted while the sandbox enforces (${labels.join(", ")})`;
+    else if (exempt) plan.skip = `skipped — deterministically classified ${labels.join(", ")} ⇒ ${matchedDisposition}`;
 
     const screen = screenToolCall("bash", { command }, ctx.cwd);
     if (screen.tripped) lines.push("## Content screen", `  [ASK] ${screen.summary}`, "");

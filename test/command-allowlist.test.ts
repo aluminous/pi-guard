@@ -3,10 +3,12 @@ import { describe, it } from "node:test";
 import {
   DEFAULT_COMMAND_ALLOWLIST,
   DEFAULT_COMMAND_ALLOW_RULES,
-  allowlistCapabilities,
   capabilityForTemplate,
-  explainCommandAllowlist,
+  commandTemplateProblem,
+  describeSegmentMatch,
+  explainCommandMatch,
   isCommandAllowlisted,
+  matchedCapabilities,
 } from "../src/command-allowlist.ts";
 
 const GREP = ["grep *"];
@@ -114,7 +116,7 @@ describe("isCommandAllowlisted", () => {
 });
 
 describe("capability tags", () => {
-  const caps = (command: string) => allowlistCapabilities(explainCommandAllowlist(command, DEFAULT_COMMAND_ALLOWLIST));
+  const caps = (command: string) => matchedCapabilities(explainCommandMatch(command, { allow: DEFAULT_COMMAND_ALLOWLIST }));
 
   it("tags inspection as read-project and machine probes as read-system", () => {
     assert.deepEqual(caps("grep foo src"), ["read-project"]);
@@ -141,5 +143,84 @@ describe("capability tags", () => {
   it("keeps every default template tagged", () => {
     assert.equal(DEFAULT_COMMAND_ALLOW_RULES.length, DEFAULT_COMMAND_ALLOWLIST.length);
     assert.ok(DEFAULT_COMMAND_ALLOW_RULES.every((rule) => rule.capability.length > 0));
+  });
+});
+
+describe("commands.classify matching", () => {
+  const K8S = [{ template: "kubectl *", capability: "k8s-ops" }];
+
+  it("tags a segment with the rule's capability and says the rule was a user one", () => {
+    const match = explainCommandMatch("kubectl get pods", { classify: K8S, allow: DEFAULT_COMMAND_ALLOWLIST });
+    assert.equal(match.matched, true);
+    assert.deepEqual(matchedCapabilities(match), ["k8s-ops"]);
+    assert.equal(match.segments[0]?.source, "classify");
+    assert.equal(describeSegmentMatch(match.segments[0]!), "`kubectl get pods` → classify rule `kubectl *` (k8s-ops)");
+  });
+
+  it("checks user rules before the allowlist, so a built-in template can be re-classified", () => {
+    const rules = { classify: [{ template: "git log *", capability: "off-machine-effects" }], allow: DEFAULT_COMMAND_ALLOWLIST };
+    const match = explainCommandMatch("git log --oneline", rules);
+    assert.deepEqual(matchedCapabilities(match), ["off-machine-effects"]);
+    assert.equal(match.matched === true && match.segments[0]!.source, "classify");
+    // The allowlist still owns everything the user did not re-map.
+    assert.deepEqual(matchedCapabilities(explainCommandMatch("git status", rules)), ["read-project"]);
+  });
+
+  it("takes the first matching rule when two classify rules overlap", () => {
+    const classify = [
+      { template: "kubectl get *", capability: "read-system" },
+      { template: "kubectl *", capability: "k8s-ops" },
+    ];
+    assert.deepEqual(matchedCapabilities(explainCommandMatch("kubectl get pods", { classify, allow: [] })), ["read-system"]);
+    assert.deepEqual(matchedCapabilities(explainCommandMatch("kubectl delete pod x", { classify, allow: [] })), ["k8s-ops"]);
+  });
+
+  it("unions classify and allowlist tags across a chain", () => {
+    const match = explainCommandMatch("git status && kubectl get pods && kubectl top nodes", { classify: K8S, allow: DEFAULT_COMMAND_ALLOWLIST });
+    assert.deepEqual(matchedCapabilities(match), ["read-project", "k8s-ops"]);
+  });
+
+  it("gives no labels at all when one segment matches nothing", () => {
+    const match = explainCommandMatch("kubectl get pods && terraform apply", { classify: K8S, allow: DEFAULT_COMMAND_ALLOWLIST });
+    assert.equal(match.matched, false);
+    assert.deepEqual(matchedCapabilities(match), []);
+    assert.match(match.matched === false ? match.reason : "", /`terraform apply`: no classify or allowlist rule matches/);
+    // The matched half is still reported per segment, for the trace — it just carries no labels.
+    assert.equal(match.segments?.[0]?.capability, "k8s-ops");
+  });
+
+  it("names only the allowlist in the refusal when no classify rules are configured", () => {
+    const match = explainCommandMatch("terraform apply", { allow: DEFAULT_COMMAND_ALLOWLIST });
+    assert.match(match.matched === false ? match.reason : "", /no allowlist rule matches/);
+  });
+
+  it("keeps the allowlist's conservatism: expansions, redirects, subshells, and background stay unmatchable", () => {
+    const rules = { classify: K8S, allow: DEFAULT_COMMAND_ALLOWLIST };
+    for (const command of ["kubectl get $(cat name)", "kubectl get pods > out.txt", "(kubectl get pods)", "kubectl get pods &", "kubectl get 'pods"]) {
+      assert.equal(explainCommandMatch(command, rules).matched, false, command);
+    }
+  });
+
+  it("matches with classify rules alone when the allowlist is empty", () => {
+    assert.equal(explainCommandMatch("kubectl get pods", { classify: K8S, allow: [] }).matched, true);
+    const empty = explainCommandMatch("kubectl get pods", { classify: [], allow: [] });
+    assert.equal(empty.matched, false);
+    assert.match(empty.matched === false ? empty.reason : "", /no command rules are configured/);
+  });
+});
+
+describe("commandTemplateProblem", () => {
+  it("accepts the grammar's real forms", () => {
+    for (const template of ["pwd", "kubectl *", "git status *", "docker compose ps"]) {
+      assert.equal(commandTemplateProblem(template), undefined, template);
+    }
+  });
+
+  it("rejects an empty template, a bare *, and a * that is not last", () => {
+    assert.match(commandTemplateProblem("")!, /non-empty/);
+    assert.match(commandTemplateProblem("   ")!, /non-empty/);
+    assert.match(commandTemplateProblem("*")!, /bare `\*` would match every command/);
+    assert.match(commandTemplateProblem("* apply")!, /bare `\*` would match every command/);
+    assert.match(commandTemplateProblem("kubectl * pods")!, /only means "any arguments" as the last word/);
   });
 });

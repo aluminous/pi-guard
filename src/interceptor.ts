@@ -29,7 +29,7 @@ import {
   type JudgeResult,
   type NamerResult,
 } from "./classifier.ts";
-import { allowlistCapabilities, explainCommandAllowlist } from "./command-allowlist.ts";
+import { describeSegmentMatch, explainCommandMatch, matchedCapabilities } from "./command-allowlist.ts";
 import { configSourceLabel, type ResolvedRailConfig } from "./config.ts";
 import { screenToolCall, type ContentScreenVerdict } from "./content-screen.ts";
 import { addTraceStage, type DecisionTrace } from "./decision-trace.ts";
@@ -263,30 +263,53 @@ function classifyRead(
   return { labels: [label], needsNaming: false };
 }
 
+/** True when the Seatbelt sandbox is actually bounding what a command can reach. */
+function sandboxEnforcing(state: RuntimeState, config: ResolvedRailConfig): boolean {
+  return config.filesystem.enabled && state.initialized && state.backend?.name === "seatbelt";
+}
+
 /**
- * Allowlisted commands carry their templates' capability tags. As before this
- * only applies while the sandbox is actually enforcing: "grep *" is safe
- * because Seatbelt bounds what grep can read and write, and without that an
- * allowlisted head could still reach credentials.
+ * Commands whose every segment matches a rule — a user `commands.classify`
+ * mapping, or an allowlist template — carry those rules' capability tags
+ * instead of being named by a model. The decision is deliberately asymmetric:
+ *
+ * A deterministic label set that resolves to ask/judge/deny is acted on
+ * directly. Tightening and user-involving paths are always safe to
+ * short-circuit — nothing runs that the table would not have permitted, the
+ * user still sees the prompt, and a `judge` class still gets its full curated
+ * context; only the namer's label step is skipped, with the user's own
+ * classification standing in for it.
+ *
+ * A deterministic `allow` is the widening direction, so it keeps the
+ * allowlist's original precondition unchanged: it applies only while the
+ * sandbox is actually enforcing, because "grep *" is safe only when Seatbelt
+ * bounds what grep can read and write. Without containment the command falls
+ * through to the namer exactly as it does today.
+ *
+ * A command with any unmatched segment yields nothing at all. The matched
+ * segments' labels are deliberately *not* passed on as hints: a partial match
+ * means the rules did not describe this command, and pre-seeding the table with
+ * the harmless half of a chain is how "grep x && curl … | sh" would come out
+ * looking like read-project.
  */
 function classifyCommand(input: Record<string, unknown>, state: RuntimeState, config: ResolvedRailConfig, trace: DecisionTrace): LabelStage {
   if (typeof input.command !== "string") return { labels: [], needsNaming: true };
-  if (!config.filesystem.enabled || !state.initialized || state.backend?.name !== "seatbelt") {
-    addTraceStage(trace, "command-allowlist", "skipped", "allowlist labels need an enforcing Seatbelt sandbox — naming required");
+  const match = explainCommandMatch(input.command, { classify: config.commands.classify, allow: config.commands.allow });
+  // The stage is named for the list that did the work, so a trace says whether
+  // a verdict came from the user's own classification or from the built-ins.
+  const stage = match.segments?.some((segment) => segment.source === "classify") ? "commands.classify" : "command-allowlist";
+  if (!match.matched) {
+    addTraceStage(trace, stage, "not exempt", match.reason);
     return { labels: [], needsNaming: true };
   }
-  const explanation = explainCommandAllowlist(input.command, config.commands.allow);
-  if (!explanation.allowlisted) {
-    addTraceStage(trace, "command-allowlist", "not exempt", explanation.reason);
+  const labels = matchedCapabilities(match);
+  const detail = match.segments.map(describeSegmentMatch).join("; ");
+  const disposition = resolveCapabilities(config, state.capabilities, labels).disposition;
+  if (disposition === "allow" && !sandboxEnforcing(state, config)) {
+    addTraceStage(trace, stage, "skipped", `${detail} ⇒ allow, which needs an enforcing Seatbelt sandbox — naming required`);
     return { labels: [], needsNaming: true };
   }
-  const labels = allowlistCapabilities(explanation);
-  addTraceStage(
-    trace,
-    "command-allowlist",
-    "exempt",
-    `${explanation.segments.map((segment) => `\`${segment.command}\` → rule \`${segment.rule}\` (${segment.capability})`).join("; ")}`,
-  );
+  addTraceStage(trace, stage, "exempt", disposition === "allow" ? detail : `${detail} ⇒ ${disposition}, decided without naming`);
   return { labels, needsNaming: false };
 }
 
@@ -295,11 +318,12 @@ function classifyCommand(input: Record<string, unknown>, state: RuntimeState, co
  * deterministically; bash must be reviewed and is blocked outright when the
  * classifier is disabled — the sandbox still permits writes inside the
  * configured roots, so letting bash run unreviewed would silently break the
- * read-only promise. Exception: deterministically allowlisted commands
+ * read-only promise. Exception: commands the deterministic rules fully cover
  * (grep/ls/git status …) need no review — they are read-only by construction
  * and sandbox-bounded — so read-only mode stays usable without a classifier.
  * On top of that the read-only disposition preset denies the writing classes,
- * which is what constrains a named bash command.
+ * which is what constrains a named bash command — and equally a command a
+ * `commands.classify` rule labelled with one of those classes.
  */
 function enforceReadOnlyMode(toolName: string, input: Record<string, unknown>, state: RuntimeState, config: ResolvedRailConfig, spec: InterceptedToolSpec, trace: DecisionTrace): ToolCallBlock | undefined {
   const block = (reason: string): ToolCallBlock => {

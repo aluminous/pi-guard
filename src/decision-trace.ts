@@ -8,6 +8,8 @@ export type TraceStageName =
   | "path-policy"
   | "read-exemption"
   | "command-allowlist"
+  /** Same matcher as command-allowlist, named for the user rules when one of theirs matched. */
+  | "commands.classify"
   | "screen"
   | "namer"
   | "capabilities"
