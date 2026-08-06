@@ -1,5 +1,15 @@
 import type { RailBackend } from "./backends/types.ts";
-import { applyReadOnlyPreset, clearPreset, createCapabilityState, recordCapabilityHits, type CapabilityId, type CapabilityState, type Disposition } from "./capabilities.ts";
+import {
+  applyReadOnlyPreset,
+  clearPreset,
+  createCapabilityState,
+  recordCapabilityDecided,
+  recordCapabilityHits,
+  type CapabilityId,
+  type CapabilityState,
+  type Disposition,
+} from "./capabilities.ts";
+import type { ClassifierTokenUsage, RailDecision } from "./classifier-protocol.ts";
 import type { ClassifierState } from "./classifier.ts";
 import type { ResolvedRailConfig } from "./config.ts";
 import { TRACE_LIMIT, type DecisionTrace } from "./decision-trace.ts";
@@ -12,6 +22,66 @@ export interface RailEvent {
   /** Capability labels behind the decision, when it came from the table. */
   capabilities?: CapabilityId[];
   reason: string;
+}
+
+/** Which reviewer made a model call: the cheap namer, or the judge the table escalates to. */
+export type ReviewerRole = "namer" | "judge";
+
+/**
+ * Token, dollar, and latency accounting for one model in one reviewer role.
+ * Namer and judge are kept apart even on the same model spec: "what does
+ * classification cost" and "what does escalation cost" are different questions,
+ * and a session where judge:current is the session's own strong model would
+ * otherwise average the two together.
+ */
+export interface ModelUsageStats {
+  /** provider/id, or "unknown" when the spec could not be resolved at call time. */
+  model: string;
+  role: ReviewerRole;
+  calls: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** Dollars, summed over the calls the provider actually priced. */
+  costUsd: number;
+  /** Calls whose usage carried no price, so a cost total can say how much of the session it covers. */
+  unpricedCalls: number;
+  totalLatencyMs: number;
+  maxLatencyMs: number;
+}
+
+/** How many entries the recent-classification and recent-judgement rings keep. */
+export const REVIEW_RING_LIMIT = 20;
+
+/** One resolved capability decision, as the namer tab lists them. */
+export interface ClassificationRecord {
+  at: number;
+  toolName: string;
+  labels: CapabilityId[];
+  /** What the table resolved over those labels, before a judge or the user answered. */
+  disposition: Disposition;
+  decision: RailDecision;
+  /** The whole review's latency — namer plus judge; 0 when the labels were entirely deterministic. */
+  latencyMs: number;
+  /** The whole review's tokens, judge included; the judge tab breaks out its own share. */
+  inputTokens: number;
+  outputTokens: number;
+  /** Namer model; absent when the labels were deterministic (a `judge` disposition still means the judge ran). */
+  model?: string;
+}
+
+/** One escalation review, as the judge tab lists them. */
+export interface JudgementRecord {
+  at: number;
+  toolName: string;
+  labels: CapabilityId[];
+  verdict: RailDecision;
+  reason: string;
+  latencyMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  model?: string;
 }
 
 export interface RailStats {
@@ -33,6 +103,8 @@ export interface RailStats {
   /** Input tokens served from the provider prompt cache (subset of total prompt tokens, not of classifierInputTokens). */
   classifierCacheReadTokens: number;
   classifierCacheWriteTokens: number;
+  /** Per-model, per-role accounting, keyed "<role>:<model>"; only models actually called appear. */
+  modelUsage: Record<string, ModelUsageStats>;
   turnRuleHits: number;
   turnClassifierHits: number;
   turnClassifierDenials: number;
@@ -80,6 +152,10 @@ export interface RuntimeState {
   };
   stats: RailStats;
   recent: RailEvent[];
+  /** Resolved capability decisions, newest first (last REVIEW_RING_LIMIT): the status page's namer tab. */
+  recentClassifications: ClassificationRecord[];
+  /** Escalation reviews, newest first (last REVIEW_RING_LIMIT): the status page's judge tab. */
+  recentJudgements: JudgementRecord[];
   /** Per-call decision traces for /rail explain, newest first (last TRACE_LIMIT). */
   traces: DecisionTrace[];
   /** Most recent sandboxed bash execution, for the /rail why sandbox-denial window. */
@@ -109,6 +185,7 @@ export function createRailStats(): RailStats {
     classifierOutputTokens: 0,
     classifierCacheReadTokens: 0,
     classifierCacheWriteTokens: 0,
+    modelUsage: {},
     turnRuleHits: 0,
     turnClassifierHits: 0,
     turnClassifierDenials: 0,
@@ -131,6 +208,8 @@ export function createRuntimeState(): RuntimeState {
     approvals: { read: [], write: [] },
     stats: createRailStats(),
     recent: [],
+    recentClassifications: [],
+    recentJudgements: [],
     traces: [],
     availableModelSpecs: [],
     subagentAckWarned: new Set(),
@@ -151,6 +230,9 @@ export function resetSessionState(state: RuntimeState): void {
   state.capabilities = createCapabilityState();
   state.approvals = { read: [], write: [] };
   state.stats = createRailStats();
+  state.recent = [];
+  state.recentClassifications = [];
+  state.recentJudgements = [];
   state.traces = [];
   state.lastBashCommand = undefined;
   state.subagentAckWarned = new Set();
@@ -177,6 +259,56 @@ export function resetTurnStats(state: RuntimeState): void {
 function pushRecent(state: RuntimeState, event: RailEvent) {
   state.recent.unshift(event);
   state.recent = state.recent.slice(0, 8);
+}
+
+/**
+ * One reviewer model call: tokens, dollars, and latency against the model that
+ * served it. Recorded where the call returns rather than where the decision
+ * lands, so a review whose decision path skips the telemetry finish (an
+ * out-of-roots write that ends in the path-approval dialog) still accounts for
+ * the tokens it burned.
+ */
+export function recordModelCall(
+  state: RuntimeState,
+  params: { role: ReviewerRole; model: string | undefined; latencyMs: number; usage: ClassifierTokenUsage | undefined },
+): void {
+  const model = params.model ?? "unknown";
+  const key = `${params.role}:${model}`;
+  const entry = (state.stats.modelUsage[key] ??= {
+    model,
+    role: params.role,
+    calls: 0,
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    costUsd: 0,
+    unpricedCalls: 0,
+    totalLatencyMs: 0,
+    maxLatencyMs: 0,
+  });
+  entry.calls++;
+  entry.input += params.usage?.input ?? 0;
+  entry.output += params.usage?.output ?? 0;
+  entry.cacheRead += params.usage?.cacheRead ?? 0;
+  entry.cacheWrite += params.usage?.cacheWrite ?? 0;
+  if (typeof params.usage?.costUsd === "number") entry.costUsd += params.usage.costUsd;
+  else entry.unpricedCalls++;
+  entry.totalLatencyMs += params.latencyMs;
+  entry.maxLatencyMs = Math.max(entry.maxLatencyMs, params.latencyMs);
+}
+
+/** Per-model rows in a stable order: namer before judge, then busiest first. */
+export function modelUsageRows(stats: RailStats): ModelUsageStats[] {
+  const roleOrder: Record<ReviewerRole, number> = { namer: 0, judge: 1 };
+  return Object.values(stats.modelUsage).sort(
+    (a, b) => roleOrder[a.role] - roleOrder[b.role] || b.calls - a.calls || a.model.localeCompare(b.model),
+  );
+}
+
+export function recordJudgement(state: RuntimeState, record: JudgementRecord): void {
+  state.recentJudgements.unshift(record);
+  state.recentJudgements = state.recentJudgements.slice(0, REVIEW_RING_LIMIT);
 }
 
 export function recordDecisionTrace(state: RuntimeState, trace: DecisionTrace): void {
@@ -212,16 +344,21 @@ export function recordApprovalDenied(state: RuntimeState): void {
 
 export interface CapabilityDecisionRecord {
   labels: CapabilityId[];
-  decision: "allow" | "deny" | "ask";
+  decision: RailDecision;
   /** The resolved table disposition that produced this decision. */
   disposition: Disposition;
+  /** The one label that produced that disposition, when the caller resolved it. */
+  decidedBy?: CapabilityId;
   reason: string;
   /** True when a model call (namer and/or judge) was involved; deterministic table hits count as rule hits instead. */
   reviewed: boolean;
-  tokenUsage?: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
+  tokenUsage?: ClassifierTokenUsage;
+  /** Review latency and namer model, for the recent-classifications ring; 0/undefined for deterministic labels. */
+  latencyMs?: number;
+  model?: string;
 }
 
-/** One resolved capability decision: statusline counters, per-class stats, and the recent-decisions ring. */
+/** One resolved capability decision: statusline counters, per-class stats, and the two recent-decision rings. */
 export function recordCapabilityDecision(state: RuntimeState, toolName: string, record: CapabilityDecisionRecord): void {
   if (record.reviewed) {
     state.stats.reviewed++;
@@ -243,7 +380,21 @@ export function recordCapabilityDecision(state: RuntimeState, toolName: string, 
   }
   if (record.decision === "ask") state.stats.asked++;
   recordCapabilityHits(state.capabilities, record.labels);
-  pushRecent(state, { at: Date.now(), toolName, decision: record.decision, capabilities: record.labels, reason: record.reason });
+  if (record.decidedBy) recordCapabilityDecided(state.capabilities, record.decidedBy);
+  const at = Date.now();
+  pushRecent(state, { at, toolName, decision: record.decision, capabilities: record.labels, reason: record.reason });
+  state.recentClassifications.unshift({
+    at,
+    toolName,
+    labels: record.labels,
+    disposition: record.disposition,
+    decision: record.decision,
+    latencyMs: record.latencyMs ?? 0,
+    inputTokens: record.tokenUsage?.input ?? 0,
+    outputTokens: record.tokenUsage?.output ?? 0,
+    model: record.model,
+  });
+  state.recentClassifications = state.recentClassifications.slice(0, REVIEW_RING_LIMIT);
 }
 
 /** A read or allowlisted command skipped classifier review deterministically. */

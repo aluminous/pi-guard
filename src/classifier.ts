@@ -228,7 +228,7 @@ async function completeTextOnce(params: {
     }
     return {
       text: response.content.filter((c): c is { type: "text"; text: string } => c.type === "text").map((c) => c.text).join("\n"),
-      usage: response.usage,
+      usage: toClassifierUsage(response.usage),
     };
   } catch (error) {
     if (didTimeout) throw new ClassifierRetryableError(`reviewer timed out after ${params.timeoutMs}ms`, params.timeoutMs);
@@ -291,11 +291,31 @@ function tagParseFailure<T>(error: T, model: Model<Api>, budget: RetryBudget): T
   return tagClassifierFailure(error, { attempts: budget.attempts, maxAttempts: budget.maxAttempts, model: modelSpec(model) });
 }
 
+/**
+ * pi-ai's Usage, narrowed to what the rail accounts for. `cost` is dollars and
+ * is the one field a provider may not report at all; carrying it through as an
+ * optional keeps "unpriced" distinguishable from "free" in the per-model view.
+ */
+function toClassifierUsage(usage: { input: number; output: number; cacheRead?: number; cacheWrite?: number; cost?: { total?: number } } | undefined): ClassifierTokenUsage | undefined {
+  if (!usage) return undefined;
+  const cost = usage.cost?.total;
+  return {
+    input: usage.input,
+    output: usage.output,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+    ...(typeof cost === "number" ? { costUsd: cost } : {}),
+  };
+}
+
 function addUsage(total: ClassifierTokenUsage, part: ClassifierTokenUsage | undefined): void {
   total.input += part?.input ?? 0;
   total.output += part?.output ?? 0;
   total.cacheRead = (total.cacheRead ?? 0) + (part?.cacheRead ?? 0);
   total.cacheWrite = (total.cacheWrite ?? 0) + (part?.cacheWrite ?? 0);
+  // Left undefined when no attempt was priced, so the review reads as unpriced
+  // rather than as costing exactly nothing.
+  if (typeof part?.costUsd === "number") total.costUsd = (total.costUsd ?? 0) + part.costUsd;
 }
 
 /**

@@ -90,6 +90,28 @@ describe("namer", () => {
     assert.deepEqual(result.labels, ["credentials", "off-machine-effects"]);
   });
 
+  it("carries the provider's dollar price through, and omits it when there is none", async () => {
+    const { io } = makeIO([NAME_READ]);
+    const priced = await runNaming({
+      io: { ...io, complete: (async () => ({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: NAME_READ }],
+        usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0, total: 0.003 } },
+        timestamp: Date.now(),
+      })) as unknown as CompleteFn },
+      model,
+      config: testConfig(),
+      toolName: "bash",
+      input: { command: "ls" },
+    });
+    assert.equal(priced.tokenUsage?.costUsd, 0.003);
+
+    const { io: unpricedIO } = makeIO([NAME_READ]);
+    const unpriced = await name(unpricedIO);
+    assert.equal(unpriced.tokenUsage?.costUsd, undefined, "an unpriced provider must not read as costing zero");
+  });
+
   it("gives the namer recent user messages", async () => {
     const { io, calls } = makeIO([NAME_READ], { userMessages: ["please push to main"] });
     await name(io);

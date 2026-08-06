@@ -218,6 +218,13 @@ export const CAPABILITY_OUTCOMES: CapabilityOutcome[] = [
 export interface CapabilityStats {
   /** Times this class appeared among an action's labels. */
   hits: number;
+  /**
+   * Times this class was the label that actually produced the winning
+   * disposition. Outcomes are recorded on every label of a multi-label action,
+   * so an allow-set class shows ask outcomes it did not cause; `decided` is the
+   * column that says which class was in charge.
+   */
+  decided: number;
   outcomes: Record<CapabilityOutcome, number>;
   /** Content-screen verdicts on actions that carried this label. */
   screenTripped: number;
@@ -257,6 +264,7 @@ export function createCapabilityState(): CapabilityState {
 export function createCapabilityStats(): CapabilityStats {
   return {
     hits: 0,
+    decided: 0,
     outcomes: { allow: 0, "ask-approved": 0, "ask-denied": 0, deny: 0, "judge-allow": 0, "judge-ask": 0, "judge-deny": 0 },
     screenTripped: 0,
     screenClean: 0,
@@ -480,6 +488,11 @@ export function deleteSessionClass(state: CapabilityState, id: CapabilityId): vo
 
 export function recordCapabilityHits(state: CapabilityState, labels: CapabilityId[]): void {
   for (const id of labels) capabilityStats(state, id).hits++;
+}
+
+/** The one label of an action that resolveCapabilities named as decidedBy; never more than one per decision. */
+export function recordCapabilityDecided(state: CapabilityState, id: CapabilityId): void {
+  capabilityStats(state, id).decided++;
 }
 
 export function recordCapabilityOutcome(state: CapabilityState, labels: CapabilityId[], outcome: CapabilityOutcome): void {

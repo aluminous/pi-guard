@@ -4,6 +4,7 @@ import { askRailApproval } from "./approvals.ts";
 import {
   capabilityName,
   capabilityRegistry,
+  recordCapabilityDecided,
   recordCapabilityHits,
   recordCapabilityOutcome,
   recordScreenVerdict,
@@ -43,6 +44,8 @@ import {
   recordClassifierError,
   recordClassifierSkip,
   recordDecisionTrace,
+  recordJudgement,
+  recordModelCall,
   recordPolicyBlock,
   syncCapabilityPreset,
   type RuntimeState,
@@ -396,6 +399,7 @@ async function runInterceptStages(
     try {
       named = await nameToolCall({ ctx, config, state: state.classifier, toolName: event.toolName, input: event.input, completeFn, capabilities: state.capabilities });
       namerLatencyMs = Math.round(performance.now() - startedAt);
+      recordModelCall(state, { role: "namer", model: namerModel, latencyMs: namerLatencyMs, usage: named.tokenUsage });
       state.classifier.lastError = undefined;
       addTraceStage(
         trace,
@@ -550,9 +554,12 @@ async function enforceCapabilities(params: EnforceParams): Promise<ToolCallBlock
       labels: resolution.labels,
       decision,
       disposition: resolution.disposition,
+      decidedBy: resolution.decidedBy.id,
       reason,
       reviewed: params.reviewed || judge !== undefined,
       tokenUsage: totalUsage(params.named, judge),
+      latencyMs: (params.namerLatencyMs ?? 0) + (judgeTelemetry?.latencyMs ?? 0),
+      model: params.namerModel,
     });
     recordCapabilityOutcome(state.capabilities, resolution.labels, outcome);
     state.classifier.lastDecision = { toolName: event.toolName, at: Date.now(), labels: resolution.labels, decision, reason };
@@ -603,6 +610,7 @@ async function enforceCapabilities(params: EnforceParams): Promise<ToolCallBlock
     // askPathApproval owns the counters, telemetry, and recent event for this
     // dialog; only the per-class stats are still ours to record.
     recordCapabilityHits(state.capabilities, resolution.labels);
+    recordCapabilityDecided(state.capabilities, resolution.decidedBy.id);
     recordCapabilityOutcome(state.capabilities, resolution.labels, approval ? "ask-denied" : "ask-approved");
     return approval;
   }
@@ -688,6 +696,18 @@ async function runJudgeStage(
     });
     const latencyMs = Math.round(performance.now() - startedAt);
     addTraceStage(trace, "judge", judge.decision, `${judge.decision} · ${judge.reason} (model ${model ?? "unknown"}, ${latencyMs}ms)`);
+    recordModelCall(state, { role: "judge", model, latencyMs, usage: judge.tokenUsage });
+    recordJudgement(state, {
+      at: Date.now(),
+      toolName: event.toolName,
+      labels: resolution.labels,
+      verdict: judge.decision,
+      reason: judge.reason,
+      latencyMs,
+      inputTokens: judge.tokenUsage?.input ?? 0,
+      outputTokens: judge.tokenUsage?.output ?? 0,
+      model,
+    });
     return {
       disposition: judge.decision,
       judge,
