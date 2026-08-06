@@ -294,6 +294,7 @@ function modelRow(entry: ModelUsageStats): string[] {
 export function costSummary(rows: ModelUsageStats[]): string {
   const total = rows.reduce((sum, row) => sum + row.costUsd, 0);
   const unpriced = rows.reduce((sum, row) => sum + row.unpricedCalls, 0);
+  if (rows.length === 0) return "no cost reported";
   if (unpriced === 0) return `${formatCost(total)} total`;
   const qualifier = `${unpriced} call${unpriced === 1 ? "" : "s"} unpriced`;
   return total === 0 ? `no cost reported (${qualifier})` : `${formatCost(total)} total (${qualifier})`;

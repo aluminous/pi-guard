@@ -160,6 +160,11 @@ export class StatusPage extends Container {
       this.refresh();
       return;
     }
-    if (keybindings.matches(data, "tui.select.cancel")) this.params.done(undefined);
+    if (keybindings.matches(data, "tui.select.cancel")) {
+      // Stop ticking on the way out; pi calls dispose() too, and clearing an
+      // already-cleared interval is a no-op.
+      this.dispose();
+      this.params.done(undefined);
+    }
   }
 }

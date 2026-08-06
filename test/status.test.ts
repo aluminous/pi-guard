@@ -209,7 +209,7 @@ describe("models tab", () => {
   });
 
   it("never reports a cost total as free when nothing was priced", () => {
-    assert.equal(costSummary([]), "— total");
+    assert.equal(costSummary([]), "no cost reported");
     assert.match(costSummary([{ model: "m", role: "namer", calls: 2, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: 0, unpricedCalls: 2, totalLatencyMs: 0, maxLatencyMs: 0 }]), /no cost reported \(2 calls unpriced\)/);
   });
 });
