@@ -19,7 +19,7 @@ import {
 } from "../src/dispositions.ts";
 import type { PersistedCapabilityClass } from "../src/persistent-settings.ts";
 import { createRuntimeState, syncCapabilityPreset, type RuntimeState } from "../src/state.ts";
-import { DispositionPage, type DispositionTab } from "../src/tui/disposition-page.ts";
+import { DispositionPage } from "../src/tui/disposition-page.ts";
 import { testConfig } from "./helpers.ts";
 
 /** Tags every styled segment so assertions can see which colour a row segment got. */
@@ -69,27 +69,18 @@ function spyPersistence(rows: Array<[CapabilityId, Disposition | undefined]>) {
   return persistence;
 }
 
-function openPage(state: RuntimeState, config: ResolvedRailConfig, initialTab?: DispositionTab) {
+function openPage(state: RuntimeState, config: ResolvedRailConfig) {
   const persisted: Array<[CapabilityId, Disposition | undefined]> = [];
   const closes: undefined[] = [];
   const notes: Array<{ message: string; level?: string }> = [];
-  // Long enough to scroll: the rules pane shows terminal.rows - 13 lines.
-  const policy = [
-    "# Pi Rail Policy Rules",
-    "## Filesystem",
-    "  Allow write:",
-    ...Array.from({ length: 40 }, (_, i) => `  • /repo/path-${i}`),
-  ];
   const page = new DispositionPage({
     tui,
     theme,
     keybindings,
-    initialTab,
     rows: () => dispositionRows(config, state),
     cycle: (id, step) => setRowDisposition(config, state, id, cycleDisposition(dispositionRow(config, state, id).value, step)),
     save: () => void saveDispositions(config, state, spyPersistence(persisted)),
     banner: () => presetBanner(state),
-    policyLines: () => policy,
     addClass: (input) => addClass(config, state, input),
     editDefinition: (id, definition) => editClassDefinition(config, state, id, definition),
     deleteClass: (id) => deleteClass(state, id),
@@ -432,46 +423,24 @@ describe("saveDispositions with class changes", () => {
   });
 });
 
-describe("DispositionPage tabs", () => {
-  it("renders both tab names with the active one accented", () => {
-    const { text } = openPage(createRuntimeState(), testConfig());
-    assert.match(text(), /<muted>Tab:<\/muted> <accent>dispositions<\/accent><muted> \| <\/muted><muted>rules<\/muted>/);
-  });
-
-  it("cycles tabs with tui.input.tab and renders formatRailPolicy on the rules tab", () => {
+describe("DispositionPage without tabs", () => {
+  it("is a single view: no tab header, and the rules pointer names the status page", () => {
     const { page, text } = openPage(createRuntimeState(), testConfig());
-    assert.equal(page.activeTab(), "dispositions");
+    const rendered = text();
+    assert.match(rendered, /Capability policy/);
+    assert.doesNotMatch(rendered, /Tab:/, "the mechanism rules moved to the status page");
+    assert.doesNotMatch(rendered, /Tab switches view/);
+    assert.match(rendered, /the resolved filesystem\/network rules are \/rail policy rules/);
+    assert.match(rendered, /↑↓ row · ←→\/Enter cycle/);
+
+    // Tab is no longer a page gesture in list mode; it must not move anything.
+    page.handleInput(TAB);
+    assert.equal(page.selectedId(), "read-project");
     assert.match(text(), /read-project/);
-
-    page.handleInput(TAB);
-    assert.equal(page.activeTab(), "rules");
-    const rules = text();
-    assert.match(rules, /Pi Rail Policy Rules/, "the rules tab shows the mechanism report");
-    assert.match(rules, /Filesystem/);
-    assert.doesNotMatch(rules, /↑↓ row · ←→\/Enter cycle/, "the table's key hints are gone");
-    assert.match(rules, /Tab switches view/);
-
-    page.handleInput(TAB);
-    assert.equal(page.activeTab(), "dispositions", "two presses wrap back");
   });
 
-  it("opens directly on the rules tab when asked", () => {
-    const { page, text } = openPage(createRuntimeState(), testConfig(), "rules");
-    assert.equal(page.activeTab(), "rules");
-    assert.match(text(), /Pi Rail Policy Rules/);
-  });
-
-  it("scrolls the rules tab with up and down rather than moving a selection", () => {
-    const { page, text } = openPage(createRuntimeState(), testConfig(), "rules");
-    const before = text();
-    page.handleInput("<down>");
-    assert.notEqual(text(), before, "down scrolls the report");
-    page.handleInput("<up>");
-    assert.equal(text(), before, "and up scrolls back");
-  });
-
-  it("closes from either tab", () => {
-    const { page, closes } = openPage(createRuntimeState(), testConfig(), "rules");
+  it("closes on Esc", () => {
+    const { page, closes } = openPage(createRuntimeState(), testConfig());
     page.handleInput("<esc>");
     assert.deepEqual(closes, [undefined]);
   });

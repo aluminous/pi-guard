@@ -7,6 +7,7 @@ import { addClass, setRowDisposition } from "../src/dispositions.ts";
 import { addSessionGuidance } from "../src/classifier.ts";
 import { createRuntimeState, type RuntimeState } from "../src/state.ts";
 import { DispositionPage } from "../src/tui/disposition-page.ts";
+import { StatusPage } from "../src/tui/status-page.ts";
 import { testConfig } from "./helpers.ts";
 
 function makeCommand(specs: string[] = []) {
@@ -225,31 +226,34 @@ describe("/rail policy routing", () => {
     assert.equal(state.liveView, undefined, "a second /rail policy closes the page");
   });
 
-  it("routes /rail policy rules to the mechanism report", async () => {
+  it("routes /rail policy rules to the mechanism rules alone over RPC", async () => {
     const { command, state } = makeDispositionCommand();
     const { ctx, widgets } = rpcCtx();
     await command.handler("policy rules", ctx);
     assert.equal(state.liveView?.kind, "policy");
     assert.equal(widgets.at(-1)?.key, "rail-policy");
-    assert.match(widgets.at(-1)?.lines?.join("\n") ?? "", /# Pi Rail Policy Rules/);
-    assert.doesNotMatch(widgets.at(-1)?.lines?.join("\n") ?? "", /## Capability dispositions/);
+    const text = widgets.at(-1)?.lines?.join("\n") ?? "";
+    assert.match(text, /─ Filesystem/);
+    assert.match(text, /─ Network/);
+    assert.doesNotMatch(text, /══ Session/, "the policy tab alone, not the whole status page");
   });
 
-  it("opens the page on the rules tab in the TUI, and switches instead of closing", async () => {
+  it("opens the status page on the policy tab in the TUI, and switches instead of closing", async () => {
     const { command, state } = makeDispositionCommand();
     const tui = tuiCtx();
     await command.handler("policy rules", tui.ctx);
     const page = tui.panel();
-    assert.ok(page instanceof DispositionPage);
-    assert.equal(page.activeTab(), "rules", "/rail policy rules lands on the rules tab");
+    assert.ok(page instanceof StatusPage, "the mechanism rules are a status-page tab now");
+    assert.equal(state.liveView?.kind, "status");
+    assert.equal(page.activeTab(), "policy");
 
-    // The other tab is the same panel: it retargets rather than toggling shut.
-    await command.handler("policy", tui.ctx);
-    assert.equal(state.liveView?.kind, "policy", "the panel stayed open");
-    assert.equal(page.activeTab(), "dispositions");
+    // Another tab of the same page retargets rather than toggling shut.
+    await command.handler("status", tui.ctx);
+    assert.equal(state.liveView?.kind, "status", "the panel stayed open");
+    assert.equal(page.activeTab(), "session");
 
     await command.handler("policy rules", tui.ctx);
-    assert.equal(page.activeTab(), "rules");
+    assert.equal(page.activeTab(), "policy");
 
     // Re-invoking the tab already showing is the toggle.
     await command.handler("policy rules", tui.ctx);
@@ -257,12 +261,25 @@ describe("/rail policy routing", () => {
     assert.equal(state.liveView, undefined, "same-tab invocation closes the panel");
   });
 
-  it("renders the mechanism report on the page's rules tab", async () => {
+  it("renders the mechanism rules on the status page's policy tab", async () => {
     const { command } = makeDispositionCommand();
     const tui = tuiCtx();
     await command.handler("policy rules", tui.ctx);
+    const page = tui.panel() as StatusPage;
+    const text = page.render(200).join("\n");
+    assert.match(text, /Tab: session \| models \| namer \| judge \| engine \| policy/);
+    assert.match(text, /─ Filesystem/);
+  });
+
+  it("leaves the disposition page a single view with no tabs", async () => {
+    const { command } = makeDispositionCommand();
+    const tui = tuiCtx();
+    await command.handler("policy", tui.ctx);
     const page = tui.panel() as DispositionPage;
-    assert.match(page.render(200).join("\n"), /Pi Rail Policy Rules/);
+    const text = page.render(200).join("\n");
+    assert.match(text, /Capability policy/);
+    assert.doesNotMatch(text, /Tab:/, "the rules tab left with the tab header");
+    assert.match(text, /the resolved filesystem\/network rules are \/rail policy rules/);
   });
 
   it("warns on an unknown policy argument", async () => {

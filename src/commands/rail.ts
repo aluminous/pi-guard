@@ -5,8 +5,11 @@ import type { DispositionPersistence } from "../dispositions.ts";
 import { formatDecisionTrace, formatEmptyTrace } from "../decision-trace.ts";
 import { updatePersistentStatusLine } from "../persistent-settings.ts";
 import type { RuntimeState } from "../state.ts";
-import { classifierModelLabel, formatRailPolicy, formatRailStatus, networkPolicyLabel, updateRailStatus } from "../status.ts";
-import { showRailView, toggleRailView } from "../live-view.ts";
+import { classifierModelLabel, networkPolicyLabel, updateRailStatus } from "../status.ts";
+import { isStatusTab, PLAIN_THEME, statusReportLines, statusTabLines, type StatusTab, type StatusView } from "../status-tabs.ts";
+import { showRailView, toggleRailPanel, toggleRailView } from "../live-view.ts";
+import type { PanelTheme } from "../tui/report-panel.ts";
+import { StatusPage } from "../tui/status-page.ts";
 import { pickFromList, type SelectItem } from "../tui/select-list.ts";
 import { formatError } from "../util.ts";
 import { createDispositionCommands } from "./dispositions.ts";
@@ -25,9 +28,9 @@ export interface RailCommandDeps {
 }
 
 const SUBCOMMANDS: Array<{ value: string; description: string }> = [
-  { value: "status", description: "Toggle the live status popup" },
+  { value: "status", description: "Toggle the live status page: session, models, namer, judge, engine, policy tabs" },
   { value: "policy", description: "Open the capability policy page (edit rows and classes for this session; Ctrl+S saves)" },
-  { value: "policy rules", description: "Open the policy page on the resolved mechanism rules: filesystem, network, environment" },
+  { value: "policy rules", description: "Open the status page on the resolved mechanism rules: filesystem, network, environment" },
   { value: "set", description: "Set one class for this session: set <class> [allow|judge|ask|deny]" },
   { value: "guide", description: "Add classifier guidance for this session: guide <text> (or bare to be prompted)" },
   { value: "guide clear", description: "Drop every guidance entry collected this session" },
@@ -59,9 +62,6 @@ export function createRailCommand(deps: RailCommandDeps) {
     state,
     persist: deps.persistDisposition,
     notify: show,
-    // The rules tab renders the same report the standalone view did; computed
-    // per refresh so provenance and backend changes show up live.
-    policyLines: (ctx) => formatRailPolicy(state, state.config ?? loadConfig(ctx)).split("\n"),
   });
 
   /**
@@ -135,12 +135,53 @@ export function createRailCommand(deps: RailCommandDeps) {
     showRailView(ctx, state, "report", () => formatDecisionTrace(trace, n, total).split("\n"));
   }
 
-  /** TUI: toggle the live popup. RPC: toggle a live widget. Headless: print to stdout. Never posted to the agent. */
-  function showView(ctx: ExtensionContext, kind: "status" | "policy"): void {
-    toggleRailView(ctx, state, kind, () => {
-      const config = state.config ?? loadConfig(ctx);
-      return (kind === "status" ? formatRailStatus(state, config) : formatRailPolicy(state, config)).split("\n");
+  /** Width assumed for the RPC widget, which has no terminal to measure; wide enough for the models table. */
+  const RPC_WIDTH = 100;
+
+  function statusView(ctx: ExtensionContext, width: number, theme: PanelTheme): StatusView {
+    const config = state.config ?? loadConfig(ctx);
+    return { state, config, classifierLabel: classifierModelLabel(ctx, config, state), theme, width };
+  }
+
+  /**
+   * The tabbed status page. In the TUI it is one docked panel, so invoking a
+   * different tab while it is open switches rather than closing — only
+   * re-invoking the tab you are already on toggles the panel shut.
+   *
+   * RPC has no tab affordance, so it degrades to a live widget: every tab
+   * concatenated under its own header for `/rail status`, and the policy tab
+   * alone for `/rail policy rules`. Headless has no user to show a view to,
+   * which showRailView turns into a stderr error. None of these paths ever
+   * posts into the conversation.
+   */
+  function openStatus(ctx: ExtensionContext, tab: StatusTab = "session"): void {
+    const open = state.liveView;
+    if (open?.kind === "status" && open.selectTab && open.activeTab?.() !== tab) {
+      open.selectTab(tab);
+      return;
+    }
+    const opened = toggleRailPanel(ctx, state, "status", (host) => {
+      const page = new StatusPage({
+        ...host,
+        initialTab: tab,
+        view: (width, theme) => statusView(ctx, width, theme),
+      });
+      // Let a later /rail policy rules retarget the tab on the open panel. The
+      // live-view seam is string-typed so state.ts stays free of TUI types.
+      if (state.liveView) {
+        state.liveView.selectTab = (next) => {
+          if (isStatusTab(next)) page.selectTab(next);
+        };
+        state.liveView.activeTab = () => page.activeTab();
+      }
+      return page;
     });
+    if (opened) return;
+    const lines = () => {
+      const view = statusView(ctx, RPC_WIDTH, PLAIN_THEME);
+      return tab === "policy" ? statusTabLines(view, "policy") : statusReportLines(view);
+    };
+    toggleRailView(ctx, state, tab === "policy" ? "policy" : "status", lines);
   }
 
   function panelHeader(ctx: ExtensionContext): string[] {
@@ -200,7 +241,7 @@ export function createRailCommand(deps: RailCommandDeps) {
       { value: "statusline", label: "Statusline visibility…", searchText: "statusline status line visibility always never auto hide show", description: "Show the rail statusline always, never, or only when notable" },
       { value: "smoke", label: "Run smoke tests", searchText: "smoke test verify sandbox namer classifier", description: "Verify sandboxed execution and capability naming end to end" },
       { value: "critique", label: "Critique capabilities", searchText: "critique capabilities classes screen rules review improve", description: "Have Pi's current model review the class definitions, table, and screen" },
-      { value: "status", label: "Status popup", searchText: "status report details approvals live popup overlay", description: "Live status popup: decisions, approvals, guidance — updates while the agent works" },
+      { value: "status", label: "Status page", searchText: "status report details approvals live popup overlay tabs models namer judge engine", description: "Live status page: decisions, reviewer cost, recent namings and judgements, engine, policy" },
       { value: "dispositions", label: "Dispositions…", searchText: "dispositions policy capabilities classes allow deny ask judge edit table page", description: "Edit the capability disposition table: arrows cycle a row for this session, Ctrl+S saves" },
       { value: "policy-rules", label: "Policy rules", searchText: "policy rules filesystem network environment provenance mechanism show", description: "Resolved filesystem/network/environment rules with their config provenance" },
       { value: "explain", label: "Explain last decision", searchText: "explain trace decision why last chain stages", description: "Show the decision chain the rail ran for the most recent tool call" },
@@ -229,13 +270,12 @@ export function createRailCommand(deps: RailCommandDeps) {
       case "critique":
         return deps.runCritique("", ctx);
       case "status":
-        return showView(ctx, "status");
+        return openStatus(ctx);
       case "dispositions":
-        return dispositions.openSettings(ctx, "dispositions");
+        return dispositions.openSettings(ctx);
       case "policy-rules":
-        // Same routing as `/rail policy rules`: a tab of the page in the TUI.
-        if (ctx.mode === "tui" && ctx.hasUI) return dispositions.openSettings(ctx, "rules");
-        return showView(ctx, "policy");
+        // Same routing as `/rail policy rules`: the status page's policy tab.
+        return openStatus(ctx, "policy");
       case "explain":
         return showExplain(ctx, "");
     }
@@ -258,16 +298,13 @@ export function createRailCommand(deps: RailCommandDeps) {
     // Headless modes have no user to drive these; the seam modules turn them
     // into a clean no-op (pickFromList resolves undefined) or stderr error.
     if (!sub) return openPanel(ctx);
-    if (sub === "status") return showView(ctx, "status");
-    // /rail policy IS the disposition page now; the mechanism report is its
-    // second tab in the TUI, and still a standalone widget everywhere else.
+    if (sub === "status") return openStatus(ctx);
+    // /rail policy IS the disposition page; the resolved mechanism rules are a
+    // tab of the status page, since they are evidence rather than something to edit.
     if (sub === "policy") {
       const target = rest.trim().toLowerCase();
-      if (!target) return dispositions.openSettings(ctx, "dispositions");
-      if (target === "rules") {
-        if (ctx.mode === "tui" && ctx.hasUI) return dispositions.openSettings(ctx, "rules");
-        return showView(ctx, "policy");
-      }
+      if (!target) return dispositions.openSettings(ctx);
+      if (target === "rules") return openStatus(ctx, "policy");
       show(ctx, "Usage: /rail policy [rules]", "warning");
       return;
     }
