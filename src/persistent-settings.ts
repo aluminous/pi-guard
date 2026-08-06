@@ -67,7 +67,7 @@ function readConfigUnlocked(): RailConfig {
   return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as RailConfig) : {};
 }
 
-export function updatePersistentClassifierSettings(update: { enabled?: boolean; model?: string }): void {
+export function updatePersistentClassifierSettings(update: { enabled?: boolean; model?: string; judgeModel?: string }): void {
   withConfigLock(() => {
     const filePath = configPath();
     const current = readConfigUnlocked();
