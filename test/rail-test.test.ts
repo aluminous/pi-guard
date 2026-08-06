@@ -91,6 +91,44 @@ describe("/rail test dry runs", () => {
     assert.match(report, /severity-max ⇒ allow/);
   });
 
+  it("reports a classify hit, its class, and the disposition it resolves to without a namer", async () => {
+    const config = testConfig((c) => {
+      c.classifier.enabled = true;
+      c.capabilities.classes = [{ id: "k8s-ops", name: "Cluster ops", definition: "Cluster operations.", default: "ask" }];
+      c.commands.classify = [{ template: "kubectl *", capability: "k8s-ops" }];
+    });
+    const { state } = railState(config, "seatbelt");
+    const { ctx, widgets } = fakeCtx();
+    await createRailTest({ state })("kubectl apply -f deploy.yaml", ctx);
+    const report = reportOf(widgets);
+    assert.match(report, /`kubectl apply -f deploy\.yaml` → classify rule `kubectl \*` \(k8s-ops\)/);
+    assert.match(report, /every segment matched — deterministic labels resolve to ask, decided without a namer call/);
+    assert.match(report, /namer: skipped — deterministically classified k8s-ops ⇒ ask/);
+    assert.match(report, /k8s-ops → ask \(default\)/);
+    assert.match(report, /verdict: would ask the user/);
+  });
+
+  it("says a classified command that resolves to allow still needs the sandbox", async () => {
+    const config = testConfig((c) => (c.commands.classify = [{ template: "kubectl *", capability: "read-system" }]));
+    const { state } = railState(config, "none");
+    const { ctx, widgets } = fakeCtx();
+    await createRailTest({ state })("kubectl get pods", ctx);
+    const report = reportOf(widgets);
+    assert.match(report, /every segment matched and resolves to allow, but the sandbox is not enforcing/);
+    assert.match(report, /namer: classifier disabled — would not run/);
+  });
+
+  it("says a partial match carries no labels", async () => {
+    const config = testConfig((c) => (c.commands.classify = [{ template: "kubectl *", capability: "read-system" }]));
+    const { state } = railState(config, "seatbelt");
+    const { ctx, widgets } = fakeCtx();
+    await createRailTest({ state })("kubectl get pods && helm upgrade api", ctx);
+    const report = reportOf(widgets);
+    assert.match(report, /\[ALLOW\] `kubectl get pods` → classify rule `kubectl \*` \(read-system\)/);
+    assert.match(report, /\[BLOCK\] `helm upgrade api`: no classify or allowlist rule matches/);
+    assert.match(report, /partial matches carry no labels — the namer sees the whole command/);
+  });
+
   it("explains why a segment is not allowlisted and notes a non-enforcing sandbox", async () => {
     const { state } = railState(testConfig(), "none");
     const { ctx, widgets } = fakeCtx();

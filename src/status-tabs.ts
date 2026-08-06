@@ -410,7 +410,11 @@ function layerRows(config: ResolvedRailConfig, effective: EffectivePolicy | unde
       `${(effective?.network.allowedDomains ?? config.network.allowedDomains).length} allowed · ${config.network.deniedDomains.length} denied`,
     ],
     ["environment", config.environment.unset.length > 0 || config.environment.allow.length > 0 ? "scrubbing" : "untouched", `${config.environment.allow.length} allowed · ${config.environment.unset.length} unset`],
-    ["commands", config.commands.allow.length > 0 ? "allowlist" : "none", `${config.commands.allow.length} rule(s) exempt from review`],
+    [
+      "commands",
+      config.commands.allow.length > 0 ? "allowlist" : config.commands.classify.length > 0 ? "classify" : "none",
+      `${config.commands.allow.length} rule(s) exempt from review${config.commands.classify.length > 0 ? ` · ${config.commands.classify.length} classify rule(s)` : ""}`,
+    ],
   ];
 }
 
@@ -506,6 +510,21 @@ function listSection(view: StatusView, title: string, listKey: ProvenanceListKey
   ];
 }
 
+/**
+ * User template → capability rules, shown only when there are any: an empty
+ * "(none)" table on every policy page would be noise for the many configs that
+ * never classify anything.
+ */
+function classifySection(view: StatusView): string[] {
+  const { config, theme, width } = view;
+  if (config.commands.classify.length === 0) return [];
+  const source = sourceLookup(config, "commands.classify", false);
+  return [
+    muted(theme, "Classified by template:"),
+    ...renderTable(theme, ENTRY_COLUMNS, config.commands.classify.map((rule) => [`${rule.template} → ${rule.capability}`, source(rule.template)]), width, { indent: "    " }),
+  ];
+}
+
 function policyTab(view: StatusView): string[] {
   const { state, config, theme, width } = view;
   const effective = state.backend?.describeEffectivePolicy(config);
@@ -538,8 +557,9 @@ function policyTab(view: StatusView): string[] {
     ...listSection(view, "Allow", "environment.allow", config.environment.allow, false),
     ...listSection(view, "Unset", "environment.unset", config.environment.unset, false),
     "",
-    heading(theme, "Command allowlist"),
+    heading(theme, "Command rules"),
     ...listSection(view, "Exempt from review", "commands.allow", config.commands.allow, false),
+    ...classifySection(view),
     "",
     heading(theme, "Config sources"),
     ...renderTable(theme, [{ header: "source", min: 12 }, { header: "label", min: 6 }], config.sources.map((source) => [source, configSourceLabel(source)]), width),

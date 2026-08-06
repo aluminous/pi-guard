@@ -166,6 +166,149 @@ describe("classifier command exemption", () => {
   });
 });
 
+// The user-authored half of the deterministic labelling: commands.classify maps
+// a template to any class, including a custom one, and the interceptor acts on
+// the result without a naming call — except in the one widening direction.
+describe("commands.classify labelling", () => {
+  const MODEL = "openrouter/anthropic/claude-haiku-4.5";
+
+  /** A ctx whose namer/judge model resolves, so a model call would really be attempted. */
+  function reviewingCtx(answers?: string[]): ExtensionContext & { aborted: boolean; notifications: string[] } {
+    const ctx = fakeCtx(fixture.dir) as unknown as Record<string, any>;
+    ctx.modelRegistry.find = () => ({ provider: "openrouter", id: "anthropic/claude-haiku-4.5" });
+    ctx.modelRegistry.getApiKeyAndHeaders = async () => ({ ok: true, apiKey: "test-key" });
+    if (answers) {
+      ctx.hasUI = true;
+      ctx.ui.custom = async () => ({ choice: answers.shift() ?? "Deny", comment: undefined });
+      ctx.ui.select = async () => answers.shift() ?? "Deny";
+    }
+    return ctx as unknown as ExtensionContext & { aborted: boolean; notifications: string[] };
+  }
+
+  /** Scripted model calls that also count them: the point of most of these tests is that nobody called. */
+  function reviewer(script: string[] = []) {
+    const seen = { calls: 0 };
+    const complete = (async () => {
+      seen.calls++;
+      const step = script.shift();
+      if (step === undefined) throw new Error("scripted complete exhausted");
+      return { role: "assistant", stopReason: "stop", content: [{ type: "text", text: step }], usage: { input: 10, output: 5 }, timestamp: Date.now() };
+    }) as unknown as CompleteFn;
+    return { complete, seen };
+  }
+
+  function classifyState(options: { disposition: "allow" | "judge" | "ask" | "deny"; backend?: string; classifier?: boolean }) {
+    const config = testConfig((c) => {
+      c.classifier.enabled = options.classifier ?? true;
+      c.classifier.model = MODEL;
+      c.classifier.judgeModel = MODEL;
+      c.capabilities.classes = [{ id: "k8s-ops", name: "Cluster ops", definition: "Cluster operations.", default: options.disposition }];
+      c.commands.classify = [{ template: "kubectl *", capability: "k8s-ops" }];
+    });
+    const state = railState(config);
+    if (options.backend) state.backend = { name: options.backend } as RailBackend;
+    return state;
+  }
+
+  it("denies deterministically, with no naming call and no sandbox required", async () => {
+    const state = classifyState({ disposition: "deny" });
+    const { complete, seen } = reviewer();
+    const result = await interceptToolCall({ toolName: "bash", input: { command: "kubectl delete pod api" } }, reviewingCtx(), state, complete);
+    assert.equal(result?.block, true);
+    assert.match(result.reason, /Rail denied/);
+    assert.match(result.reason, /k8s-ops \(Cluster ops\), which is set to deny/);
+    assert.equal(seen.calls, 0, "a tightening verdict never consults the namer");
+    assert.deepEqual(state.recent[0]?.capabilities, ["k8s-ops"]);
+    assert.equal(state.stats.ruleHits, 1);
+  });
+
+  it("asks the user deterministically, with no naming call", async () => {
+    const state = classifyState({ disposition: "ask" });
+    const { complete, seen } = reviewer();
+    const result = await interceptToolCall({ toolName: "bash", input: { command: "kubectl apply -f deploy.yaml" } }, reviewingCtx(["Allow"]), state, complete);
+    assert.equal(result, undefined, "the user approved");
+    assert.equal(seen.calls, 0);
+    assert.equal(state.stats.asked, 0, "an approved ask is counted as an allow decision");
+    assert.deepEqual(state.recent[0]?.decision, "allow");
+
+    const denied = await interceptToolCall({ toolName: "bash", input: { command: "kubectl apply -f deploy.yaml" } }, reviewingCtx(["Deny"]), state, complete);
+    assert.equal(denied?.block, true);
+    assert.equal(seen.calls, 0);
+  });
+
+  it("still runs the judge for a judge class — only the namer's label step is skipped", async () => {
+    const state = classifyState({ disposition: "judge" });
+    const { complete, seen } = reviewer(['{"decision":"deny","reason":"that context is the production cluster"}']);
+    const result = await interceptToolCall({ toolName: "bash", input: { command: "kubectl delete ns prod" } }, reviewingCtx(), state, complete);
+    assert.equal(result?.block, true);
+    assert.match(result.reason, /Rail judge denied: that context is the production cluster/);
+    assert.equal(seen.calls, 1, "exactly one model call: the judge, on the deterministic labels");
+    assert.deepEqual(state.recentJudgements[0]?.labels, ["k8s-ops"]);
+  });
+
+  it("needs an enforcing sandbox before a deterministic allow, and falls to the namer without one", async () => {
+    const state = classifyState({ disposition: "allow" });
+    const { complete, seen } = reviewer(['{"labels":["off-machine-effects"]}']);
+    const result = await interceptToolCall({ toolName: "bash", input: { command: "kubectl get pods" } }, reviewingCtx(), state, complete);
+    assert.equal(seen.calls, 1, "an allow without containment is the one case that still gets named");
+    assert.equal(result?.block, true, "headless: the namer's off-machine-effects asks, and nobody can answer");
+    assert.deepEqual(state.recent[0]?.capabilities, ["off-machine-effects"]);
+  });
+
+  it("allows deterministically once the sandbox is enforcing", async () => {
+    const state = classifyState({ disposition: "allow", backend: "seatbelt" });
+    const { complete, seen } = reviewer();
+    const result = await interceptToolCall({ toolName: "bash", input: { command: "kubectl get pods" } }, reviewingCtx(), state, complete);
+    assert.equal(result, undefined);
+    assert.equal(seen.calls, 0);
+    assert.equal(state.stats.classifierSkips, 1);
+  });
+
+  it("falls through to the namer entirely when one segment matches nothing", async () => {
+    const state = classifyState({ disposition: "deny", backend: "seatbelt" });
+    const { complete, seen } = reviewer(['{"labels":["run-dev-tools"]}']);
+    const result = await interceptToolCall({ toolName: "bash", input: { command: "kubectl get pods && helm upgrade api" } }, reviewingCtx(), state, complete);
+    assert.equal(result, undefined, "the namer's own labels decide; the matched half seeds nothing");
+    assert.equal(seen.calls, 1);
+    assert.deepEqual(state.recent[0]?.capabilities, ["run-dev-tools"], "no k8s-ops label leaked in from the matched segment");
+  });
+
+  it("lets a user rule re-classify a built-in allowlist template", async () => {
+    const config = testConfig((c) => {
+      c.classifier.enabled = true;
+      c.classifier.model = MODEL;
+      c.commands.classify = [{ template: "git log *", capability: "off-machine-effects" }];
+    });
+    const state = railState(config);
+    state.backend = { name: "seatbelt" } as RailBackend;
+    const { complete, seen } = reviewer();
+    const result = await interceptToolCall({ toolName: "bash", input: { command: "git log --oneline" } }, reviewingCtx(), state, complete);
+    assert.equal(result?.block, true, "off-machine-effects asks, and this session is headless");
+    assert.equal(seen.calls, 0);
+    assert.deepEqual(state.recent[0]?.capabilities, ["off-machine-effects"]);
+
+    // Templates the user did not re-map keep the allowlist's own tag.
+    const untouched = await interceptToolCall({ toolName: "bash", input: { command: "git status" } }, reviewingCtx(), state, complete);
+    assert.equal(untouched, undefined);
+  });
+
+  it("records classify labels in the per-class stats like any other decision", async () => {
+    const state = classifyState({ disposition: "deny" });
+    await interceptToolCall({ toolName: "bash", input: { command: "kubectl delete pod api" } }, reviewingCtx(), state, reviewer().complete);
+    const stats = capabilityStats(state.capabilities, "k8s-ops");
+    assert.equal(stats.hits, 1);
+    assert.equal(stats.decided, 1);
+    assert.equal(stats.outcomes.deny, 1);
+  });
+
+  it("works with the classifier off: the user's classification is the review", async () => {
+    const state = classifyState({ disposition: "deny", classifier: false });
+    const result = await interceptToolCall({ toolName: "bash", input: { command: "kubectl delete pod api" } }, reviewingCtx(), state);
+    assert.equal(result?.block, true);
+    assert.match(result.reason, /k8s-ops/);
+  });
+});
+
 /** Interactive fake: askRailApproval falls back to select+input outside the TUI. */
 function interactiveCtx(cwd: string, answers: string[]) {
   const ctx = {

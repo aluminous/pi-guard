@@ -124,6 +124,37 @@ describe("decision traces", () => {
     assert.match(capabilities!.detail, /read-project→allow \(default\) ⇒ allow/);
   });
 
+  it("records a classify hit under its own stage, with the rule and the resolution", async () => {
+    const state = railState(testConfig((c) => {
+      c.capabilities.classes = [{ id: "k8s-ops", name: "Cluster ops", definition: "Cluster operations.", default: "deny" }];
+      c.commands.classify = [{ template: "kubectl *", capability: "k8s-ops" }];
+    }));
+    state.backend = { name: "seatbelt" } as RailBackend;
+    const result = await interceptToolCall({ toolName: "bash", input: { command: "kubectl delete pod api && git status" } }, fakeCtx(), state);
+    assert.equal(result?.block, true);
+    const trace = state.traces[0]!;
+    assert.equal(trace.final, "blocked");
+    assert.ok(!trace.stages.some((s) => s.stage === "command-allowlist"), "the stage is named for the list that matched first");
+    const classify = trace.stages.find((s) => s.stage === "commands.classify");
+    assert.equal(classify?.outcome, "exempt");
+    assert.match(classify!.detail, /`kubectl delete pod api` → classify rule `kubectl \*` \(k8s-ops\)/);
+    assert.match(classify!.detail, /`git status` → rule `git status \*` \(read-project\)/, "allowlist hits in the same chain stay labelled as allowlist hits");
+    assert.match(classify!.detail, /⇒ deny, decided without naming/);
+    assert.ok(!trace.stages.some((s) => s.stage === "namer"), "a deterministic tightening never reaches the namer");
+  });
+
+  it("records why a deterministic allow still needs the namer", async () => {
+    const state = railState(testConfig((c) => {
+      c.classifier.enabled = true;
+      c.commands.classify = [{ template: "kubectl *", capability: "read-system" }];
+    }));
+    const result = await interceptToolCall({ toolName: "bash", input: { command: "kubectl get pods" } }, fakeCtx(), state);
+    assert.equal(result?.block, true, "the classifier is unavailable here, so the fallback blocks");
+    const classify = state.traces[0]!.stages.find((s) => s.stage === "commands.classify");
+    assert.equal(classify?.outcome, "skipped");
+    assert.match(classify!.detail, /⇒ allow, which needs an enforcing Seatbelt sandbox — naming required/);
+  });
+
   it("records the allowlist refusal reason for a non-allowlisted segment", async () => {
     const state = railState(testConfig());
     state.backend = { name: "seatbelt" } as RailBackend;

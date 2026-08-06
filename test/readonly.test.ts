@@ -200,6 +200,41 @@ describe("read-only disposition preset", () => {
     assert.match(result.reason, /modify-project/);
   });
 
+  // A classify rule is a labelling shortcut, not a permission: the labels it
+  // produces go through the same severity-max the namer's do, so the read-only
+  // preset still wins over anything mapped to a writing class.
+  it("denies a classify-labelled write command under the preset, classifier or not", async () => {
+    for (const classifier of [true, false]) {
+      const config = testConfig((c) => {
+        c.classifier.enabled = classifier;
+        c.classifier.model = "test/fake-model";
+        c.commands.classify = [{ template: "mytool deploy *", capability: "modify-project" }];
+      });
+      const state = readOnlyState(config);
+      state.backend = { name: "seatbelt" } as RailBackend;
+      const result = await interceptToolCall(
+        { toolName: "bash", input: { command: "mytool deploy --all" } },
+        fakeCtx(cwd, { model: { provider: "test", id: "fake-model" } }),
+        state,
+        fakeComplete([]),
+      );
+      assert.equal(result?.block, true, `classifier ${classifier}`);
+      assert.match(result.reason, /read-only preset/);
+      assert.match(result.reason, /modify-project/);
+    }
+  });
+
+  it("lets a classify rule keep a read-only command usable with the classifier off", async () => {
+    const config = testConfig((c) => {
+      c.classifier.enabled = false;
+      c.commands.classify = [{ template: "mytool status *", capability: "read-project" }];
+    });
+    const state = readOnlyState(config);
+    state.backend = { name: "seatbelt" } as RailBackend;
+    const result = await interceptToolCall({ toolName: "bash", input: { command: "mytool status --wide" } }, fakeCtx(cwd), state);
+    assert.equal(result, undefined);
+  });
+
   it("still allows a named read-only command under the preset", async () => {
     const config = testConfig((c) => {
       c.classifier.enabled = true;

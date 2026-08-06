@@ -278,6 +278,7 @@ describe("engine tab", () => {
     assert.match(row(text, "filesystem"), /filesystem\s+enabled\s+all paths \(blacklist mode\)/);
     assert.match(row(text, "network"), /network\s+disabled/);
     assert.match(row(text, "commands"), /commands\s+allowlist\s+\d+ rule\(s\)/);
+    assert.ok(!row(text, "commands").includes("classify"), "no classify rules configured, so the row does not mention them");
     assert.match(row(text, "on failure"), /fail open/);
     assert.match(text, /container backend unavailable/);
     assert.match(text, /persistent config/);
@@ -304,6 +305,22 @@ describe("policy tab", () => {
     assert.match(text, /\/rail policy opens it/);
     assert.doesNotMatch(text, /Capability dispositions/, "the table lives on the interactive page");
     assert.ok(text.indexOf("─ Filesystem") < text.indexOf("─ Config sources"));
+  });
+
+  it("lists user classify rules with their class and source, and omits the section when there are none", () => {
+    assert.doesNotMatch(tab(createRuntimeState(), testConfig(), "policy"), /Classified by template/);
+    const config = mergeConfig(
+      testConfig(),
+      {
+        capabilities: { classes: [{ id: "k8s-ops", definition: "Cluster operations." }] },
+        commands: { classify: [{ template: "kubectl *", capability: "k8s-ops" }] },
+      },
+      globalRailConfigPath(),
+    );
+    const text = tab(createRuntimeState(), config, "policy");
+    assert.match(text, /─ Command rules/);
+    assert.match(text, /Classified by template/);
+    assert.match(row(text, "kubectl"), /kubectl \* → k8s-ops\s+global$/);
   });
 
   it("notes that lists still route classifier exemptions when enforcement is off", () => {
