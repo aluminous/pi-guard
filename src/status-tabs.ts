@@ -223,6 +223,7 @@ const EVENT_COLUMNS: TableColumn[] = [
 
 function sessionTab(view: StatusView): string[] {
   const { state, theme, width } = view;
+  const guidance = state.classifier.sessionGuidance ?? [];
   const errorKinds = Object.entries(state.stats.errorsByKind)
     .filter(([, count]) => count > 0)
     .sort(([aKind, aCount], [bKind, bCount]) => bCount - aCount || aKind.localeCompare(bKind))
@@ -251,6 +252,15 @@ function sessionTab(view: StatusView): string[] {
       empty: "(none yet)",
       styleRow: (text, row) => theme.fg(decisionColor(row[2] ?? ""), text),
     }),
+    "",
+    heading(theme, "Session approvals"),
+    ...renderTable(theme, SETTING_COLUMNS, [
+      ["read paths", formatArray(state.approvals.read)],
+      ["write paths", formatArray(state.approvals.write)],
+    ], width),
+    "",
+    heading(theme, "Session guidance"),
+    ...(guidance.length > 0 ? guidance.map((entry) => muted(theme, `• ${entry}`)) : [muted(theme, "(none — /rail guide and approval comments land here)")]),
     "",
     heading(theme, "Errors by kind"),
     ...renderTable(theme, [{ header: "kind", min: 6 }, { header: "count", align: "right" }], errorKinds, width, { empty: "(none)" }),
@@ -435,7 +445,6 @@ function engineTab(view: StatusView): string[] {
     ["timeout", `${config.classifier.timeoutMs}ms per attempt`],
     ["telemetry", config.classifier.telemetry],
   ];
-  const guidance = state.classifier.sessionGuidance ?? [];
   return [
     heading(theme, "Engine"),
     ...renderTable(theme, SETTING_COLUMNS, engineRows, width),
@@ -462,15 +471,6 @@ function engineTab(view: StatusView): string[] {
           ...(state.classifier.lastError ? [`  ${theme.fg("warning", `reviewer: ${state.classifier.lastError}`)}`] : []),
         ]
       : []),
-    "",
-    heading(theme, "Session approvals"),
-    ...renderTable(theme, SETTING_COLUMNS, [
-      ["read paths", formatArray(state.approvals.read)],
-      ["write paths", formatArray(state.approvals.write)],
-    ], width),
-    "",
-    heading(theme, "Session guidance"),
-    ...(guidance.length > 0 ? guidance.map((entry) => muted(theme, `• ${entry}`)) : [muted(theme, "(none — approval comments land here)")]),
   ];
 }
 
@@ -482,31 +482,31 @@ const ENTRY_COLUMNS: TableColumn[] = [{ header: "entry", min: 12 }, { header: "s
  * Effective (backend) lists hold resolved literals while provenance is keyed by
  * config pattern, so each list's lookup also indexes the resolved form.
  */
-function sourceLookup(config: ResolvedRailConfig, listKey: ProvenanceListKey, resolvePaths: boolean): (entry: string) => string {
+function sourceLookup(config: ResolvedRailConfig, listKey: ProvenanceListKey, resolvePaths: boolean, theme: PanelTheme): (entry: string) => string {
   const lookup = new Map<string, string>();
   for (const [entry, source] of Object.entries(config.provenance.lists[listKey])) {
     lookup.set(entry, source);
     if (resolvePaths) lookup.set(resolveConfigPath(process.cwd(), entry), source);
   }
   return (entry: string) => {
-    // Built-in defaults leave the cell blank rather than repeating "default"
-    // down a column of thirty rows: the point of the column is to make the
-    // handful of entries a config file set stand out.
+    // Built-in defaults render a muted "default" — explicit enough to read
+    // without a legend, quiet enough that the handful of entries a config
+    // file set still stand out at full strength.
     const source = lookup.get(entry);
-    if (!source || source === "default") return "";
+    if (!source || source === "default") return theme.fg("muted", "default");
     return configSourceLabel(source);
   };
 }
 
-function entryRows(config: ResolvedRailConfig, listKey: ProvenanceListKey, entries: string[], resolvePaths = true): string[][] {
-  const source = sourceLookup(config, listKey, resolvePaths);
+function entryRows(view: StatusView, listKey: ProvenanceListKey, entries: string[], resolvePaths = true): string[][] {
+  const source = sourceLookup(view.config, listKey, resolvePaths, view.theme);
   return entries.map((entry) => [entry, source(entry)]);
 }
 
 function listSection(view: StatusView, title: string, listKey: ProvenanceListKey, entries: string[], resolvePaths = true): string[] {
   return [
     muted(view.theme, `${title}:`),
-    ...renderTable(view.theme, ENTRY_COLUMNS, entryRows(view.config, listKey, entries, resolvePaths), view.width, { indent: "    ", empty: "(none)" }),
+    ...renderTable(view.theme, ENTRY_COLUMNS, entryRows(view, listKey, entries, resolvePaths), view.width, { indent: "    ", empty: "(none)" }),
   ];
 }
 
@@ -518,7 +518,7 @@ function listSection(view: StatusView, title: string, listKey: ProvenanceListKey
 function classifySection(view: StatusView): string[] {
   const { config, theme, width } = view;
   if (config.commands.classify.length === 0) return [];
-  const source = sourceLookup(config, "commands.classify", false);
+  const source = sourceLookup(config, "commands.classify", false, theme);
   return [
     muted(theme, "Classified by template:"),
     ...renderTable(theme, ENTRY_COLUMNS, config.commands.classify.map((rule) => [`${rule.template} → ${rule.capability}`, source(rule.template)]), width, { indent: "    " }),
@@ -530,7 +530,7 @@ function policyTab(view: StatusView): string[] {
   const effective = state.backend?.describeEffectivePolicy(config);
   const degraded = effective?.filesystem.degraded ?? [];
   return [
-    ...note(theme, width, "an empty source is a built-in default; global/project name the config file that set the entry"),
+    ...note(theme, width, "source: default is built in; global/project name the config file that set the entry"),
     "",
     heading(theme, "Filesystem"),
     line(`Restrictions: ${config.filesystem.enabled ? "enabled" : "disabled (lists still route classifier exemptions)"}`),

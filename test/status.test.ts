@@ -282,16 +282,17 @@ describe("engine tab", () => {
     assert.match(row(text, "on failure"), /fail open/);
     assert.match(text, /container backend unavailable/);
     assert.match(text, /persistent config/);
-    assert.match(text, /\(none — approval comments land here\)/);
+    assert.doesNotMatch(text, /Session approvals|Session guidance/, "session-scoped state lives on the session tab");
   });
 
-  it("shows session guidance and approved paths", () => {
+  it("shows session guidance and approved paths on the session tab", () => {
     const state = createRuntimeState();
     state.classifier.sessionGuidance = ["User allowed bash (npm run deploy) with comment: staging deploys are fine"];
     state.approvals.write.push("/tmp/out");
-    const text = tab(state, testConfig(), "engine");
+    const text = tab(state, testConfig(), "session");
     assert.match(text, /staging deploys are fine/);
     assert.match(row(text, "write paths"), /write paths\s+\/tmp\/out/);
+    assert.match(tab(createRuntimeState(), testConfig(), "session"), /\(none — \/rail guide and approval comments land here\)/);
   });
 });
 
@@ -330,16 +331,16 @@ describe("policy tab", () => {
     assert.match(tab(createRuntimeState(), config, "policy"), /disabled \(lists still route classifier exemptions\)/);
   });
 
-  it("annotates provenance per entry, leaving built-in defaults blank", () => {
+  it("annotates provenance per entry, marking built-in defaults with a muted default", () => {
     const projectPath = path.join("/repo", CONFIG_DIR_NAME, "rail.json");
     const afterGlobal = mergeConfig(testConfig(), { filesystem: { denyRead: ["/secret/global"] } }, globalRailConfigPath());
     const config = mergeConfig(afterGlobal, { environment: { allow: ["PATH", "HOME"] } }, projectPath);
     const text = tab(createRuntimeState(), config, "policy");
-    assert.match(text, /an empty source is a built-in default/);
+    assert.match(text, /source: default is built in/);
     assert.match(row(text, "/secret/global"), /\/secret\/global\s+global$/);
     assert.match(row(text, "PATH"), /PATH\s+project$/);
     assert.match(row(text, "HOME"), /HOME\s+project$/);
-    assert.doesNotMatch(text, /\bdefault\b\s*$/m, "default entries stay unmarked");
+    assert.match(row(text, "~/.ssh"), /~\/\.ssh\s+default$/, "built-in entries say default explicitly");
   });
 
   it("no longer reports legacy classifier rule tiers", () => {
