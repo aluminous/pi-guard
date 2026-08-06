@@ -98,6 +98,127 @@ describe("mergeConfig", () => {
   });
 });
 
+// Every list takes the same two forms, so these exercise the shared chokepoint
+// through one representative list each rather than repeating nine times.
+describe("config list replace/extend", () => {
+  it("treats {replace: true} exactly like the bare array it is spelled out as", () => {
+    const bare = mergeConfig(testConfig(), { filesystem: { denyRead: ["/only/this"] } }, "test.json");
+    const explicit = mergeConfig(testConfig(), { filesystem: { denyRead: { replace: true, values: ["/only/this"] } } }, "test.json");
+    assert.deepEqual(explicit.filesystem.denyRead, bare.filesystem.denyRead);
+    assert.deepEqual(explicit.provenance.lists["filesystem.denyRead"], bare.provenance.lists["filesystem.denyRead"]);
+  });
+
+  it("appends to the inherited list under {replace: false}, inherited entries first", () => {
+    const merged = mergeConfig(testConfig(), { filesystem: { denyRead: { replace: false, values: ["/extra/secret"] } } }, "test.json");
+    assert.deepEqual(merged.filesystem.denyRead, [...DEFAULT_CONFIG.filesystem.denyRead, "/extra/secret"]);
+  });
+
+  it("extends every list, not just the filesystem ones", () => {
+    const merged = mergeConfig(
+      testConfig(),
+      {
+        filesystem: { allowWrite: { replace: false, values: ["~/scratch"] }, denyWrite: { replace: false, values: ["~/.terraform.d"] } },
+        environment: { allow: { replace: false, values: ["MY_VAR"] }, unset: { replace: false, values: ["MY_SECRET"] } },
+        network: { allowedDomains: { replace: false, values: ["registry.npmjs.org"] } },
+        commands: { allow: { replace: false, values: ["shellcheck *"] } },
+      },
+      "test.json",
+    );
+    assert.deepEqual(merged.filesystem.allowWrite, [...DEFAULT_CONFIG.filesystem.allowWrite, "~/scratch"]);
+    assert.deepEqual(merged.filesystem.denyWrite, [...DEFAULT_CONFIG.filesystem.denyWrite, "~/.terraform.d"]);
+    assert.deepEqual(merged.environment.allow, [...DEFAULT_CONFIG.environment.allow, "MY_VAR"]);
+    assert.deepEqual(merged.environment.unset, [...DEFAULT_CONFIG.environment.unset, "MY_SECRET"]);
+    assert.deepEqual(merged.network.allowedDomains, [...DEFAULT_CONFIG.network.allowedDomains, "registry.npmjs.org"]);
+    assert.deepEqual(merged.commands.allow, [...DEFAULT_CONFIG.commands.allow, "shellcheck *"]);
+  });
+
+  it("drops duplicates instead of repeating an entry the inherited list already has", () => {
+    const merged = mergeConfig(testConfig(), { filesystem: { denyRead: { replace: false, values: ["~/.ssh", "/extra", "/extra"] } } }, "test.json");
+    assert.deepEqual(merged.filesystem.denyRead, [...DEFAULT_CONFIG.filesystem.denyRead, "/extra"]);
+  });
+
+  it("extends an empty list into just its own values", () => {
+    const merged = mergeConfig(testConfig(), { filesystem: { allowRead: { replace: false, values: ["~/reference"] } } }, "test.json");
+    assert.deepEqual(merged.filesystem.allowRead, ["~/reference"]);
+  });
+
+  describe("provenance", () => {
+    it("labels only the added entries, leaving inherited sources intact", () => {
+      const merged = mergeConfig(testConfig(), { filesystem: { denyRead: { replace: false, values: ["/extra/secret"] } } }, "global.json");
+      const sources = merged.provenance.lists["filesystem.denyRead"];
+      assert.equal(sources["/extra/secret"], "global.json");
+      assert.equal(sources["~/.ssh"], "default", "an inherited entry keeps the source that introduced it");
+    });
+
+    it("credits the layer that introduced an entry, not the one that restates it", () => {
+      const afterGlobal = mergeConfig(testConfig(), { commands: { allow: { replace: false, values: ["cargo *"] } } }, "global.json");
+      const afterProject = mergeConfig(afterGlobal, { commands: { allow: { replace: false, values: ["cargo *", "just *"] } } }, "project.json");
+      const sources = afterProject.provenance.lists["commands.allow"];
+      assert.equal(sources["cargo *"], "global.json");
+      assert.equal(sources["just *"], "project.json");
+    });
+  });
+
+  describe("three layers", () => {
+    it("accumulates through extend on extend", () => {
+      const afterGlobal = mergeConfig(testConfig(), { network: { allowedDomains: { replace: false, values: ["global.example"] } } }, "global.json");
+      const afterProject = mergeConfig(afterGlobal, { network: { allowedDomains: { replace: false, values: ["project.example"] } } }, "project.json");
+      assert.deepEqual(afterProject.network.allowedDomains, [...DEFAULT_CONFIG.network.allowedDomains, "global.example", "project.example"]);
+      const sources = afterProject.provenance.lists["network.allowedDomains"];
+      assert.equal(sources["github.com"], "default");
+      assert.equal(sources["global.example"], "global.json");
+      assert.equal(sources["project.example"], "project.json");
+    });
+
+    it("discards both earlier layers when the last one replaces", () => {
+      const afterGlobal = mergeConfig(testConfig(), { network: { allowedDomains: { replace: false, values: ["global.example"] } } }, "global.json");
+      const afterProject = mergeConfig(afterGlobal, { network: { allowedDomains: ["project.example"] } }, "project.json");
+      assert.deepEqual(afterProject.network.allowedDomains, ["project.example"]);
+      assert.deepEqual(afterProject.provenance.lists["network.allowedDomains"], { "project.example": "project.json" });
+    });
+
+    it("extends whatever the previous layer replaced with, not the defaults", () => {
+      const afterGlobal = mergeConfig(testConfig(), { network: { allowedDomains: ["global.example"] } }, "global.json");
+      const afterProject = mergeConfig(afterGlobal, { network: { allowedDomains: { replace: false, values: ["project.example"] } } }, "project.json");
+      assert.deepEqual(afterProject.network.allowedDomains, ["global.example", "project.example"]);
+      assert.deepEqual(afterProject.provenance.lists["network.allowedDomains"], {
+        "global.example": "global.json",
+        "project.example": "project.json",
+      });
+    });
+  });
+
+  describe("malformed forms leave the list exactly as it was", () => {
+    const cases: Array<{ name: string; value: unknown; diagnostic: string }> = [
+      { name: "missing values", value: { replace: false }, diagnostic: `"values" is required` },
+      { name: "non-boolean replace", value: { replace: "false", values: ["/x"] }, diagnostic: `"replace" must be true or false` },
+      { name: "absent replace", value: { values: ["/x"] }, diagnostic: `"replace" must be true or false` },
+      { name: "unknown key", value: { replace: false, values: ["/x"], merge: true }, diagnostic: "unexpected key merge" },
+      { name: "non-string values", value: { replace: false, values: [7] }, diagnostic: "expected an array of strings" },
+      { name: "a bare string", value: "everything", diagnostic: "expected an array of strings" },
+    ];
+
+    for (const { name, value, diagnostic } of cases) {
+      it(name, () => {
+        const merged = mergeConfig(testConfig(), { filesystem: { denyRead: value as never } }, "test.json");
+        assert.deepEqual(merged.filesystem.denyRead, DEFAULT_CONFIG.filesystem.denyRead);
+        assert.deepEqual(merged.provenance.lists["filesystem.denyRead"], DEFAULT_CONFIG.provenance.lists["filesystem.denyRead"]);
+        assert.ok(
+          merged.diagnostics.some((entry) => entry.includes("test.json.filesystem.denyRead") && entry.includes(diagnostic)),
+          `expected a diagnostic naming the list and ${diagnostic}; got ${JSON.stringify(merged.diagnostics)}`,
+        );
+      });
+    }
+
+    it("leaves an earlier layer's extension standing", () => {
+      const afterGlobal = mergeConfig(testConfig(), { commands: { allow: { replace: false, values: ["cargo *"] } } }, "global.json");
+      const afterProject = mergeConfig(afterGlobal, { commands: { allow: { replace: false } as never } }, "project.json");
+      assert.deepEqual(afterProject.commands.allow, afterGlobal.commands.allow);
+      assert.equal(afterProject.provenance.lists["commands.allow"]["cargo *"], "global.json");
+    });
+  });
+});
+
 describe("config provenance", () => {
   it("seeds every default list entry with source \"default\"", () => {
     const config = testConfig();
@@ -327,6 +448,27 @@ describe("rail.json / legacy guard.json resolution", () => {
       assert.equal(globalRailConfigPath(), path.join(globalDir, "guard.json"));
       writeJson(globalDir, "rail.json", {});
       assert.equal(globalRailConfigPath(), path.join(globalDir, "rail.json"));
+    });
+  });
+
+  // The list forms have to survive the JSON round trip, not just mergeConfig:
+  // defaults → global → project is the layering users actually get.
+  it("carries extend and replace through the real three-layer load", () => {
+    withLayers(({ globalDir, projectDir, load }) => {
+      writeJson(globalDir, "rail.json", {
+        commands: { allow: { replace: false, values: ["cargo *"] } },
+        network: { allowedDomains: { replace: false, values: ["global.example"] } },
+      });
+      writeJson(projectDir, "rail.json", {
+        commands: { allow: { replace: false, values: ["just *"] } },
+        network: { allowedDomains: ["project.example"] },
+      });
+      const config = load();
+      assert.deepEqual(config.commands.allow, [...DEFAULT_CONFIG.commands.allow, "cargo *", "just *"]);
+      assert.deepEqual(config.network.allowedDomains, ["project.example"]);
+      assert.equal(config.provenance.lists["commands.allow"]["cargo *"], path.join(globalDir, "rail.json"));
+      assert.equal(config.provenance.lists["commands.allow"]["just *"], path.join(projectDir, "rail.json"));
+      assert.deepEqual(config.provenance.lists["network.allowedDomains"], { "project.example": path.join(projectDir, "rail.json") });
     });
   });
 });

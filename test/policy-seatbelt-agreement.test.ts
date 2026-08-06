@@ -173,6 +173,18 @@ describe("keychain reads", () => {
     const config = mergeConfig(testConfig(), { filesystem: { denyRead: ["~/.ssh"] } }, "/tmp/rail.json");
     assert.ok(runtimeAllowRead(config).includes(keychainDir));
   });
+
+  it("still re-allows when a config file only extends denyRead", () => {
+    // The default keychain entry survives an extension with its "default"
+    // provenance, which is what keeps the read-back applicable.
+    const config = mergeConfig(testConfig(), { filesystem: { denyRead: { replace: false, values: ["~/.terraform.d"] } } }, "/tmp/rail.json");
+    assert.ok(runtimeAllowRead(config).includes(keychainDir));
+  });
+
+  it("stands down when an extension adds the keychain deny itself", () => {
+    const config = mergeConfig(testConfig(), { filesystem: { denyRead: { replace: false, values: [keychainDir] } } }, "/tmp/rail.json");
+    assert.ok(!runtimeAllowRead(config).includes(keychainDir));
+  });
 });
 
 describe("compiled filesystem policy invariants", () => {

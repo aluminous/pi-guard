@@ -55,28 +55,45 @@ export interface CapabilitiesConfig {
   definitions?: Record<string, string>;
 }
 
+/**
+ * The object form of a config list, for layers that want to add to the
+ * inherited list rather than restate it. `replace: true` is exactly the bare
+ * array; `replace: false` appends `values` to whatever the layer inherited.
+ */
+export interface ConfigListOverride {
+  replace: boolean;
+  values: string[];
+}
+
+/**
+ * One list in a config file. A bare array replaces the inherited list wholesale
+ * — the original meaning, and still what an array means — so every config
+ * written before the object form existed keeps working unchanged.
+ */
+export type ConfigList = string[] | ConfigListOverride;
+
 export interface RailConfig {
   enabled?: boolean;
   backend?: RailBackendName;
   statusLine?: StatusLineMode;
   filesystem?: {
     enabled?: boolean;
-    allowRead?: string[];
-    denyRead?: string[];
-    allowWrite?: string[];
-    denyWrite?: string[];
+    allowRead?: ConfigList;
+    denyRead?: ConfigList;
+    allowWrite?: ConfigList;
+    denyWrite?: ConfigList;
   };
   environment?: {
-    allow?: string[];
-    unset?: string[];
+    allow?: ConfigList;
+    unset?: ConfigList;
   };
   network?: {
     enabled?: boolean;
-    allowedDomains?: string[];
-    deniedDomains?: string[];
+    allowedDomains?: ConfigList;
+    deniedDomains?: ConfigList;
   };
   commands?: {
-    allow?: string[];
+    allow?: ConfigList;
   };
   /** Capability disposition table: class id → allow | judge | ask | deny. Omitted classes keep their default. */
   dispositions?: Record<string, string>;
@@ -100,7 +117,7 @@ export type ProvenanceListKey =
 
 /** Where each effective config value came from ("default" or a config file path); last writer wins. */
 export interface ConfigProvenance {
-  /** Entry text → source, per wholesale-replaced list. */
+  /** Entry text → source, per list. An extended list carries one source per entry. */
   lists: Record<ProvenanceListKey, Record<string, string>>;
   /** Capability class id → source; "default" until a config file sets the row. */
   dispositions: Record<CapabilityId, string>;
@@ -334,6 +351,41 @@ function asStringArray(value: unknown, name: string, diagnostics: string[]): str
   return value;
 }
 
+const LIST_SHAPE = `expected an array of strings, or {"replace": true|false, "values": [...]}`;
+
+/**
+ * Reads one config list in either form and says what the layer meant by it.
+ * Returning undefined means "leave the inherited list alone" — for an absent
+ * key, and equally for a malformed one, since a list is policy and a half-read
+ * one is worse than the one already in force.
+ */
+function readConfigList(value: unknown, name: string, diagnostics: string[]): ConfigListOverride | undefined {
+  if (value === undefined) return undefined;
+  if (Array.isArray(value)) {
+    const values = asStringArray(value, name, diagnostics);
+    return values === undefined ? undefined : { replace: true, values };
+  }
+  if (!isObject(value)) {
+    diagnostics.push(`Ignoring ${name}: ${LIST_SHAPE}`);
+    return undefined;
+  }
+  const unknownKeys = Object.keys(value).filter((key) => key !== "replace" && key !== "values");
+  if (unknownKeys.length > 0) {
+    diagnostics.push(`Ignoring ${name}: unexpected key${unknownKeys.length > 1 ? "s" : ""} ${unknownKeys.join(", ")} — ${LIST_SHAPE}`);
+    return undefined;
+  }
+  if (typeof value.replace !== "boolean") {
+    diagnostics.push(`Ignoring ${name}: "replace" must be true or false`);
+    return undefined;
+  }
+  if (value.values === undefined) {
+    diagnostics.push(`Ignoring ${name}: "values" is required`);
+    return undefined;
+  }
+  const values = asStringArray(value.values, `${name}.values`, diagnostics);
+  return values === undefined ? undefined : { replace: value.replace, values };
+}
+
 function readJson(filePath: string, diagnostics: string[]): Partial<RailConfig> | undefined {
   if (!existsSync(filePath)) return undefined;
   try {
@@ -449,11 +501,28 @@ export function mergeConfig(base: ResolvedRailConfig, override: Partial<RailConf
     provenance: structuredClone(base.provenance),
   };
 
-  /** Applies a wholesale list replacement and re-labels every entry's provenance with this source. */
-  const setList = (listKey: ProvenanceListKey, incoming: string[] | undefined, current: string[]): string[] => {
+  /**
+   * Applies one list from this layer. A replacement re-labels every entry's
+   * provenance with this source; an extension appends the entries the
+   * inherited list does not already have and labels only those, so an entry
+   * this layer restates still reads as coming from the layer that introduced
+   * it.
+   */
+  const setList = (listKey: ProvenanceListKey, raw: unknown, name: string, current: string[]): string[] => {
+    const incoming = readConfigList(raw, name, diagnostics);
     if (!incoming) return current;
-    next.provenance.lists[listKey] = listProvenance(incoming, source);
-    return incoming;
+    if (incoming.replace) {
+      next.provenance.lists[listKey] = listProvenance(incoming.values, source);
+      return incoming.values;
+    }
+    const merged = [...current];
+    const sources = next.provenance.lists[listKey];
+    for (const value of incoming.values) {
+      if (merged.includes(value)) continue;
+      merged.push(value);
+      sources[value] = source;
+    }
+    return merged;
   };
 
   if (typeof override.enabled === "boolean") next.enabled = override.enabled;
@@ -467,25 +536,25 @@ export function mergeConfig(base: ResolvedRailConfig, override: Partial<RailConf
 
   if (isObject(override.filesystem)) {
     if (typeof override.filesystem.enabled === "boolean") next.filesystem.enabled = override.filesystem.enabled;
-    next.filesystem.allowRead = setList("filesystem.allowRead", asStringArray(override.filesystem.allowRead, `${source}.filesystem.allowRead`, diagnostics), next.filesystem.allowRead);
-    next.filesystem.denyRead = setList("filesystem.denyRead", asStringArray(override.filesystem.denyRead, `${source}.filesystem.denyRead`, diagnostics), next.filesystem.denyRead);
-    next.filesystem.allowWrite = setList("filesystem.allowWrite", asStringArray(override.filesystem.allowWrite, `${source}.filesystem.allowWrite`, diagnostics), next.filesystem.allowWrite);
-    next.filesystem.denyWrite = setList("filesystem.denyWrite", asStringArray(override.filesystem.denyWrite, `${source}.filesystem.denyWrite`, diagnostics), next.filesystem.denyWrite);
+    next.filesystem.allowRead = setList("filesystem.allowRead", override.filesystem.allowRead, `${source}.filesystem.allowRead`, next.filesystem.allowRead);
+    next.filesystem.denyRead = setList("filesystem.denyRead", override.filesystem.denyRead, `${source}.filesystem.denyRead`, next.filesystem.denyRead);
+    next.filesystem.allowWrite = setList("filesystem.allowWrite", override.filesystem.allowWrite, `${source}.filesystem.allowWrite`, next.filesystem.allowWrite);
+    next.filesystem.denyWrite = setList("filesystem.denyWrite", override.filesystem.denyWrite, `${source}.filesystem.denyWrite`, next.filesystem.denyWrite);
   }
 
   if (isObject(override.environment)) {
-    next.environment.allow = setList("environment.allow", asStringArray(override.environment.allow, `${source}.environment.allow`, diagnostics), next.environment.allow);
-    next.environment.unset = setList("environment.unset", asStringArray(override.environment.unset, `${source}.environment.unset`, diagnostics), next.environment.unset);
+    next.environment.allow = setList("environment.allow", override.environment.allow, `${source}.environment.allow`, next.environment.allow);
+    next.environment.unset = setList("environment.unset", override.environment.unset, `${source}.environment.unset`, next.environment.unset);
   }
 
   if (isObject(override.network)) {
     if (typeof override.network.enabled === "boolean") next.network.enabled = override.network.enabled;
-    next.network.allowedDomains = setList("network.allowedDomains", asStringArray(override.network.allowedDomains, `${source}.network.allowedDomains`, diagnostics), next.network.allowedDomains);
-    next.network.deniedDomains = setList("network.deniedDomains", asStringArray(override.network.deniedDomains, `${source}.network.deniedDomains`, diagnostics), next.network.deniedDomains);
+    next.network.allowedDomains = setList("network.allowedDomains", override.network.allowedDomains, `${source}.network.allowedDomains`, next.network.allowedDomains);
+    next.network.deniedDomains = setList("network.deniedDomains", override.network.deniedDomains, `${source}.network.deniedDomains`, next.network.deniedDomains);
   }
 
   if (isObject(override.commands)) {
-    next.commands.allow = setList("commands.allow", asStringArray(override.commands.allow, `${source}.commands.allow`, diagnostics), next.commands.allow);
+    next.commands.allow = setList("commands.allow", override.commands.allow, `${source}.commands.allow`, next.commands.allow);
   }
 
   // Taxonomy before table: a config may define a custom class and set its
