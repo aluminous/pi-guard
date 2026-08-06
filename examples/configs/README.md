@@ -4,7 +4,19 @@ Copy one of these files to `~/.pi/agent/extensions/rail.json` for a global
 profile or to `.pi/rail.json` in a trusted project.
 
 Configuration is layered over Pi Rail's defaults. Omitted fields retain their
-default values; arrays are replaced wholesale when present.
+default values; an array replaces the inherited list wholesale, and the object
+form `{"replace": false, "values": [...]}` adds to it instead (see "Replacing
+or extending a list" in the main README).
+
+Every list in these profiles is written as an array, so each one states its
+whole policy rather than inheriting part of it — which is what you want from a
+profile you copy wholesale. Two would read more clearly as extensions in a
+config of your own: `offline-restricted.json` restates the entire default
+`denyWrite` list to add `.git` to it, and `network-allowlist.json` restates the
+GitHub domains to add `registry.npmjs.org`. Written as extensions those would
+be one entry each — but `network-allowlist.json` would then also inherit the
+container-registry defaults it deliberately drops, so both are left as arrays
+here.
 
 - `classifier-focused.json` disables filesystem and network restrictions and
   environment scrubbing, leaving tool actions to classifier review and command

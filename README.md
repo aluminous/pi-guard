@@ -207,6 +207,45 @@ Ready-to-copy profiles are available under [`examples/configs`](examples/configs
 Config files are layered over the built-in defaults, so omitted arrays retain
 their defaults rather than becoming empty.
 
+### Replacing or extending a list
+
+An array in a config file **replaces** the inherited list wholesale. That is
+what an array has always meant and still means, so no existing config changes
+behaviour. To add to the inherited list instead of restating it, give the list
+as an object:
+
+```json
+{
+  "commands": { "allow": { "replace": false, "values": ["cargo *", "just *"] } },
+  "network": { "allowedDomains": { "replace": false, "values": ["crates.io", "static.crates.io"] } }
+}
+```
+
+- `{"replace": false, "values": [...]}` appends `values` to the inherited list.
+  Entries already inherited are not repeated, and the result keeps the
+  inherited entries first, in order, followed by the new ones.
+- `{"replace": true, "values": [...]}` is identical to the bare array — useful
+  when you want the intent spelled out next to a neighbouring extension.
+- Both keys are required, `replace` must be a boolean, and no other key is
+  accepted. A malformed list is reported as a diagnostic and **left exactly as
+  inherited** — a list is policy, and a half-read one is worse than the one
+  already in force.
+
+Every list takes both forms: `filesystem.allowRead`, `filesystem.denyRead`,
+`filesystem.allowWrite`, `filesystem.denyWrite`, `environment.allow`,
+`environment.unset`, `network.allowedDomains`, `network.deniedDomains`, and
+`commands.allow`.
+
+Layering works the same way at every level: the global config extends the
+defaults, and the project config extends whatever the global config left. An
+extension over an earlier extension accumulates; an array at any layer drops
+everything under it and starts from its own values.
+
+`/rail policy rules` annotates each entry with the config that contributed it,
+so an extended list shows a mix of unmarked defaults and `[global]`/`[project]`
+additions. An entry that a later layer restates keeps the source of the layer
+that introduced it.
+
 ## Capability mode
 
 The whole decision policy is one table of **capability dispositions**. Every
