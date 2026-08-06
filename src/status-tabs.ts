@@ -11,7 +11,7 @@
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import type { EffectivePolicy } from "./backends/types.ts";
 import { capabilityRegistry, getEffectiveDisposition, usedCapabilityStats, type CapabilityStats } from "./capabilities.ts";
-import { classifierEnabled } from "./classifier.ts";
+import { classifierEnabled, judgeModelSpec } from "./classifier.ts";
 import { configSourceLabel, type ProvenanceListKey, type ResolvedRailConfig } from "./config.ts";
 import { getPersistentConfigPath } from "./persistent-settings.ts";
 import { resolveConfigPath } from "./policy.ts";
@@ -385,7 +385,7 @@ function judgeTab(view: StatusView): string[] {
       rowNote: (_row, index) => judgements[index]?.reason,
     }),
     "",
-    ...note(theme, width, `judge model: ${config.classifier.judgeModel}${judgements[0]?.model ? ` (last call ${judgements[0].model})` : ""}`),
+    ...note(theme, width, `judge model: ${judgeModelSpec(config, state.classifier)}${judgements[0]?.model ? ` (last call ${judgements[0].model})` : ""}`),
     ...note(theme, width, "classes set to judge delegate one action at a time; a judge failure degrades to ask"),
   ];
 }
@@ -426,7 +426,7 @@ function engineTab(view: StatusView): string[] {
   const reviewerRows: string[][] = [
     ["namer", `${classifierEnabled(config, state.classifier) ? "enabled" : "disabled"} · ${view.classifierLabel}`],
     ["namer model setting", state.classifier.modelOverride ? `${state.classifier.modelOverride} (this session)` : config.classifier.model],
-    ["judge model setting", config.classifier.judgeModel],
+    ["judge model setting", state.classifier.judgeModelOverride ? `${state.classifier.judgeModelOverride} (this session)` : config.classifier.judgeModel],
     ["on failure", config.classifier.failClosed ? "fail closed (stop the turn)" : "fail open (warn and continue)"],
     ["timeout", `${config.classifier.timeoutMs}ms per attempt`],
     ["telemetry", config.classifier.telemetry],
