@@ -196,7 +196,7 @@ export function createRailCommand(deps: RailCommandDeps) {
     }
     items.push(
       { value: "readonly", label: `Read-only mode: ${state.readOnly ? "on" : "off"}`, searchText: "readonly read only ro toggle mode", description: "Block write/edit and restrict bash to read-only commands" },
-      { value: "model", label: "Namer model…", searchText: "model namer classifier auto choose select", description: "Pick auto, the current model, a specific model, or turn review off" },
+      { value: "model", label: "Reviewer models…", searchText: "model namer judge classifier auto choose select", description: "Pick the namer and judge models (Tab switches; namer supports auto/off)" },
       { value: "statusline", label: "Statusline visibility…", searchText: "statusline status line visibility always never auto hide show", description: "Show the rail statusline always, never, or only when notable" },
       { value: "smoke", label: "Run smoke tests", searchText: "smoke test verify sandbox namer classifier", description: "Verify sandboxed execution and capability naming end to end" },
       { value: "critique", label: "Critique capabilities", searchText: "critique capabilities classes screen rules review improve", description: "Have Pi's current model review the class definitions, table, and screen" },
