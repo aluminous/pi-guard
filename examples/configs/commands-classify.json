@@ -1,0 +1,40 @@
+{
+  "enabled": true,
+  "backend": "seatbelt",
+  "filesystem": {
+    "enabled": true
+  },
+  "network": {
+    "enabled": true
+  },
+  "classifier": {
+    "enabled": true,
+    "model": "auto",
+    "failClosed": true
+  },
+  "capabilities": {
+    "classes": [
+      {
+        "id": "k8s-ops",
+        "name": "Cluster operations",
+        "definition": "Any kubectl or helm action against a Kubernetes cluster, read or write, whichever context is current.",
+        "disposition": "ask"
+      },
+      {
+        "id": "infra-plan",
+        "name": "Infrastructure plan",
+        "definition": "Read-only infrastructure-as-code inspection: rendering a plan or diff without applying it.",
+        "disposition": "allow"
+      }
+    ]
+  },
+  "commands": {
+    "classify": [
+      { "template": "kubectl *", "capability": "k8s-ops" },
+      { "template": "helm *", "capability": "k8s-ops" },
+      { "template": "terraform plan *", "capability": "infra-plan" },
+      { "template": "terraform show *", "capability": "infra-plan" },
+      { "template": "terraform apply *", "capability": "off-machine-effects" }
+    ]
+  }
+}

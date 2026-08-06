@@ -40,6 +40,12 @@ here.
   table, but allows ordinary local coding work and denies a concrete set of
   dangerous classes: credentials, local destruction, persistence, system
   modification, and off-machine effects.
+- `commands-classify.json` keeps the default restrictions and adds two custom
+  capability classes plus `commands.classify` rules that route `kubectl`,
+  `helm`, and `terraform` into them deterministically — no naming call, and no
+  waiting for a model to happen to use the class you defined. `terraform apply`
+  is mapped to the built-in `off-machine-effects` rather than to a custom
+  class, which shows the same list re-pointing a command at a stricter built-in.
 
 `network.enabled` means “enforce network restrictions.” With it set to `false`,
 networking is unrestricted. To deny all networking, set it to `true` with an

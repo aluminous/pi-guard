@@ -234,8 +234,9 @@ as an object:
 
 Every list takes both forms: `filesystem.allowRead`, `filesystem.denyRead`,
 `filesystem.allowWrite`, `filesystem.denyWrite`, `environment.allow`,
-`environment.unset`, `network.allowedDomains`, `network.deniedDomains`, and
-`commands.allow`.
+`environment.unset`, `network.allowedDomains`, `network.deniedDomains`,
+`commands.allow`, and `commands.classify` — whose entries are objects rather
+than strings, so its `values` holds objects too.
 
 Layering works the same way at every level: the global config extends the
 defaults, and the project config extends whatever the global config left. An
@@ -396,9 +397,10 @@ deterministic mappers ──▶ content screen ──▶ namer (one cheap call)
 
 - **Deterministic mappers** are caches of an obvious label, not of a verdict:
   in-cwd reads → `read-project`, allowlisted commands → their template's tag,
-  `denyRead` matches → `credentials`, out-of-roots writes → `modify-system`.
-  Because they cache a *label*, flipping a disposition row retunes the fast
-  path too.
+  commands matching a [`commands.classify`](#user-command-classification) rule
+  → the class you mapped them to, `denyRead` matches → `credentials`,
+  out-of-roots writes → `modify-system`. Because they cache a *label*, flipping
+  a disposition row retunes the fast path too.
 - **The content screen** (`src/content-screen.ts`) routes writes and edits
   deterministically: authorization/consent lexicon, phrasing aimed at future
   automated reviewers, persistence surfaces by path (manifests, git hooks,
@@ -476,6 +478,85 @@ command goes to the namer.
   }
 }
 ```
+
+### User command classification
+
+`commands.classify` maps command templates to capability classes of your
+choosing — including [custom classes](#custom-capability-classes). Where
+`commands.allow` says "this template is read-only inspection", classify says
+"this template is *that* class", which is how a custom class becomes reachable
+deterministically instead of only when a model happens to name it.
+
+```json
+{
+  "capabilities": {
+    "classes": [
+      {
+        "id": "k8s-ops",
+        "name": "Cluster operations",
+        "definition": "Any kubectl or helm action against a cluster, read or write.",
+        "disposition": "ask"
+      }
+    ]
+  },
+  "commands": {
+    "classify": [
+      { "template": "kubectl *", "capability": "k8s-ops" },
+      { "template": "helm *", "capability": "k8s-ops" },
+      { "template": "terraform plan *", "capability": "read-system" }
+    ]
+  }
+}
+```
+
+The template grammar is the allowlist's, matched by the same shell parser with
+the same conservatism: words plus an optional trailing `*`, heads compared
+verbatim, and a chain classified only when *every* segment matches some rule —
+expansions, redirects, subshells, and background jobs make a segment
+unmatchable no matter which list a rule would have come from. The union of the
+matched capabilities across segments is the action's label set, exactly as it
+is for allowlisted commands.
+
+**Precedence.** Your classify rules are consulted before the built-in
+allowlist, so a template the allowlist already tags can be re-classified —
+`{"template": "git log *", "capability": "off-machine-effects"}` overrides the
+built-in `read-project` tag. The reverse order would be useless: every
+allowlist template resolves to `allow`, so an allowlist-first lookup could
+never be tightened by a classify rule. Within the list the first matching rule
+wins, so put `kubectl get *` above `kubectl *` if you want the narrower one.
+
+**The safety asymmetry.** When every segment matches and the labels resolve to
+`ask`, `judge`, or `deny`, the rail acts on that directly and never calls the
+namer: those are the tightening and user-involving directions, nothing runs
+that the table would not have permitted, and a `judge` class still gets its
+full curated review — only the namer's labelling step is replaced by your own.
+When the labels resolve to `allow`, the allowlist's original precondition still
+applies unchanged: the deterministic allow holds only while the Seatbelt
+sandbox is actually enforcing, and otherwise the command falls through to the
+namer as it does today. A command with *any* unmatched segment falls through
+entirely — the matched segments' labels are deliberately not passed on as
+hints, so `kubectl get pods && helm upgrade api` is reviewed as the whole thing
+rather than arriving pre-labelled with the harmless half.
+
+Classification is labelling, not permission. The labels go through the same
+disposition table and the same severity-max as any others, so read-only mode's
+preset still denies a command you classified into a writing class, and a class
+you set to `deny` denies whether the label came from a rule or from a model.
+
+Both list forms work; the `values` of the object form holds objects. Each entry
+must be `{"template": …, "capability": …}` and nothing else. The capability
+must be a class the rail knows *at config load*: a built-in, or one declared in
+`capabilities.classes` (the same file may declare it — the taxonomy is merged
+before the rules that reference it). Classes added later with `/rail policy`
+live only in that session and cannot be referenced from config. An entry naming
+an unknown class, or carrying an unusable template — an empty one, a bare `*`,
+or a `*` that is not the last word — is reported as a diagnostic and skipped,
+leaving the other rules in force.
+
+`/rail policy rules` lists the rules with their class and provenance, `/rail
+explain` shows a `commands.classify` stage naming the rule each segment
+matched, and `/rail test kubectl apply -f x.yaml` dry-runs one command through
+the whole chain.
 
 The default namer model is `"auto"`: Pi Rail picks the best available
 model from a known-good list (see `src/classifier-models.ts`), preferring
