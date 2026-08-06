@@ -85,9 +85,9 @@ Flags:
 Commands — everything lives under `/rail`, with argument autocomplete:
 
 - `/rail`: open the control panel (searchable actions with a live status header; a plain select dialog over RPC).
-- `/rail status`: toggle the live status view — a bordered panel docked where the editor sits (like the model chooser), updating while the agent streams above it (decisions, approvals, session guidance). Esc closes it, arrows/page keys scroll. Over RPC it toggles a live widget.
-- `/rail policy`: open the **capability policy page** — a two-tab panel whose first tab is the editable capability table with live per-class stats (see [Dispositions](#dispositions)). Over RPC it degrades to select dialogs; invoking the tab you are already on closes it.
-- `/rail policy rules`: open the same page on its **rules** tab — the resolved mechanism policy (filesystem, network, environment scrubbing, and the command allowlist, provenance-annotated). **Tab** cycles between the two tabs; invoking the other tab while the panel is open switches rather than closing. Outside the TUI this stays a standalone live widget, as before.
+- `/rail status`: toggle the live **status page** — a bordered panel docked where the editor sits (like the model chooser), updating while the agent streams above it. Six tabs, each a set of tables: **session** (decision counters, per-class capability stats, recent events, errors by kind), **models** (per-model, per-role tokens, dollars, and latency), **namer** (recent classifications), **judge** (recent escalation verdicts and their reasons), **engine** (backend, restriction layers, reviewer settings, approvals, guidance), and **policy** (the resolved mechanism rules). **Tab** cycles tabs, arrows/page keys scroll the active one, Esc closes. Over RPC it toggles a live widget carrying every tab in sequence.
+- `/rail policy`: open the **capability policy page** — the editable capability table with live per-class stats (see [Dispositions](#dispositions)). Over RPC it degrades to select dialogs; invoking it again closes it.
+- `/rail policy rules`: open the status page on its **policy** tab — the resolved mechanism policy (filesystem, network, environment scrubbing, and the command allowlist, provenance-annotated per entry). Invoking another tab while the page is open switches rather than closing. Outside the TUI this stays a standalone live widget, as before.
 - `/rail set <class> [allow|judge|ask|deny]`: set one class for this session from the command line (completions offer class ids — including custom ones — then dispositions). Without a disposition it prints the current effective value and where it came from.
 - `/rail guide <text>`: add classifier guidance for this session without waiting to be asked (see [Session guidance](#session-guidance)). Bare `/rail guide` prompts for the text; `/rail guide clear` drops every entry.
 - `/rail on`: enable Pi Rail.
@@ -380,8 +380,8 @@ an entry directly, without waiting to be asked:
 
 Entries share one ring with approval comments, capped at 12 (oldest drop out);
 the confirmation reports the position, `Guidance added for this session
-(3/12).` `/rail guide clear` empties it, and `/rail status` lists what is
-currently in force. Guidance is session-scoped and never persisted.
+(3/12).` `/rail guide clear` empties it, and the status page's engine
+tab lists what is currently in force. Guidance is session-scoped and never persisted.
 
 ### How an action gets named
 
@@ -562,7 +562,7 @@ notes injected into the namer and the judge for the rest of the session, so
 "allow — staging deploys are fine today" or "deny — never touch prod configs"
 tunes behavior without editing config files. Deny comments are echoed to the
 agent in the block reason so it can change course immediately. Guidance is
-session-scoped (last 12 entries) and shown in the status popup.
+session-scoped (last 12 entries) and shown on the status page's engine tab.
 
 The policy is ask-first throughout: `deny` is what you set for a class you
 never want, and the judge reserves deny for actions that stay unsafe even
@@ -585,10 +585,10 @@ authorization process.
   `/rail status` and `/rail policy rules` toggle live *widgets*
   (fire-and-forget `setWidget` requests keyed `rail-status`/`rail-policy`,
   refreshed on every rail event) — user-visible in any client that renders
-  widgets, and never part of agent context. The two-tab policy page is
-  TUI-only, so `/rail policy rules` stays a standalone widget here while
-  `/rail policy` (the table) degrades to select dialogs, class editing
-  included. Smoke and critique results arrive the same
+  widgets, and never part of agent context. Tabs are TUI-only, so the widget
+  carries every status tab in sequence under its own header, `/rail policy
+  rules` narrows it to the policy tab, and `/rail policy` (the table)
+  degrades to select dialogs, class editing included. Smoke and critique results arrive the same
   way, keyed `rail-report`.
 - **json / print modes** — truly headless: there is no one to ask. Ask
   decisions and out-of-roots path approvals become blocks whose reason states
@@ -688,12 +688,12 @@ npm run test:tui  # tmux-driven TUI integration test (skips without tmux + pi)
 Three seam modules own every run-mode branch; feature code never inspects
 `ctx.mode` to pick a presentation:
 
-- `src/live-view.ts` — display surfaces (status, policy rules, smoke/critique
+- `src/live-view.ts` — display surfaces (the status page, smoke/critique
   reports): docked panel in the TUI, `setWidget` over RPC, a stderr error
   headless. `showRailView` replaces any open view; `toggleRailView` adds
-  toggle semantics for the recurring views; `toggleRailPanel` hosts an
-  interactive panel (the disposition page) and returns false where custom
-  components do not exist, so the caller degrades.
+  toggle semantics for the recurring views; `toggleRailPanel` hosts a
+  component panel (the status page, the disposition page) and returns false
+  where custom components do not exist, so the caller degrades.
 - `src/approvals.ts` — response dialogs (approval prompts): a custom dialog
   with inline comment input in the TUI, `select`+`input` protocol dialogs
   over RPC. Callers gate on `ctx.hasUI` first because headless approval
@@ -703,6 +703,12 @@ Three seam modules own every run-mode branch; feature code never inspects
   statusline chooser): searchable list in the TUI, plain `select` dialog
   elsewhere; resolves `undefined` where no dialog capability exists, which
   callers already treat as cancel.
+
+The status page follows the same rule from the other direction: its six tabs
+are plain functions of `(state, config, width, theme)` in `src/status-tabs.ts`,
+built on the column-fitting helper in `src/tui/table.ts`, so the TUI panel
+(`src/tui/status-page.ts`) and the RPC widget render the same content — the
+widget just concatenates every tab and passes a no-op theme.
 
 The disposition page follows the same rule: `src/dispositions.ts` holds the
 row model (values, provenance, stats, class add/edit/delete, save) with no UI

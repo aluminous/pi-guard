@@ -4,9 +4,10 @@ import path from "node:path";
 import { after, describe, it } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { RailBackend } from "../src/backends/types.ts";
+import { capabilityStats } from "../src/capabilities.ts";
 import type { CompleteFn } from "../src/classifier.ts";
 import { interceptToolCall, stopTurnForClassifierFailure } from "../src/interceptor.ts";
-import { createRuntimeState } from "../src/state.ts";
+import { createRuntimeState, modelUsageRows } from "../src/state.ts";
 import type { RailErrorTelemetry } from "../src/telemetry.ts";
 import { makeFixtureDir, testConfig } from "./helpers.ts";
 
@@ -325,6 +326,83 @@ describe("classifier failure diagnostics", () => {
     const record = telemetry.map((entry) => entry.data as RailErrorTelemetry).find((data) => data.kind === "error");
     assert.equal(record?.failureKind, "invalid response");
     assert.equal(record?.model, MODEL);
+  });
+});
+
+describe("review accounting", () => {
+  const cwd = path.join(fixture.dir, "project");
+  const MODEL = "openrouter/anthropic/claude-haiku-4.5";
+  const bash = { toolName: "bash", input: { command: "cat ~/.ssh/id_rsa" } };
+
+  function reviewingCtx(answers: string[] = []): ExtensionContext {
+    const ctx = fakeCtx(cwd) as unknown as Record<string, any>;
+    ctx.modelRegistry.find = () => ({ provider: "openrouter", id: "anthropic/claude-haiku-4.5" });
+    ctx.modelRegistry.getApiKeyAndHeaders = async () => ({ ok: true, apiKey: "test-key" });
+    if (answers.length > 0) {
+      ctx.hasUI = true;
+      ctx.ui.custom = async () => ({ choice: answers.shift() ?? "Deny", comment: undefined });
+      ctx.ui.select = async () => answers.shift() ?? "Deny";
+    }
+    return ctx as unknown as ExtensionContext;
+  }
+
+  function reviewingState() {
+    return railState(testConfig((c) => {
+      c.classifier.enabled = true;
+      c.classifier.model = MODEL;
+      c.classifier.judgeModel = MODEL;
+    }));
+  }
+
+  /** Scripted responses that carry a provider price, so cost accumulation has something to add up. */
+  function priced(steps: string[], cost?: number): CompleteFn {
+    return (async () => {
+      const step = steps.shift();
+      if (step === undefined) throw new Error("scripted complete exhausted");
+      return {
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: step }],
+        usage: { input: 10, output: 5, cacheRead: 100, cacheWrite: 20, ...(cost === undefined ? {} : { cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost } }) },
+        timestamp: Date.now(),
+      };
+    }) as unknown as CompleteFn;
+  }
+
+  it("accumulates namer and judge calls against their models and fills both rings", async () => {
+    const state = reviewingState();
+    // credentials routes to the judge by default; both calls are priced.
+    await interceptToolCall(bash, reviewingCtx(), state, priced(['{"labels":["credentials"]}', '{"decision":"ask","reason":"confirm reading the private key"}'], 0.002));
+
+    const rows = modelUsageRows(state.stats);
+    assert.deepEqual(rows.map((row) => [row.role, row.model, row.calls]), [["namer", MODEL, 1], ["judge", MODEL, 1]]);
+    assert.equal(rows[0]!.input, 10);
+    assert.equal(rows[0]!.cacheRead, 100);
+    assert.equal(rows[0]!.costUsd, 0.002);
+    assert.equal(rows[0]!.unpricedCalls, 0);
+    assert.ok(rows[0]!.maxLatencyMs >= 0);
+
+    const judgement = state.recentJudgements[0];
+    assert.equal(judgement?.verdict, "ask");
+    assert.equal(judgement?.reason, "confirm reading the private key");
+    assert.equal(judgement?.model, MODEL);
+    assert.equal(judgement?.inputTokens, 10);
+
+    const classification = state.recentClassifications[0];
+    assert.deepEqual(classification?.labels, ["credentials"]);
+    assert.equal(classification?.disposition, "judge", "the row says the judge ran even though the namer model is the one named");
+    assert.equal(classification?.decision, "deny", "headless: the judge's ask has nobody to answer it");
+    assert.equal(classification?.model, MODEL);
+    assert.equal(classification?.inputTokens, 20, "the whole review's tokens, namer plus judge");
+
+    assert.equal(capabilityStats(state.capabilities, "credentials").decided, 1);
+  });
+
+  it("counts an unpriced provider's calls so the cost total can qualify itself", async () => {
+    const state = reviewingState();
+    await interceptToolCall(bash, reviewingCtx(), state, priced(['{"labels":["credentials"]}', '{"decision":"allow","reason":"fine"}']));
+    const rows = modelUsageRows(state.stats);
+    assert.deepEqual(rows.map((row) => [row.costUsd, row.unpricedCalls]), [[0, 1], [0, 1]]);
   });
 });
 

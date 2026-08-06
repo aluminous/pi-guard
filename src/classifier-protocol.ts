@@ -15,6 +15,12 @@ export interface ClassifierTokenUsage {
   cacheRead?: number;
   /** Input tokens written to the provider's prompt cache (billed extra by Anthropic). */
   cacheWrite?: number;
+  /**
+   * Dollars the provider billed for the call. Absent when the provider reports
+   * no price at all, which is why the per-model view counts unpriced calls
+   * instead of quietly totalling them as free.
+   */
+  costUsd?: number;
 }
 
 /** The namer's entire output: what the action IS. No decision, no risk score. */

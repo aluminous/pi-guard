@@ -21,7 +21,7 @@ import {
 } from "../dispositions.ts";
 import type { RuntimeState } from "../state.ts";
 import { toggleRailPanel } from "../live-view.ts";
-import { DispositionPage, type DispositionTab } from "../tui/disposition-page.ts";
+import { DispositionPage } from "../tui/disposition-page.ts";
 import { pickFromList, type SelectItem } from "../tui/select-list.ts";
 import { formatError } from "../util.ts";
 
@@ -30,8 +30,6 @@ export interface DispositionCommandDeps {
   /** Persist boundary; injectable so tests never touch the real config file. */
   persist?: Partial<DispositionPersistence>;
   notify(ctx: ExtensionContext, message: string, level?: "info" | "warning" | "error"): void;
-  /** Lines for the read-only rules tab; the rail command supplies formatRailPolicy. */
-  policyLines?(ctx: ExtensionContext): string[];
 }
 
 /**
@@ -69,45 +67,25 @@ export function createDispositionCommands(deps: DispositionCommandDeps) {
   }
 
   /**
-   * `/rail policy [rules]`: the interactive page in the TUI, a select flow over
-   * RPC, an error headless. The two tabs are one panel, so invoking the other
-   * tab while it is open switches rather than closing — only re-invoking the
-   * tab you are already on toggles the panel shut.
+   * `/rail policy`: the interactive page in the TUI, a select flow over RPC, an
+   * error headless. Re-invoking it while it is open toggles the panel shut.
    */
-  async function openSettings(ctx: ExtensionContext, tab: DispositionTab = "dispositions"): Promise<void> {
+  async function openSettings(ctx: ExtensionContext): Promise<void> {
     const resolved = config(ctx);
-    const open = state.liveView;
-    if (open?.kind === "policy" && open.selectTab && open.activeTab?.() !== tab) {
-      open.selectTab(tab);
-      return;
-    }
     // The page outlives this call, so it reads state.config each refresh (a new
     // session reloads it) and falls back to what we resolved here.
     const current = () => state.config ?? resolved;
-    const opened = toggleRailPanel(ctx, state, "policy", (host) => {
-      const page = new DispositionPage({
-        ...host,
-        initialTab: tab,
-        rows: () => dispositionRows(current(), state),
-        cycle: (id, step) => setRowDisposition(current(), state, id, cycleDisposition(dispositionRow(current(), state, id).value, step)),
-        save: () => save(ctx),
-        banner: () => presetBanner(state),
-        policyLines: () => deps.policyLines?.(ctx) ?? [],
-        addClass: (input) => addClass(current(), state, input),
-        editDefinition: (id, definition) => editClassDefinition(current(), state, id, definition),
-        deleteClass: (id) => deleteClass(state, id),
-        notify: (message, level) => notify(ctx, message, level),
-      });
-      // Let a later /rail policy rules retarget the tab on the open panel. The
-      // live-view seam is string-typed so state.ts stays free of TUI types.
-      if (state.liveView) {
-        state.liveView.selectTab = (next) => {
-          if (next === "dispositions" || next === "rules") page.selectTab(next);
-        };
-        state.liveView.activeTab = () => page.activeTab();
-      }
-      return page;
-    });
+    const opened = toggleRailPanel(ctx, state, "policy", (host) => new DispositionPage({
+      ...host,
+      rows: () => dispositionRows(current(), state),
+      cycle: (id, step) => setRowDisposition(current(), state, id, cycleDisposition(dispositionRow(current(), state, id).value, step)),
+      save: () => save(ctx),
+      banner: () => presetBanner(state),
+      addClass: (input) => addClass(current(), state, input),
+      editDefinition: (id, definition) => editClassDefinition(current(), state, id, definition),
+      deleteClass: (id) => deleteClass(state, id),
+      notify: (message, level) => notify(ctx, message, level),
+    }));
     if (opened) return;
     if (!ctx.hasUI) {
       console.error("The disposition page requires an interactive session (TUI or RPC).");

@@ -61,10 +61,16 @@ async function waitFor(predicate: (pane: string) => boolean, description: string
   assert.fail(`Timed out after ${timeoutMs}ms waiting for ${description}.\nLast captured pane:\n${pane}`);
 }
 
-/** Whether the editor (bottom rows of the pane) still shows the typed text. */
+/**
+ * Whether the editor (bottom rows of the pane) still shows the typed text.
+ * Matches on the end of the line, not on containment: an open panel can sit in
+ * those same rows and mention a command in its own hint text (the disposition
+ * page points at `/rail policy rules`), which a substring test reads as an
+ * un-submitted editor.
+ */
 function editorShows(pane: string, text: string): boolean {
   const lines = pane.trimEnd().split("\n");
-  return lines.slice(-8).some((line) => line.includes(text));
+  return lines.slice(-8).some((line) => line.trimEnd().endsWith(text));
 }
 
 /**
@@ -100,7 +106,7 @@ async function closeOverlay(name: string, marker: string): Promise<void> {
   await waitFor((pane) => !pane.includes(marker), `${name} overlay to close`, UI_TIMEOUT_MS);
 }
 
-test("pi TUI: rail startup, status/policy page and its tabs, no [rail] conversation reports", async (t) => {
+test("pi TUI: rail startup, the tabbed status page, the disposition page, no [rail] conversation reports", async (t) => {
   const tmuxPath = which("tmux");
   const piPath = which("pi");
   if (tmuxPath === undefined || piPath === undefined) {
@@ -143,14 +149,23 @@ test("pi TUI: rail startup, status/policy page and its tabs, no [rail] conversat
       UI_TIMEOUT_MS,
     );
 
-    // /rail status opens the live status overlay.
+    // /rail status opens the tabbed status page on the session tab: the tab
+    // header, the counters table, and the per-class capability table.
     await submitCommand("/rail status");
     await waitFor(
-      (pane) => pane.includes("Esc closes") && pane.includes("Decisions this session"),
-      "status overlay (footer + decisions section)",
+      (pane) => pane.includes("Tab: session | models | namer | judge | engine | policy") && /counter\s+total\s+turn/.test(pane),
+      "status page (tab header + decision counters table)",
       UI_TIMEOUT_MS,
     );
-    await closeOverlay("status", "Decisions this session");
+    // Tab cycles to the models tab. This session never calls a reviewer (no
+    // agent turn runs), so its table is the empty state rather than rows.
+    tmux("send-keys", "-t", TARGET, "Tab");
+    await waitFor(
+      (pane) => pane.includes("─ Reviewer models") && pane.includes("(no reviewer calls yet)"),
+      "models tab after Tab",
+      UI_TIMEOUT_MS,
+    );
+    await closeOverlay("status", "Tab: session");
 
     // /rail policy opens the interactive disposition page: every class, its
     // disposition, and the session stats column.
@@ -190,19 +205,26 @@ test("pi TUI: rail startup, status/policy page and its tabs, no [rail] conversat
     await closeOverlay("disposition page", "Capability policy");
     await submitCommand("/rail readonly");
 
-    // The mechanism report is the page's second tab now. Tab cycles to it from
-    // the table; no footer assertion here, since the rules view is tall enough
-    // to clip the footer at 40 rows.
+    // The disposition page is a single view again: no tab header, and a
+    // pointer at the command that shows the mechanism rules.
     await submitCommand("/rail policy");
-    await waitFor((pane) => pane.includes("Capability policy"), "policy page before tabbing", UI_TIMEOUT_MS);
-    tmux("send-keys", "-t", TARGET, "Tab");
-    await waitFor((pane) => pane.includes("Pi Rail Policy Rules"), "rules tab content after Tab", UI_TIMEOUT_MS);
-    await closeOverlay("policy rules tab", "Pi Rail Policy Rules");
+    await waitFor(
+      (pane) => pane.includes("Capability policy") && pane.includes("/rail policy rules") && !pane.includes("Tab: dispositions"),
+      "disposition page with no tab header",
+      UI_TIMEOUT_MS,
+    );
+    await closeOverlay("disposition page", "Capability policy");
 
-    // /rail policy rules opens the same page directly on that tab.
+    // /rail policy rules opens the status page directly on its policy tab, as
+    // a provenance table. No footer assertion here: the policy tab is tall
+    // enough to clip the footer at 40 rows.
     await submitCommand("/rail policy rules");
-    await waitFor((pane) => pane.includes("Pi Rail Policy Rules"), "policy rules tab title", UI_TIMEOUT_MS);
-    await closeOverlay("policy rules", "Pi Rail Policy Rules");
+    await waitFor(
+      (pane) => /entry\s+source/.test(pane) && pane.includes("─ Filesystem") && pane.includes("Tab: session"),
+      "status page on the policy tab with its provenance table",
+      UI_TIMEOUT_MS,
+    );
+    await closeOverlay("policy rules", "─ Filesystem");
 
     // Nothing above should have posted a [rail] report into the conversation.
     const scrollback = fullScrollback();

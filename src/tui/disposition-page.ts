@@ -2,20 +2,12 @@ import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { Container, Editor, Input, matchesKey, Text, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import type { CapabilityId } from "../capabilities.ts";
 import { dispositionCell, type DispositionRow } from "../dispositions.ts";
-import { styleRailLine } from "../status.ts";
 import type { PanelTheme, PanelTui } from "./report-panel.ts";
 import type { Keybindings } from "./select-list.ts";
 
 // Two clear columns: the longest class id is 20 wide, so 22 keeps a gutter.
 const ID_WIDTH = 22;
 const DISPOSITION_WIDTH = 16;
-const PAGE_STEP = 10;
-
-/** The page's two tabs: the editable table, and the read-only mechanism policy. */
-export type DispositionTab = "dispositions" | "rules";
-
-const TABS: DispositionTab[] = ["dispositions", "rules"];
-const TAB_LABELS: Record<DispositionTab, string> = { dispositions: "dispositions", rules: "rules" };
 
 /** List mode edits rows; the two form modes replace the list inside the same panel body. */
 type PageMode = "list" | "add" | "edit";
@@ -24,8 +16,6 @@ export interface DispositionPageParams {
   tui: PanelTui;
   theme: PanelTheme;
   keybindings: Keybindings;
-  /** Which tab to open on: `/rail policy` lands on the table, `/rail policy rules` on the rules view. */
-  initialTab?: DispositionTab;
   /** Current rows, re-read on every refresh so live stats and preset changes land. */
   rows(): DispositionRow[];
   /** Cycles one row's disposition at session scope; the page re-reads rows() after. */
@@ -34,8 +24,6 @@ export interface DispositionPageParams {
   save(): void;
   /** One-line note about an active session preset, when there is one. */
   banner(): string | undefined;
-  /** formatRailPolicy lines for the rules tab, re-read each refresh (never snapshotted). */
-  policyLines(): string[];
   /** Adds a class at session scope; returns a validation error to keep the user in the form. */
   addClass(input: { id: string; definition: string }): string | undefined;
   /** Edits a class definition at session scope; returns a validation error. */
@@ -109,10 +97,10 @@ function createDefinitionEditor(tui: PanelTui, theme: PanelTheme): Editor {
 }
 
 /**
- * The disposition settings page: THE policy surface. Two tabs — the editable
- * capability table, and the read-only mechanism policy that `/rail policy
- * rules` used to render as its own view. Docked in the editor area like the
- * other rail views (DynamicBorder chrome, non-overlay custom UI, agent
+ * The disposition settings page: THE policy surface, and only that. The
+ * resolved mechanism rules moved to the status page's policy tab, since they
+ * are evidence to read rather than rows to edit. Docked in the editor area like
+ * the other rail views (DynamicBorder chrome, non-overlay custom UI, agent
  * streaming above).
  *
  * Every edit — a disposition, a new class, a definition rewrite, a deletion —
@@ -128,9 +116,7 @@ export class DispositionPage extends Container {
   private params: DispositionPageParams;
   private body = new Container();
   private selected = 0;
-  private tab: DispositionTab;
   private mode: PageMode = "list";
-  private scroll = 0;
   /** Add-form fields; reused across openings so a cancelled form starts clean. */
   private idInput = new Input();
   private definitionEditor: Editor;
@@ -141,7 +127,6 @@ export class DispositionPage extends Container {
   constructor(params: DispositionPageParams) {
     super();
     this.params = params;
-    this.tab = params.initialTab ?? "dispositions";
     this.definitionEditor = createDefinitionEditor(params.tui, params.theme);
     // jiti caveat: pi's DynamicBorder default color reads a global theme that
     // extensions may not share — always pass the explicit color function.
@@ -157,34 +142,13 @@ export class DispositionPage extends Container {
     return this.params.rows()[this.selected]?.id;
   }
 
-  activeTab(): DispositionTab {
-    return this.tab;
-  }
-
-  /** Switches tabs from outside (a second `/rail policy rules` while the table tab is up). */
-  selectTab(tab: DispositionTab): void {
-    if (this.tab === tab) return;
-    this.tab = tab;
-    this.scroll = 0;
-    this.refresh();
-  }
-
   refresh(): void {
     const theme = this.params.theme;
     this.body.clear();
     this.body.addChild(new Text(theme.fg("accent", theme.bold("Capability policy")), 0, 0));
-    this.body.addChild(new Text(this.renderTabHeader(), 0, 0));
-    if (this.tab === "rules") this.renderRules();
-    else if (this.mode === "list") this.renderList();
+    if (this.mode === "list") this.renderList();
     else this.renderForm();
     this.params.tui.requestRender();
-  }
-
-  /** `Tab: dispositions | rules` with the active word accent-coloured, like pi's model selector scope line. */
-  private renderTabHeader(): string {
-    const theme = this.params.theme;
-    const names = TABS.map((tab) => (tab === this.tab ? theme.fg("accent", TAB_LABELS[tab]) : theme.fg("muted", TAB_LABELS[tab])));
-    return `  ${theme.fg("muted", "Tab:")} ${names.join(theme.fg("muted", " | "))}`;
   }
 
   private renderList(): void {
@@ -216,7 +180,8 @@ export class DispositionPage extends Container {
 
     const current = rows[this.selected];
     if (current) this.body.addChild(new Text(theme.fg("muted", `  ${current.definition}`), 0, 0));
-    this.body.addChild(new Text(theme.fg("muted", "  ↑↓ row · ←→/Enter cycle · a add · e edit · d delete · Tab switches view · Ctrl+S saves · Esc closes"), 0, 0));
+    this.body.addChild(new Text(theme.fg("muted", "  ↑↓ row · ←→/Enter cycle · a add · e edit · d delete · Ctrl+S saves · Esc closes"), 0, 0));
+    this.body.addChild(new Text(theme.fg("muted", "  the resolved filesystem/network rules are /rail policy rules"), 0, 0));
   }
 
   /**
@@ -237,23 +202,6 @@ export class DispositionPage extends Container {
       tag ? theme.fg("warning", tag) : "",
       row.statsLabel ? theme.fg("muted", ` ${row.statsLabel}`) : "",
     ].join("");
-  }
-
-  /** The read-only mechanism policy, scrolled like RailReportPanel and re-read from formatRailPolicy each refresh. */
-  private renderRules(): void {
-    const theme = this.params.theme;
-    const lines = this.params.policyLines();
-    const maxVisible = Math.max(8, this.params.tui.terminal.rows - 13);
-    const maxScroll = Math.max(0, lines.length - maxVisible);
-    if (this.scroll > maxScroll) this.scroll = maxScroll;
-    for (const line of lines.slice(this.scroll, this.scroll + maxVisible)) {
-      this.body.addChild(new Text(styleRailLine(line, theme), 0, 0));
-    }
-    const footer: string[] = [];
-    if (maxScroll > 0) footer.push(`${this.scroll + 1}-${Math.min(lines.length, this.scroll + maxVisible)}/${lines.length} · ↑↓ scroll`);
-    footer.push("Tab switches view");
-    footer.push("Esc closes");
-    this.body.addChild(new Text(theme.fg("muted", `  ${footer.join(" · ")}`), 0, 0));
   }
 
   private renderForm(): void {
@@ -285,14 +233,6 @@ export class DispositionPage extends Container {
   handleInput(data: string): void {
     if (this.mode !== "list") return this.handleFormInput(data);
 
-    if (this.params.keybindings.matches(data, "tui.input.tab")) {
-      this.tab = TABS[(TABS.indexOf(this.tab) + 1) % TABS.length]!;
-      this.scroll = 0;
-      this.refresh();
-      return;
-    }
-    if (this.tab === "rules") return this.handleRulesInput(data);
-
     const rows = this.params.rows();
     const total = rows.length + 1;
     if (this.params.keybindings.matches(data, "tui.select.up")) {
@@ -317,32 +257,6 @@ export class DispositionPage extends Container {
     if (data === "d") return this.deleteSelected();
     if (matchesKey(data, "ctrl+s")) {
       this.params.save();
-      this.refresh();
-      return;
-    }
-    if (this.params.keybindings.matches(data, "tui.select.cancel")) {
-      this.params.done(undefined);
-    }
-  }
-
-  private handleRulesInput(data: string): void {
-    if (this.params.keybindings.matches(data, "tui.select.up")) {
-      this.scroll = Math.max(0, this.scroll - 1);
-      this.refresh();
-      return;
-    }
-    if (this.params.keybindings.matches(data, "tui.select.down")) {
-      this.scroll += 1;
-      this.refresh();
-      return;
-    }
-    if (matchesKey(data, "pageUp")) {
-      this.scroll = Math.max(0, this.scroll - PAGE_STEP);
-      this.refresh();
-      return;
-    }
-    if (matchesKey(data, "pageDown")) {
-      this.scroll += PAGE_STEP;
       this.refresh();
       return;
     }
