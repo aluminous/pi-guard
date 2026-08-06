@@ -52,6 +52,12 @@ export interface LastRailDecision {
 export interface ClassifierState {
   enabledOverride?: boolean;
   modelOverride?: string;
+  /**
+   * Session override for the judge model, set by `/rail model` (judge tab) and
+   * `/rail model judge …`. Wins over config.classifier.judgeModel. There is no
+   * "off" here on purpose: the judge cannot be disabled, only re-pointed.
+   */
+  judgeModelOverride?: string;
   lastDecision?: LastRailDecision;
   lastError?: string;
   /**
@@ -125,12 +131,20 @@ export function resolveClassifierModel(ctx: ExtensionContext, config: ResolvedRa
 }
 
 /**
+ * The spec the judge will use: session override first, then config. Exported
+ * so display surfaces label the same model the judge will actually reach for.
+ */
+export function judgeModelSpec(config: ResolvedRailConfig, state: ClassifierState): string {
+  return state.judgeModelOverride ?? config.classifier.judgeModel;
+}
+
+/**
  * The judge runs rarely and on the consequential tail, so it defaults to
  * "current" — the session's own (strong) model — rather than the cheap namer
  * model. Same spec grammar as classifier.model.
  */
-export function resolveJudgeModel(ctx: ExtensionContext, config: ResolvedRailConfig): Model<Api> | undefined {
-  return resolveModelSpec(ctx, config.classifier.judgeModel);
+export function resolveJudgeModel(ctx: ExtensionContext, config: ResolvedRailConfig, state: ClassifierState): Model<Api> | undefined {
+  return resolveModelSpec(ctx, judgeModelSpec(config, state));
 }
 
 function resolveModelSpec(ctx: ExtensionContext, spec: string): Model<Api> | undefined {
@@ -408,8 +422,8 @@ export async function judgeToolCall(params: {
   completeFn?: CompleteFn;
   capabilities?: CapabilityState;
 }): Promise<JudgeResult> {
-  const model = resolveJudgeModel(params.ctx, params.config);
-  if (!model) throw new ClassifierModelUnavailableError(`Judge model not found: ${params.config.classifier.judgeModel}`);
+  const model = resolveJudgeModel(params.ctx, params.config, params.state);
+  if (!model) throw new ClassifierModelUnavailableError(`Judge model not found: ${judgeModelSpec(params.config, params.state)}`);
   return runJudging({
     io: createClassifierIO(params.ctx, params.completeFn),
     model,

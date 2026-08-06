@@ -20,14 +20,38 @@ export interface SelectItem<V> {
 }
 
 /**
- * Searchable single-select list with optional static header lines. Generic
- * over the item value; used by the rail control panel and the classifier
- * model selector.
+ * One tab of a tabbed list: its own items and its own header lines, so the
+ * lines above the search box can describe the target being picked.
  */
-interface SelectListParams<V> {
-  title: string;
+export interface SelectTab<V> {
+  id: string;
+  label: string;
   headerLines?: string[];
   items: SelectItem<V>[];
+}
+
+/** The tabbed and untabbed sources normalize to this before anything renders. */
+interface SelectSource<V> {
+  title: string;
+  headerLines?: string[];
+  /** Single-list source; ignored when `tabs` is given. */
+  items?: SelectItem<V>[];
+  /** Tabbed source: Tab cycles between them, mirroring pi's /model scope line. */
+  tabs?: SelectTab<V>[];
+}
+
+/** A one-tab view of a plain item list, so the render path has a single shape. */
+function normalizeTabs<V>(source: SelectSource<V>): SelectTab<V>[] {
+  if (source.tabs && source.tabs.length > 0) return source.tabs;
+  return [{ id: "", label: "", items: source.items ?? [] }];
+}
+
+/**
+ * Searchable single-select list with optional static header lines and optional
+ * tabs. Generic over the item value; used by the rail control panel and the
+ * classifier model selector.
+ */
+interface SelectListParams<V> extends SelectSource<V> {
   theme: Theme;
   keybindings: Keybindings;
   done: (value: SelectItem<V> | undefined) => void;
@@ -35,7 +59,10 @@ interface SelectListParams<V> {
 
 export class SearchableSelectList<V> extends Container {
   private searchInput = new Input();
+  private headerContainer = new Container();
   private listContainer = new Container();
+  private tabs: SelectTab<V>[];
+  private tabIndex = 0;
   private filtered: SelectItem<V>[] = [];
   private selectedIndex = 0;
   private _focused = false;
@@ -53,22 +80,64 @@ export class SearchableSelectList<V> extends Container {
   constructor(params: SelectListParams<V>) {
     super();
     this.params = params;
-    this.filtered = params.items;
-    this.addChild(new Text(params.theme.fg("accent", params.title), 0, 0));
-    for (const line of params.headerLines ?? []) {
-      this.addChild(new Text(params.theme.fg("muted", line), 0, 0));
-    }
-    this.addChild(new Text(this.params.theme.fg("muted", "Type to search. Enter selects. Escape cancels."), 0, 0));
-    this.addChild(new Spacer(1));
+    this.tabs = normalizeTabs(params);
+    this.filtered = this.items();
+    this.addChild(this.headerContainer);
     this.searchInput.onSubmit = () => this.selectCurrent();
     this.addChild(this.searchInput);
     this.addChild(new Spacer(1));
     this.addChild(this.listContainer);
+    this.updateHeader();
+    this.updateList();
+  }
+
+  /** The active tab's id; "" for an untabbed list. Drives callers that route by target. */
+  activeTab(): string {
+    return this.tabs[this.tabIndex]!.id;
+  }
+
+  private items(): SelectItem<V>[] {
+    return this.tabs[this.tabIndex]!.items;
+  }
+
+  private tabbed(): boolean {
+    return this.tabs.length > 1;
+  }
+
+  /** `Tab: namer | judge` with the active word accented, like pi's model-selector scope line. */
+  private renderTabHeader(): string {
+    const theme = this.params.theme;
+    const names = this.tabs.map((tab, index) => theme.fg(index === this.tabIndex ? "accent" : "muted", tab.label));
+    return `${theme.fg("muted", "Tab:")} ${names.join(theme.fg("muted", " | "))}`;
+  }
+
+  private updateHeader() {
+    const theme = this.params.theme;
+    this.headerContainer.clear();
+    this.headerContainer.addChild(new Text(theme.fg("accent", this.params.title), 0, 0));
+    if (this.tabbed()) this.headerContainer.addChild(new Text(this.renderTabHeader(), 0, 0));
+    for (const line of [...(this.params.headerLines ?? []), ...(this.tabs[this.tabIndex]!.headerLines ?? [])]) {
+      this.headerContainer.addChild(new Text(theme.fg("muted", line), 0, 0));
+    }
+    const hint = this.tabbed()
+      ? "Type to search. Tab switches target. Enter selects. Escape cancels."
+      : "Type to search. Enter selects. Escape cancels.";
+    this.headerContainer.addChild(new Text(theme.fg("muted", hint), 0, 0));
+    this.headerContainer.addChild(new Spacer(1));
+  }
+
+  /** Moves to the next tab, dropping the search query so the new list starts unfiltered. */
+  private cycleTab() {
+    this.tabIndex = (this.tabIndex + 1) % this.tabs.length;
+    this.searchInput.setValue("");
+    this.selectedIndex = 0;
+    this.filtered = this.items();
+    this.updateHeader();
     this.updateList();
   }
 
   private filter(query: string) {
-    this.filtered = query ? fuzzyFilter(this.params.items, query, (item) => item.searchText) : this.params.items;
+    this.filtered = query ? fuzzyFilter(this.items(), query, (item) => item.searchText) : this.items();
     this.selectedIndex = Math.min(this.selectedIndex, Math.max(0, this.filtered.length - 1));
     this.updateList();
   }
@@ -115,6 +184,11 @@ export class SearchableSelectList<V> extends Container {
   }
 
   handleInput(keyData: string): void {
+    if (this.tabbed() && this.params.keybindings.matches(keyData, "tui.input.tab")) {
+      this.cycleTab();
+      return;
+    }
+
     if (this.params.keybindings.matches(keyData, "tui.select.up")) {
       if (this.filtered.length === 0) return;
       this.selectedIndex = this.selectedIndex === 0 ? this.filtered.length - 1 : this.selectedIndex - 1;
@@ -153,10 +227,7 @@ export interface CustomUiHost {
   };
 }
 
-export async function pickFromList<V>(
-  ctx: CustomUiHost,
-  params: { title: string; headerLines?: string[]; items: SelectItem<V>[] },
-): Promise<SelectItem<V> | undefined> {
+export async function pickFromList<V>(ctx: CustomUiHost, params: SelectSource<V>): Promise<SelectItem<V> | undefined> {
   if (ctx.mode === "tui") {
     return ctx.ui.custom<SelectItem<V> | undefined>(
       (_tui, theme, keybindings, done) => new SearchableSelectList<V>({ ...params, theme, keybindings, done }),
@@ -164,11 +235,24 @@ export async function pickFromList<V>(
   }
   // Degrade to the plain select dialog, which RPC clients answer over the
   // extension-UI sub-protocol. Header lines fold into the title; the current
-  // choice is tagged since the check-mark rendering is TUI-only.
-  const title = [params.title, ...(params.headerLines ?? [])].join("\n");
-  const labels = params.items.map((item) => (item.current ? `${item.label} (current)` : item.label));
-  const picked = await ctx.ui.select(title, labels);
-  if (picked === undefined) return undefined;
-  const index = labels.indexOf(picked);
-  return index >= 0 ? params.items[index] : undefined;
+  // choice is tagged since the check-mark rendering is TUI-only. There is no
+  // Tab key to press here, so each other tab becomes a "Switch to …" row that
+  // re-opens the dialog on that tab.
+  const tabs = normalizeTabs(params);
+  let index = 0;
+  for (;;) {
+    const tab = tabs[index]!;
+    const others = tabs.filter((_, at) => at !== index);
+    const title = [params.title, ...(params.headerLines ?? []), ...(tab.headerLines ?? [])].join("\n");
+    const labels = [
+      ...tab.items.map((item) => (item.current ? `${item.label} (current)` : item.label)),
+      ...others.map((other) => `Switch to ${other.label}…`),
+    ];
+    const picked = await ctx.ui.select(title, labels);
+    if (picked === undefined) return undefined;
+    const at = labels.indexOf(picked);
+    if (at < 0) return undefined;
+    if (at < tab.items.length) return tab.items[at];
+    index = tabs.indexOf(others[at - tab.items.length]!);
+  }
 }

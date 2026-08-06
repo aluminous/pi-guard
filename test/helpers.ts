@@ -19,21 +19,41 @@ export function makeFixtureDir(): { dir: string; cleanup: () => void } {
 const ENV_AGENT_DIR = "PI_CODING_AGENT_DIR";
 
 /**
- * Runs fn with the agent dir pointed at a throwaway fixture, then restores the
- * environment. The redirect is asserted before fn runs: if the env var ever
- * stops being honoured, tests that write config must fail rather than quietly
- * start editing the developer's real rail.json.
+ * Points the agent dir at a throwaway fixture. The redirect is asserted here:
+ * if the env var ever stops being honoured, tests that write config must fail
+ * rather than quietly start editing the developer's real rail.json.
  */
-export function withTempAgentDir(fn: (agentDir: string) => void): void {
+function enterTempAgentDir(): { dir: string; exit: () => void } {
   const fixture = makeFixtureDir();
   const previous = process.env[ENV_AGENT_DIR];
   process.env[ENV_AGENT_DIR] = fixture.dir;
+  assert.equal(getAgentDir(), fixture.dir, "the agent dir redirect must hold before any write");
+  return {
+    dir: fixture.dir,
+    exit: () => {
+      if (previous === undefined) delete process.env[ENV_AGENT_DIR];
+      else process.env[ENV_AGENT_DIR] = previous;
+      fixture.cleanup();
+    },
+  };
+}
+
+/** Runs fn against a throwaway agent dir, then restores the environment. */
+export function withTempAgentDir(fn: (agentDir: string) => void): void {
+  const fixture = enterTempAgentDir();
   try {
-    assert.equal(getAgentDir(), fixture.dir, "the agent dir redirect must hold before any write");
     fn(fixture.dir);
   } finally {
-    if (previous === undefined) delete process.env[ENV_AGENT_DIR];
-    else process.env[ENV_AGENT_DIR] = previous;
-    fixture.cleanup();
+    fixture.exit();
+  }
+}
+
+/** withTempAgentDir for command handlers, which are async: the restore waits for them. */
+export async function withTempAgentDirAsync(fn: (agentDir: string) => Promise<void>): Promise<void> {
+  const fixture = enterTempAgentDir();
+  try {
+    await fn(fixture.dir);
+  } finally {
+    fixture.exit();
   }
 }

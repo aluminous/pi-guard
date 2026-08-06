@@ -671,7 +671,7 @@ async function runJudgeStage(
     addTraceStage(trace, "judge", "skipped", "classifier is off, so the judge cannot run");
     return { disposition: "ask", fallbackReason: `${resolution.decidedBy.id} is set to judge but the classifier is off` };
   }
-  const model = describeModel(() => resolveJudgeModel(ctx, config));
+  const model = describeModel(() => resolveJudgeModel(ctx, config, state.classifier));
   const startedAt = performance.now();
   try {
     const judge = await judgeToolCall({

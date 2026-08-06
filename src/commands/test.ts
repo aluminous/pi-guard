@@ -7,7 +7,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { capabilityName, resolveCapabilities, type CapabilityId, type CapabilityResolution } from "../capabilities.ts";
 import { describeClassifierFailure } from "../classifier-protocol.ts";
-import { classifierEnabled, judgeToolCall, nameToolCall, resolveClassifierModel, resolveJudgeModel, type CompleteFn, type NamerResult } from "../classifier.ts";
+import { classifierEnabled, judgeModelSpec, judgeToolCall, nameToolCall, resolveClassifierModel, resolveJudgeModel, type CompleteFn, type NamerResult } from "../classifier.ts";
 import { allowlistCapabilities, explainCommandAllowlist } from "../command-allowlist.ts";
 import { configSourceLabel, loadConfig, type ResolvedRailConfig } from "../config.ts";
 import { screenToolCall } from "../content-screen.ts";
@@ -108,8 +108,8 @@ export function createRailTest(deps: RailTestDeps) {
     if (!classifierEnabled(config, state.classifier)) {
       return { lines: [...lines, "  judge: classifier is off, so the judge cannot run — would ask instead"], verdict: "would ask the user (judge unavailable)" };
     }
-    const model = resolveJudgeModel(ctx, config);
-    const modelLabel = model ? `${model.provider}/${model.id}` : `unavailable (${config.classifier.judgeModel})`;
+    const model = resolveJudgeModel(ctx, config, state.classifier);
+    const modelLabel = model ? `${model.provider}/${model.id}` : `unavailable (${judgeModelSpec(config, state.classifier)})`;
     ctx.ui.notify(`Rail test: running a real judge review (${modelLabel})...`, "info");
     try {
       const judge = await judgeToolCall({

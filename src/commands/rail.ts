@@ -40,7 +40,7 @@ const SUBCOMMANDS: Array<{ value: string; description: string }> = [
   { value: "off", description: "Disable for the next agent turn, then re-enable" },
   { value: "off session", description: "Disable until the session ends (no rail!)" },
   { value: "readonly", description: "Toggle read-only mode: write/edit blocked, bash restricted" },
-  { value: "model", description: "Choose the namer model (auto|current|off|provider/model)" },
+  { value: "model", description: "Choose the namer model (auto|current|off|provider/model); `model judge …` picks the judge" },
   { value: "smoke", description: "Run sandbox and namer smoke tests" },
   { value: "critique", description: "Critique the capability classes and content screen with a model" },
 ];
@@ -293,11 +293,26 @@ export function createRailCommand(deps: RailCommandDeps) {
     const prefix = argumentPrefix.replace(/^\s+/, "");
     const setMatch = prefix.match(/^set\s+(.*)$/i);
     if (setMatch) return dispositions.setCompletions(setMatch[1]!);
+    // The judge subform comes first: it is a different keyword set, and only
+    // `model judge ` (with the space) opens it, so `model ju` still completes
+    // to `model judge` through the namer branch below.
+    const judgeMatch = prefix.match(/^model\s+judge\s+(.*)$/i);
+    if (judgeMatch) {
+      const partial = judgeMatch[1]!.toLowerCase();
+      // No "auto" and no "off": the judge cannot be disabled, and auto is the
+      // namer's cheap-model list.
+      const fixed = ["current", "status"];
+      const items = [...fixed, ...state.availableModelSpecs]
+        .filter((spec) => spec.toLowerCase().includes(partial))
+        .slice(0, 20)
+        .map((spec) => ({ value: `model judge ${spec}`, label: spec, description: fixed.includes(spec) ? undefined : "configured model" }));
+      return items.length > 0 ? items : null;
+    }
     const modelMatch = prefix.match(/^(model|critique)\s+(.*)$/i);
     if (modelMatch) {
       const sub = modelMatch[1]!.toLowerCase();
       const partial = modelMatch[2]!.toLowerCase();
-      const fixed = sub === "model" ? ["auto", "current", "off", "status"] : [];
+      const fixed = sub === "model" ? ["auto", "current", "off", "status", "judge"] : [];
       const specs = [...fixed, ...state.availableModelSpecs];
       const items = specs
         .filter((spec) => spec.toLowerCase().includes(partial))
