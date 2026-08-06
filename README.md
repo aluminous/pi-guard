@@ -94,9 +94,10 @@ Commands — everything lives under `/rail`, with argument autocomplete:
 - `/rail off`: disable for the next agent turn, then re-enable automatically.
 - `/rail off session`: disable until the session ends.
 - `/rail readonly` (or `ro`, or ctrl+alt+r): toggle session read-only mode — `write`/`edit` are blocked, `bash` must be reviewed (and is blocked outright if the classifier is off), and a session disposition preset denies the writing capability classes.
-- `/rail model`: choose the namer model interactively.
+- `/rail model`: choose the reviewer models interactively. The dialog has two tabs — Tab switches between `namer` and `judge` — and the header shows what each one currently resolves to.
 - `/rail model auto|current|off|provider/model-id`: set the namer model directly and save it globally. `auto` (the default) picks the best available known-good model, preferring subscription providers.
-- `/rail model status`: print reviewer status, resolved model, and available models.
+- `/rail model judge current|provider/model-id`: set the judge model directly and save it globally. Bare `/rail model judge` (or `judge status`) prints the configured and resolved judge model. Neither `off` nor `auto` is accepted: the judge cannot be disabled, and `auto` is the namer's cheap-model list.
+- `/rail model status`: print reviewer status, both resolved models, and available models.
 - `/rail smoke`: run the command-containment and namer smoke tests.
 - `/rail critique [provider/model-id]`: critique the capability class definitions, the disposition table, and the content screen with Pi's current model or a specific one.
 
@@ -447,6 +448,8 @@ current model. Set `"model"` to `"current"` or an explicit `provider/model-id`
 to opt out of auto selection. `"judgeModel"` uses the same grammar and defaults
 to `"current"`: the judge runs rarely and on the consequential tail, so it
 should be the strong model you are already talking to, not the cheap namer.
+`/rail model` (judge tab) and `/rail model judge …` write this key, and set a
+session override that wins over it until Pi restarts.
 
 ## Filesystem policy
 

@@ -125,8 +125,25 @@ describe("rail argument completions", () => {
   it("completes model arguments with fixed specs first, full-args values", () => {
     const items = makeCommand(["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"]).getArgumentCompletions("model ");
     assert.ok(items);
-    assert.deepEqual(items.slice(0, 4).map((i) => i.value), ["model auto", "model current", "model off", "model status"]);
+    assert.deepEqual(items.slice(0, 5).map((i) => i.value), ["model auto", "model current", "model off", "model status", "model judge"]);
     assert.ok(items.some((i) => i.value === "model openai/gpt-5-mini"));
+  });
+
+  it("completes the judge subform without auto or off", () => {
+    const command = makeCommand(["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"]);
+    assert.deepEqual(command.getArgumentCompletions("model ju")?.map((i) => i.value), ["model judge"], "the keyword completes first");
+
+    const items = command.getArgumentCompletions("model judge ");
+    assert.ok(items);
+    assert.deepEqual(items.slice(0, 2).map((i) => i.value), ["model judge current", "model judge status"]);
+    assert.ok(!items.some((i) => i.label === "auto" || i.label === "off"), "the judge cannot be off, and auto is the namer's list");
+    assert.ok(items.some((i) => i.value === "model judge anthropic/claude-haiku-4-5"));
+  });
+
+  it("filters the judge subform by partial text", () => {
+    const command = makeCommand(["openai/gpt-5-mini", "anthropic/claude-haiku-4-5"]);
+    assert.deepEqual(command.getArgumentCompletions("model judge haiku")?.map((i) => i.value), ["model judge anthropic/claude-haiku-4-5"]);
+    assert.equal(command.getArgumentCompletions("model judge zzz"), null);
   });
 
   it("filters model specs by partial text", () => {
