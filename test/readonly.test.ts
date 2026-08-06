@@ -224,6 +224,26 @@ describe("read-only disposition preset", () => {
     }
   });
 
+  // The preset lists built-in ids by construction, so it cannot reach a custom
+  // class — the same is already true of a custom label the namer returns, and
+  // of any template put in commands.allow. Pinned so the gap stays visible.
+  it("does not reach a custom class set to allow, exactly as commands.allow does not", async () => {
+    const custom = readOnlyState(testConfig((c) => {
+      c.classifier.enabled = false;
+      c.capabilities.classes = [{ id: "my-tool", name: "My tool", definition: "A local helper.", default: "allow" }];
+      c.commands.classify = [{ template: "mytool write *", capability: "my-tool" }];
+    }));
+    custom.backend = { name: "seatbelt" } as RailBackend;
+    assert.equal(await interceptToolCall({ toolName: "bash", input: { command: "mytool write x" } }, fakeCtx(cwd), custom), undefined);
+
+    const allowlisted = readOnlyState(testConfig((c) => {
+      c.classifier.enabled = false;
+      c.commands.allow = [...c.commands.allow, "mytool write *"];
+    }));
+    allowlisted.backend = { name: "seatbelt" } as RailBackend;
+    assert.equal(await interceptToolCall({ toolName: "bash", input: { command: "mytool write x" } }, fakeCtx(cwd), allowlisted), undefined);
+  });
+
   it("lets a classify rule keep a read-only command usable with the classifier off", async () => {
     const config = testConfig((c) => {
       c.classifier.enabled = false;

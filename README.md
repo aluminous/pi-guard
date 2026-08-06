@@ -539,9 +539,14 @@ hints, so `kubectl get pods && helm upgrade api` is reviewed as the whole thing
 rather than arriving pre-labelled with the harmless half.
 
 Classification is labelling, not permission. The labels go through the same
-disposition table and the same severity-max as any others, so read-only mode's
-preset still denies a command you classified into a writing class, and a class
-you set to `deny` denies whether the label came from a rule or from a model.
+disposition table and the same severity-max as any others, so a class you set
+to `deny` denies whether the label came from a rule or from a model, and
+read-only mode's preset still denies a command you classified into one of the
+built-in writing classes. Note the preset's reach, which classify does not
+change: it lists built-in classes by construction, so a *custom* class set to
+`allow` is not tightened by read-only mode — for a command you want read-only
+mode to stop, classify it into `modify-project`/`modify-system` or set its
+class to something stricter than `allow`.
 
 Both list forms work; the `values` of the object form holds objects. Each entry
 must be `{"template": …, "capability": …}` and nothing else. The capability
