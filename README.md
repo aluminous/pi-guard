@@ -452,6 +452,17 @@ template must be unable to write files, run other programs, or use the
 network — which is why `find`, `sed`, `awk`, `sort`, `tee`, and `env CMD`
 are deliberately absent (see the comment in `src/command-allowlist.ts`).
 
+The one exception to that bar is GitHub's pull-request read subcommands —
+`gh pr view`/`list`/`diff`/`checks`/`status` — which reach the network but
+are treated as project inspection, because reviewing a PR is how this
+project's work gets read. Mutating spellings (`create`, `merge`, `close`,
+`comment`, `edit`, `ready`, `checkout`) and `gh issue`/`gh api` are not
+allowlisted and still go to the namer. The tradeoff is that PR text, which
+on a public repo anyone can write, enters context without a judge pass; put
+`{"template": "gh pr view *", "capability": "network-fetch"}` in
+`commands.classify` to restore the judge, or drop the entries from
+`commands.allow` to hand them back to the namer.
+
 Each built-in template carries a capability tag: inspection and read-only git
 are `read-project`, machine introspection (`uname`, `whoami`, `printenv`) is
 `read-system`, and toolchain version probes are `run-dev-tools`. A chain takes

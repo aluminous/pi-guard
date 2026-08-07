@@ -99,7 +99,7 @@ export const BUILTIN_CAPABILITY_CLASSES: CapabilityClass[] = [
     id: "off-machine-effects",
     name: "Off-machine effects",
     definition:
-      "Any effect that leaves this machine: pushing, publishing, or otherwise writing to a remote; opening, commenting on, or closing issues and pull requests; sending mail or chat messages; deploying; calling a remote API that changes state; changing remote infrastructure or cloud accounts. The MACHINE BOUNDARY decides, not the tool name: kubectl, docker, and similar tools pointed at a LOCAL cluster or daemon (kind, minikube, k3d, docker-desktop, colima, rancher-desktop, a localhost/127.0.0.1 context) stay local and are NOT off-machine-effects; the same commands against a remote or cloud context are. Retrieving remote data without changing it is network-fetch instead.",
+      "Any effect that leaves this machine: pushing, publishing, or otherwise writing to a remote; filing, commenting on, merging, or closing issues and pull requests; sending mail or chat messages; deploying; calling a remote API that changes state; changing remote infrastructure or cloud accounts. Only a CHANGE to remote state counts: viewing, listing, diffing, or checking the status of an issue or pull request changes nothing and is network-fetch, not this. The MACHINE BOUNDARY decides the rest, not the tool name: kubectl, docker, and similar tools pointed at a LOCAL cluster or daemon (kind, minikube, k3d, docker-desktop, colima, rancher-desktop, a localhost/127.0.0.1 context) stay local and are NOT off-machine-effects; the same commands against a remote or cloud context are. Retrieving remote data without changing it is network-fetch instead.",
     default: "ask",
   },
   {

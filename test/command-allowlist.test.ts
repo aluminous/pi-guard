@@ -135,6 +135,20 @@ describe("capability tags", () => {
     assert.deepEqual(caps("curl example.com"), []);
   });
 
+  it("tags the gh pr read subcommands as read-project", () => {
+    for (const command of ["gh pr view 12", "gh pr list", "gh pr diff 12", "gh pr checks", "gh pr status"]) {
+      assert.deepEqual(caps(command), ["read-project"], command);
+    }
+  });
+
+  it("leaves every mutating gh pr subcommand to the namer", () => {
+    // The exception carved out of the no-network bar is the read spellings
+    // only; anything that changes the PR must still be named and judged.
+    for (const command of ["gh pr create", "gh pr merge 12", "gh pr close 12", "gh pr comment 12 -b hi", "gh pr edit 12", "gh pr ready 12", "gh pr checkout 12", "gh issue view 12", "gh api /user"]) {
+      assert.deepEqual(caps(command), [], command);
+    }
+  });
+
   it("defaults user-configured templates to read-project", () => {
     assert.equal(capabilityForTemplate("make lint"), "read-project");
     assert.equal(capabilityForTemplate("npm ls *"), "run-dev-tools");
