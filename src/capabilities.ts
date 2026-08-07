@@ -85,7 +85,7 @@ export const BUILTIN_CAPABILITY_CLASSES: CapabilityClass[] = [
     id: "modify-project",
     name: "Modify project",
     definition:
-      "Creating, editing, or appending files inside the session working directory, together with the content being written. Ordinary source, test, documentation, and configuration edits. Deleting or overwriting existing work is local-destructive instead; content that grants standing permissions, addresses future reviewers, or installs hooks is persistence instead.",
+      "Creating, editing, or appending files inside the session working directory, together with the content being written. Ordinary source, test, documentation, and configuration edits. Deleting or overwriting existing work is local-destructive instead; content that grants standing permissions, addresses future reviewers, or installs hooks is persistence instead. Managing git worktrees — add, remove, prune — is this class when the worktree directory is inside the session working directory or a temp directory: the checkout is scratch space the project owns, and an unforced remove cannot discard work because git refuses it while the worktree holds modified or untracked files. A worktree placed anywhere else is modify-system, and a forced remove is local-destructive.",
     default: "allow",
   },
   {
@@ -120,7 +120,7 @@ export const BUILTIN_CAPABILITY_CLASSES: CapabilityClass[] = [
     id: "local-destructive",
     name: "Local destructive",
     definition:
-      "Destroying or irreversibly overwriting local state: deleting or truncating existing files and directories, git operations that discard or rewrite work (reset --hard, clean, checkout over changes, rebase, amend, branch -D), dropping local databases, containers, or volumes. Creating a local git commit is also this class: it is a local state change the user is expected to re-scope per session.",
+      "Destroying or irreversibly overwriting local state: deleting or truncating existing files and directories, git operations that discard or rewrite work (reset --hard, clean, checkout over changes, rebase, amend, branch -D), dropping local databases, containers, or volumes. Creating a local git commit is also this class: it is a local state change the user is expected to re-scope per session. Removing or pruning a git worktree under the session working directory is modify-project rather than this, because git refuses an unforced remove that would delete modified or untracked files — a FORCED remove (--force/-f) overrides exactly that refusal and is this class.",
     default: "judge",
   },
   {
