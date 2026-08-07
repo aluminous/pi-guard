@@ -38,19 +38,6 @@ export interface CommandCapabilityRule {
  * expire) are excluded by pinning those subcommands to their read-only
  * spellings.
  *
- * ONE deliberate exception to "cannot reach the network": the `gh pr` read
- * subcommands (view/list/diff/checks/status). They are here because a pull
- * request is how this project's own work is reviewed, so reading one is
- * project inspection in practice — the taxonomy's own answer, network-fetch,
- * puts a judge call in front of every `gh pr view`. Bounded the same way the
- * git entries are: fixed read-only subcommands, so create/merge/close/edit/
- * comment/ready/checkout still reach the namer, and the sandbox's domain
- * filter is still the outer bound on where they can reach. Two costs to know
- * about: `--web` shells out to a browser, which the grammar cannot negate
- * (seatbelt blocks the exec), and remote PR text — attacker-controllable on a
- * public repo — enters context with no judge pass, exactly as an allowlisted
- * local read does.
- *
  * Each template also carries the capability it resolves to, which is what
  * makes the allowlist a *cache of a label* rather than a cache of a verdict:
  * flipping `read-project` to ask in the disposition table retunes the fast
@@ -132,12 +119,6 @@ export const DEFAULT_COMMAND_ALLOW_RULES: CommandCapabilityRule[] = [
   { template: "git config --get *", capability: "read-project" },
   { template: "git reflog", capability: "read-project" },
   { template: "git reflog show *", capability: "read-project" },
-  // GitHub pull-request reads (see the network exception in the note above)
-  { template: "gh pr view *", capability: "read-project" },
-  { template: "gh pr list *", capability: "read-project" },
-  { template: "gh pr diff *", capability: "read-project" },
-  { template: "gh pr checks *", capability: "read-project" },
-  { template: "gh pr status *", capability: "read-project" },
   // Toolchain probes
   { template: "git --version", capability: "run-dev-tools" },
   { template: "node --version", capability: "run-dev-tools" },
